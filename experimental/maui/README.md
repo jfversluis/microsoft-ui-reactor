@@ -12,8 +12,9 @@ It is structured the way a real product would be, so a "yes" doesn't mean a rewr
 | Project | Target | Role |
 |---|---|---|
 | `src/Reactor.Core` | `net10.0` | Renderer-neutral core: `Element`, `Component`, hooks, keyed reconciler, batched scheduler, handler contract. No UI framework reference. |
-| `src/Reactor.Maui` | `net11.0-android/ios/maccatalyst/windows` | MAUI renderer: element records, one handler per control, `ReactorPage` host. |
-| `samples/Reactor.Maui.Sample` | MAUI app | Counter, background-timer effect, todo list with keyed rows. |
+| `src/Reactor.Maui` | `net11.0-android/ios/maccatalyst/windows` | Two MAUI renderers over the same element records, and the `ReactorPage` host. See [Two renderers](#two-renderers-controls-and-direct). |
+| `samples/Reactor.Maui.Sample` | MAUI app | Counter, background-timer effect, todo list with keyed rows. Set `REACTOR_RENDERER=direct` to run it on the direct renderer. |
+| `benchmarks/Reactor.Maui.Benchmark` | MAUI app | Renders the same tree through both renderers and reports timings and allocations. |
 | `tests/Reactor.Core.Tests` | `net10.0` | Headless core tests against an in-memory fake renderer. |
 
 `Reactor.Core` targets `net10.0` so the existing WinUI renderer (`net10.0-windows`) could
@@ -33,7 +34,79 @@ dotnet test tests/Reactor.Core.Tests
 
 # Sample app (needs the maui workload; Mac Catalyst shown)
 dotnet build samples/Reactor.Maui.Sample -t:Run -f net11.0-maccatalyst
+
+# Renderer benchmark: build Release, launch, and read the REACTOR_BENCH lines from the
+# app's output (stderr on Mac Catalyst, `xcrun simctl launch --console-pty` on iOS,
+# `adb logcat` on Android). The results are also shown on screen when the run finishes.
+dotnet build benchmarks/Reactor.Maui.Benchmark -c Release -f net11.0-maccatalyst
+open --stderr /tmp/bench.log "benchmarks/Reactor.Maui.Benchmark/bin/Release/net11.0-maccatalyst/Reactor Benchmark.app"
 ```
+
+## Two renderers: Controls and direct
+
+Both renderers consume the same element records and the same `Reactor.Core`; only the
+handler registry differs.
+
+- **Controls renderer** (`Handlers/MauiHandlers.cs`). Reactor handlers create and update
+  `Microsoft.Maui.Controls` objects (`Label`, `Entry`, `VerticalStackLayout`…), which MAUI's
+  platform handlers then render. This is MauiReactor's architecture.
+- **Direct renderer** (`Direct/`). Reactor owns small view classes that implement MAUI's Core
+  interfaces (`ILabel`, `ITextButton`, `IEntry`, `IStackLayout`) as plain fields. MAUI's stock
+  `LabelHandler`, `ButtonHandler`, `EntryHandler` and `LayoutHandler` render them, so there is no
+  Controls object, bindable property, binding, style or logical tree involved. This is Comet's
+  architecture. Register it with `builder.UseReactorDirectViews()` and pass
+  `DirectHandlers.CreateRegistry()` to `ReactorPage`.
+
+The direct renderer covers Label, Button, Entry and the two stacks; every other element falls
+back to the Controls renderer in the same tree. Mixing works in both directions because
+Controls layouts accept any `IView` child; the one boundary is a Controls slot typed as
+`View` (page or scroll view content), where a direct view is hosted in a reused `Grid`. The
+sample runs unchanged on either renderer, with identical geometry.
+
+Two bugs found while building it show the cost of skipping Controls: every default Controls
+supplies has to be re-derived. Text was larger until the direct views used the font manager's
+default size, as Controls does; and on iOS every direct stack was pushed down by the safe-area
+inset until it stopped opting in to safe areas, which nested Controls layouts do through an
+internal interface (`ISafeAreaView2`).
+
+### Benchmark results
+
+1,000 keyed rows of `HStack(Label, Label, Button)`. Each operation is timed from the Reactor
+render through a forced, complete native measure and arrange at the on-screen size. Values are
+medians of 7 samples after 2 warm-ups, with the two renderers interleaved. Allocations are
+managed bytes on the UI thread. Every sample is validated outside the timer (expected text,
+arranged frames, row order and retained native views after Reverse), and both renderers
+produced identical layout in every sample.
+
+| Scenario | Pixel 10 (Android 16) | iPhone 18 Pro simulator (iOS 27) | Mac Catalyst (Apple silicon) |
+|---|---|---|---|
+| Mount 1,000 rows | 1,042 → 764 ms (−27%) | 3,514 → 2,394 ms (−32%) | 4,047 → 2,217 ms (−45%) |
+| Update every row | 93 → 46 ms (−50%) | 693 → 478 ms (−31%) | 947 → 393 ms (−58%) |
+| Update one row | 8.6 → 7.5 ms (−13%) | 48.8 → 46.4 ms (−5%) | 40.0 → 38.8 ms (−3%) |
+| Reverse (keyed) | 160 → 84 ms (−47%) | 636 → 556 ms (−13%) | 713 → 629 ms (−12%) |
+| Mount allocations | 42.4 → 10.5 MB (−75%) | 42.3 → 17.4 MB (−59%) | 58.4 → 21.7 MB (−63%) |
+| Reverse allocations | 10.6 → 1.4 MB (−87%) | 8.7 → 3.3 MB (−62%) | 8.3 → 2.9 MB (−65%) |
+
+Each cell is Controls → direct. What the numbers say:
+
+- **Skipping Controls is a real win on bulk work**: 27–45% on mount, 31–58% on update-all, and
+  60–87% fewer allocations on mount and reorder. Much of it is in layout, where Controls updates
+  bindable `X`/`Y`/`Width`/`Height` and raises change events for every arranged view.
+- **It doesn't matter for small updates.** Updating one row costs the same on every platform;
+  native work dominates.
+- **Part of the gap is features, not overhead.** The direct views have no styles, visual states,
+  gestures, effects, bindings or semantics. Adding those back costs something.
+- **Limits.** The iOS numbers come from a simulator, not a device. Drawing and compositing are not
+  timed. Seven samples support rough comparisons, not small percentages.
+
+Getting stable numbers on Android needed two methodology fixes, both in `BenchmarkPage.cs`.
+Forced layout must use the real on-screen size: measuring at another size makes the forced and
+real passes invalidate each other's native measure caches. And after forcing a .NET GC the
+benchmark must wait. On Android every .NET GC also starts a concurrent Java GC, and the UI
+thread blocks on it for about 600 ms at its next JNI call. A Perfetto trace attributed that
+600 ms to ART's GC thread while the UI thread slept. The same effect hits real apps: a .NET GC
+with thousands of live views can stall the next UI update. The runs also logged about 46,000
+outstanding JNI global references, which is worth investigating separately.
 
 ## What the core owns, and what a renderer supplies
 
@@ -90,8 +163,9 @@ accessibility tree): clicks update state; a `System.Threading.Timer` updates sta
 second from a background thread; typing into the controlled draft `Entry` keeps every
 character in order while that timer re-renders; Add clears the draft through state;
 Reverse moves rows *with* the text typed into each row's own note `Entry`, so keyed state
-follows the row; toggling and removing rows update the derived count. The sample also
-builds for iOS and Android.
+follows the row; toggling and removing rows update the derived count. The same pass gives the
+same results on the direct renderer (`REACTOR_RENDERER=direct`), with identical control
+geometry. The sample also builds for iOS and Android.
 
 ## Findings to resolve before this becomes real
 
@@ -116,6 +190,10 @@ builds for iOS and Android.
   React re-asserts the value anyway; this core does not yet.
 - **Host lifetime is explicit.** `ReactorPage.Unmount()` runs every cleanup; the sample calls it
   when its window is destroyed. Navigation would need to decide when a page is gone for good.
+- **Choose a renderer strategy.** The benchmark favours the direct renderer for bulk work. The
+  catch is fidelity, since each Controls default must be re-derived, plus the controls that only
+  exist in Controls (`CollectionView`, Shell, the third-party ecosystem). The proven middle path is
+  direct for primitives and layouts, Controls for the rest, in one tree.
 - **Not built yet:** hot reload, context (`UseContext`), error boundaries, navigation and
   multiple pages, virtualized lists (`CollectionView`), styling and theming, layout modifiers
   beyond margin/width/horizontal options, element pooling, and diagnostics.

@@ -16,7 +16,7 @@ public class ReactorPage : ContentPage
         _root = new ReactorRoot(
             registry ?? MauiHandlers.CreateRegistry(),
             new MauiRenderScheduler(dispatcher),
-            native => Content = (View?)native);
+            native => Content = native is null ? null : MauiHandlers.AsView(native));
         _root.Render(root);
     }
 

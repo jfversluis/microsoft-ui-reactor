@@ -29,6 +29,15 @@ public static class MauiHandlers
         Set(view, View.HorizontalOptionsProperty, previous?.HorizontalOptions, next.HorizontalOptions);
     }
 
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IView, Grid> Wrappers = new();
+
+    /// <summary>
+    /// Controls-only slots (page or scroll view content) take a <see cref="View"/>. A view from
+    /// another renderer, such as a direct view, is hosted in a Grid that is reused for it.
+    /// </summary>
+    internal static View AsView(object native) =>
+        native as View ?? Wrappers.GetValue((IView)native, static view => new Grid { view });
+
     /// <summary>Writes a changed value, or clears the property back to its default when it was unset.</summary>
     internal static void Set<T>(BindableObject target, BindableProperty property, T? previous, T? next) where T : struct
     {
@@ -176,6 +185,7 @@ public static class MauiHandlers
             => ApplyView(control, oldElement, newElement);
 
         public IChildrenStrategy<ScrollViewElement, MauiScrollView> Children { get; } =
-            ChildrenStrategy.Single<ScrollViewElement, MauiScrollView, View>(e => e.Content, (scrollView, content) => scrollView.Content = content);
+            ChildrenStrategy.Single<ScrollViewElement, MauiScrollView, object>(
+                e => e.Content, (scrollView, content) => scrollView.Content = content is null ? null : AsView(content));
     }
 }
