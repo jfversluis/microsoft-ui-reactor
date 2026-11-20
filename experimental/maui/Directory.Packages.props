@@ -1,0 +1,10 @@
+<Project>
+  <!--
+    Stops the repo-root central package management from applying here. MAUI app and
+    library templates pin Microsoft.Maui.Controls to the workload's $(MauiVersion),
+    which central package management cannot express.
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>
