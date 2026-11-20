@@ -169,16 +169,18 @@ public class DirectRendererTests
     [Fact]
     public void MixedTree_HostsControlsInsideDirectStacks_AndDirectContentInControlsSlots()
     {
-        var host = Host().Render(ScrollView(VStack(CheckBox(true), Label("x"))));
+        var host = Host().Render(ScrollView(VStack(Stepper(1), Label("x"))));
 
         var scrollView = host.View<ScrollView>();
         var wrapper = Assert.IsType<Grid>(scrollView.Content);
         var stack = Assert.IsType<DirectStackLayout>(Assert.Single(wrapper));
-        Assert.IsType<CheckBox>(stack[0]);
+        var stepper = Assert.IsType<Stepper>(stack[0]);
+        // A Controls view inside a direct tree gets the wrapper as its logical parent, so styles reach it.
+        Assert.Same(wrapper, stepper.Parent);
 
-        host.Render(ScrollView(VStack(CheckBox(false), Label("y"))));
+        host.Render(ScrollView(VStack(Stepper(2), Label("y"))));
 
         Assert.Same(wrapper, scrollView.Content);
-        Assert.False(((CheckBox)stack[0]).IsChecked);
+        Assert.Equal(2, stepper.Value);
     }
 }

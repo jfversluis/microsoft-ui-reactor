@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+using Microsoft.Maui.Graphics;
 using Microsoft.UI.Reactor.Core;
 
 namespace Microsoft.UI.Reactor.Maui;
@@ -8,12 +10,14 @@ namespace Microsoft.UI.Reactor.Maui;
 /// </summary>
 public static class Factories
 {
+    // ── Composition (from Reactor.Core) ─────────────────────────────────────
+
     public static ComponentElement Component<
-        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)] T>()
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)] T>()
         where T : Component, new() => CoreFactories.Component<T>();
 
     public static ComponentElement<TProps> Component<
-        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)] T, TProps>(TProps props)
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)] T, TProps>(TProps props)
         where T : Component<TProps>, new() => CoreFactories.Component<T, TProps>(props);
 
     public static GroupElement Group(params Element?[] children) => CoreFactories.Group(children);
@@ -31,14 +35,65 @@ public static class Factories
     public static GroupElement ForEach<T>(IEnumerable<T> items, Func<T, string> key, Func<T, Element?> render) =>
         CoreFactories.ForEach(items, key, render);
 
+    // ── Text and display ────────────────────────────────────────────────────
+
     public static LabelElement Label(string text) => new(text);
 
+    /// <summary>An image from a file, an embedded resource name or an <c>http(s)</c> URL.</summary>
+    public static ImageElement Image(string source) => new(ToImageSource(source));
+
+    public static ImageElement Image(ImageSource? source) => new(source);
+
+    public static BoxViewElement BoxView(Color? color = null) => new(color);
+
+    public static ActivityIndicatorElement ActivityIndicator(bool isRunning = true) => new(isRunning);
+
+    public static ProgressBarElement ProgressBar(double progress) => new(progress);
+
+    public static BorderElement Border(Element? content) => new(content);
+
+    public static GraphicsViewElement GraphicsView(IDrawable drawable) => new(drawable);
+
+    public static WebViewElement WebView(string url) => new(url);
+
+    public static WebViewElement HtmlView(string html) => new(null, html);
+
+    // ── Input ───────────────────────────────────────────────────────────────
+
     public static ButtonElement Button(string text, Action? onClick = null) => new(text, onClick);
+
+    public static ImageButtonElement ImageButton(string source, Action? onClick = null) => new(ToImageSource(source), onClick);
 
     public static EntryElement Entry(string text, Action<string>? onTextChanged = null, string? placeholder = null) =>
         new(text, onTextChanged) { Placeholder = placeholder };
 
+    public static EditorElement Editor(string text, Action<string>? onTextChanged = null, string? placeholder = null) =>
+        new(text, onTextChanged) { Placeholder = placeholder };
+
+    public static SearchBarElement SearchBar(string text, Action<string>? onTextChanged = null, string? placeholder = null) =>
+        new(text, onTextChanged) { Placeholder = placeholder };
+
     public static CheckBoxElement CheckBox(bool isChecked, Action<bool>? onCheckedChanged = null) => new(isChecked, onCheckedChanged);
+
+    public static SwitchElement Switch(bool isToggled, Action<bool>? onToggled = null) => new(isToggled, onToggled);
+
+    public static SliderElement Slider(double value, Action<double>? onValueChanged = null, double minimum = 0, double maximum = 1) =>
+        new(value, onValueChanged) { Minimum = minimum, Maximum = maximum };
+
+    public static StepperElement Stepper(double value, Action<double>? onValueChanged = null, double minimum = 0, double maximum = 100, double increment = 1) =>
+        new(value, onValueChanged) { Minimum = minimum, Maximum = maximum, Increment = increment };
+
+    public static PickerElement Picker(IReadOnlyList<string> items, int selectedIndex, Action<int>? onSelectedIndexChanged = null, string? title = null) =>
+        new(items, selectedIndex, onSelectedIndexChanged) { Title = title };
+
+    public static DatePickerElement DatePicker(DateTime date, Action<DateTime>? onDateSelected = null) => new(date, onDateSelected);
+
+    public static TimePickerElement TimePicker(TimeSpan time, Action<TimeSpan>? onTimeSelected = null) => new(time, onTimeSelected);
+
+    public static RadioButtonElement RadioButton(string content, bool isChecked, Action<bool>? onCheckedChanged = null, string? groupName = null) =>
+        new(content, isChecked, onCheckedChanged) { GroupName = groupName };
+
+    // ── Layout ──────────────────────────────────────────────────────────────
 
     public static VStackElement VStack(params Element?[] children) => new(children);
 
@@ -48,31 +103,32 @@ public static class Factories
 
     public static HStackElement HStack(double spacing, params Element?[] children) => new(children) { Spacing = spacing };
 
+    /// <summary>A grid with row and column definitions such as <c>"Auto,*,2*"</c>. Place children with <c>.Grid(row, column)</c>.</summary>
+    public static GridElement Grid(string rows, string columns, params Element?[] children) =>
+        new(children) { Rows = rows, Columns = columns };
+
+    public static FlexLayoutElement FlexLayout(params Element?[] children) => new(children);
+
+    public static AbsoluteLayoutElement AbsoluteLayout(params Element?[] children) => new(children);
+
     public static ScrollViewElement ScrollView(Element? content) => new(content);
-}
 
-/// <summary>Fluent modifiers. The generic ones keep the concrete element type through a chain.</summary>
-public static class ViewElementExtensions
-{
-    public static T Margin<T>(this T element, double uniform) where T : ViewElement =>
-        (T)(((ViewElement)element) with { Margin = new Thickness(uniform) });
+    public static RefreshViewElement RefreshView(Element? content, bool isRefreshing, Action? onRefresh) => new(content, isRefreshing, onRefresh);
 
-    public static T Margin<T>(this T element, double horizontal, double vertical) where T : ViewElement =>
-        (T)(((ViewElement)element) with { Margin = new Thickness(horizontal, vertical) });
+    public static SwipeViewElement SwipeView(Element? content) => new(content);
 
-    public static T Width<T>(this T element, double width) where T : ViewElement =>
-        (T)(((ViewElement)element) with { Width = width });
+    // ── Virtualized collections ─────────────────────────────────────────────
 
-    public static T HorizontalOptions<T>(this T element, LayoutOptions options) where T : ViewElement =>
-        (T)(((ViewElement)element) with { HorizontalOptions = options });
+    /// <summary>A virtualized list of <paramref name="items"/>, matched across renders by <paramref name="key"/>.</summary>
+    public static CollectionViewElement CollectionView<T>(IReadOnlyList<T> items, Func<T, string> key, Func<T, Element?> itemTemplate) =>
+        new(new ItemsAdapter<T>(items), item => key((T)item!), item => itemTemplate((T)item!));
 
-    public static T AutomationId<T>(this T element, string automationId) where T : ViewElement =>
-        (T)(((ViewElement)element) with { AutomationId = automationId });
+    public static CarouselViewElement CarouselView<T>(
+        IReadOnlyList<T> items, Func<T, string> key, Func<T, Element?> itemTemplate, int position, Action<int>? onPositionChanged = null) =>
+        new(new ItemsAdapter<T>(items), item => key((T)item!), item => itemTemplate((T)item!), position, onPositionChanged);
 
-    public static LabelElement FontSize(this LabelElement element, double size) => element with { FontSize = size };
-
-    public static LabelElement Bold(this LabelElement element) => element with { FontAttributes = Microsoft.Maui.Controls.FontAttributes.Bold };
-
-    public static LabelElement Strikethrough(this LabelElement element, bool enabled = true) =>
-        element with { TextDecorations = enabled ? Microsoft.Maui.TextDecorations.Strikethrough : null };
+    private static ImageSource ToImageSource(string source) =>
+        Uri.TryCreate(source, UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+            ? ImageSource.FromUri(uri)
+            : ImageSource.FromFile(source);
 }

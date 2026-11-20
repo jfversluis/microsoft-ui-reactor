@@ -39,7 +39,7 @@ public sealed class BenchmarkPage : ContentPage
             RowDefinitions = [new RowDefinition(GridLength.Auto), new RowDefinition(GridLength.Star)],
             Children = { _status, _host },
         };
-        Grid.SetRow(_host, 1);
+        Microsoft.Maui.Controls.Grid.SetRow(_host, 1);
         Loaded += async (_, _) =>
         {
             if (_started) return;
