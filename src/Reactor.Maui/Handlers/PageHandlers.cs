@@ -147,13 +147,16 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
 
     /// <summary>
     /// Ends the navigator when its element unmounts: pending work stops after its current platform
-    /// operation, and the modals it presented are dismissed, since their trees are gone.
+    /// operation, and the modals it presented are dismissed, since their trees are gone. A modal
+    /// pushed by that last operation is included, and one buried under another stack's modal is
+    /// dismissed once it is uncovered.
     /// </summary>
     public void Stop()
     {
         if (_stopped) return;
         _stopped = true;
-        _ = DismissOwnedModalsAsync();
+        // A running loop calls CleanUpOwnedModals when its current operation finishes.
+        if (!_running) CleanUpOwnedModals();
     }
 
     private async Task RunAsync()
@@ -183,6 +186,7 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
         finally
         {
             _running = false;
+            if (_stopped) CleanUpOwnedModals();
         }
     }
 
@@ -284,28 +288,70 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
             return () =>
             {
                 _ownedModals.Add(next);
+                _modalWindow = navigationPage.Window;
                 return navigation.PushModalAsync(next, animated: true);
             };
         }
         return null;
     }
 
-    private async Task DismissOwnedModalsAsync()
+    private bool _cleaning;
+    private Application? _cleanupApp;
+
+    // The window this navigator presented modals in. Cleanup goes through it: by then the
+    // navigation page may have left the window, and its own Navigation no longer reaches the modals.
+    private Window? _modalWindow;
+
+    /// <summary>
+    /// Dismisses the modals this (stopped) navigator presented, top down while they are on top.
+    /// One covered by another stack's modal is left until that modal goes: the navigator keeps
+    /// listening to <see cref="Application.ModalPopped"/> until all of its modals are gone.
+    /// </summary>
+    private async void CleanUpOwnedModals()
     {
+        if (_cleaning) return;
+        _cleaning = true;
         try
         {
-            var navigation = navigationPage.Navigation;
-            while (navigation.ModalStack.Count > 0 && _ownedModals.Contains(navigation.ModalStack[^1]))
+            // No window left: the modals went with it.
+            var navigation = (_modalWindow ?? navigationPage.Window)?.Navigation;
+            if (navigation is null) _ownedModals.Clear();
+            while (navigation is not null && navigation.ModalStack.Count > 0 && _ownedModals.Contains(navigation.ModalStack[^1]))
             {
                 var top = navigation.ModalStack[^1];
                 _ownedModals.Remove(top);
                 await navigation.PopModalAsync(animated: false);
             }
+            if (navigation is not null) _ownedModals.RemoveWhere(m => !navigation.ModalStack.Contains(m));
         }
         catch (Exception)
         {
             // The window is closing or another owner is mid-transition; there is no tree left to report to.
         }
+        finally
+        {
+            _cleaning = false;
+        }
+
+        if (_ownedModals.Count > 0)
+        {
+            if (_cleanupApp is null && Application.Current is { } app)
+            {
+                _cleanupApp = app;
+                app.ModalPopped += OnModalPoppedWhileStopped;
+            }
+        }
+        else if (_cleanupApp is { } subscribed)
+        {
+            subscribed.ModalPopped -= OnModalPoppedWhileStopped;
+            _cleanupApp = null;
+        }
+    }
+
+    private void OnModalPoppedWhileStopped(object? sender, ModalPoppedEventArgs e)
+    {
+        _ownedModals.Remove(e.Modal);
+        CleanUpOwnedModals();
     }
 
     private static Func<Task> Sync(Action action) => () =>

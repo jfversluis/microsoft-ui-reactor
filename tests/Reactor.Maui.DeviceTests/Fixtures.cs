@@ -36,6 +36,7 @@ public static class Fixtures
         new("NavigationStack_ModalIsShown_AndDismissalIsReported", ModalDismissal),
         new("NavigationStack_UnmountDuringNavigation_StopsIt", UnmountDuringNavigation),
         new("NavigationStack_TwoStacks_ShareTheWindowsModalStack", TwoStacksShareModals),
+        new("NavigationStack_UnmountedStacksBuriedModal_IsDismissedWhenUncovered", BuriedModalCleanup),
         new("Tabs_UserSelection_IsReported_AndRefusalRestoresTheTab", TabsSelection),
         new("CollectionView_RealizesKeyedCells_AndReportsSelection", CollectionViewCells),
         new("Hooks_WindowSizeAndTheme_TrackTheWindow", WindowHooks),
@@ -406,6 +407,49 @@ public static class Fixtures
         Equal(1, c.Window.Navigation.ModalStack.Count, "modals shown");
         Equal("sheet", c.Window.Navigation.ModalStack[0].Title, "the modal");
         Equal(0, dismissals.Count, "dismissals reported");
+    }
+
+    private sealed record BuriedState(bool KeepFirst, bool ShowSecondModal);
+
+    private sealed class BuriedApp : Component<Action<Action<BuriedState>>>
+    {
+        public override Element Render()
+        {
+            var (state, setState) = UseState(new BuriedState(true, false));
+            Props(setState);
+            var second = NavigationStack([Page("second", Label("second"))]) with
+            {
+                Title = "Second",
+                Modals = state.ShowSecondModal ? [Page("top", Label("top"))] : [],
+            };
+            return state.KeepFirst
+                ? Tabs(0, null,
+                    (NavigationStack([Page("first", Label("first"))]) with { Title = "First", Modals = [Page("buried", Label("buried"))] }).WithKey("first"),
+                    second.WithKey("second"))
+                : Tabs(0, null, second.WithKey("second"));
+        }
+    }
+
+    private static async Task BuriedModalCleanup(FixtureContext c)
+    {
+        Action<BuriedState>? set = null;
+        c.Show(Component<BuriedApp, Action<Action<BuriedState>>>(s => set = s));
+        await LoadedPage<TabbedPage>(c);
+        var modals = c.Window.Navigation;
+        await c.WaitFor(() => modals.ModalStack.Count == 1, "the first stack's modal");
+        await c.Settle();
+        set!(new(true, true));
+        await c.WaitFor(() => modals.ModalStack.Count == 2, "the second stack's modal on top");
+        await c.Settle();
+
+        // The first stack goes while its modal is buried under the second stack's.
+        set(new(false, true));
+        await c.Settle(1500);
+        Equal("buried,top", string.Join(",", modals.ModalStack.Select(p => p.Title)), "modals while the first one is covered");
+
+        // Uncovering it must dismiss it: its tree is gone.
+        set(new(false, false));
+        await c.WaitFor(() => modals.ModalStack.Count == 0, "both modals to be dismissed", 6000);
     }
 
     private sealed class TabsApp : Component<bool>

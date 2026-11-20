@@ -190,7 +190,7 @@ fallback and mixed trees, `CollectionView` cells as child roots, pages, toolbar 
 navigation stack's reconcile, the user-pop rule (below), tabs and flyout (including swapping the
 two flyout pages between slots).
 
-**Device tier** (`tests/Reactor.Maui.DeviceTests`, 24 fixtures). All pass on Mac Catalyst (macOS 26,
+**Device tier** (`tests/Reactor.Maui.DeviceTests`, 25 fixtures). All pass on Mac Catalyst (macOS 26,
 Apple silicon), an iPhone 18 Pro simulator (iOS 27) and a Pixel 10 (Android 16). They check what the
 native views show, not the virtual tree:
 - Taps reach state, and the platform label updates in place. Typing into a controlled `Entry` is
@@ -206,7 +206,8 @@ native views show, not the virtual tree:
   the app refuses is undone, including when the navigator is idle; an accepted back never re-pushes
   the page; the navigator's own pops are never reported as the user's; a modal dismissal is
   reported; unmounting mid-navigation stops further pushes; two stacks in tabs share the window's
-  modal stack without dismissing each other's modals. Also: tab selection accepted and refused, `CollectionView` virtualizes
+  modal stack without dismissing each other's modals; an unmounted stack's modal that is buried
+  under another stack's modal is dismissed once it is uncovered. Also: tab selection accepted and refused, `CollectionView` virtualizes
   (a few of 200 cells realized) and reports selection, `UseWindowSize` and `UseAppTheme` follow the
   window and the theme, an `ErrorBoundary` catches an event-handler failure, and effects clean up on
   unmount.
@@ -233,8 +234,9 @@ reproduced before it was fixed and covered by a fixture that fails without the f
 - The window's modal stack is shared: a second navigation stack dismissed the first one's modal.
   Each navigator now manages only the modals it presented.
 - Navigation failures were lost in a discarded task; they now reach error boundaries through
-  `HandlerContext.ReportError`. Unmounting now stops pending navigation and dismisses the modals
-  the stack presented. A swap of the two flyout pages threw; it now goes through placeholders.
+  `HandlerContext.ReportError`. Unmounting now stops pending navigation and, once its current
+  operation ends, dismisses the modals the stack presented, through the window (the navigation page
+  may already have left it); a modal covered by another stack's modal goes when it is uncovered. A swap of the two flyout pages threw; it now goes through placeholders.
 
 **Packages.** `dotnet pack` produces both packages. A stock `dotnet new maui` app that references only
 the packages builds the README's snippets unchanged and runs. The Maui package ships global usings
@@ -265,6 +267,9 @@ and the direct-renderer todos page were checked on the iPhone simulator.
   app assemblies trimmable. Apple builds then trim them even in Debug, and drop `SceneDelegate`,
   which only `Info.plist` names. The result is a blank window. The sample sets
   `IsTrimmable=false`; any new app project in the repo must too.
+- **A platform pop is tracked for at most 3 s.** If MAUI were to keep a refused page in its stack
+  longer than that, the navigator would settle against it and not restore the page when it finally
+  left. Not observed on any platform (pops leave within about 0.6 s).
 - **MAUI bug on Android: replacing `Window.Page` while a `NavigationPage` push is in flight**
   crashes the app ("NavigationManager cannot be null here", from
   `NavigationViewFragment.OnCreateView`). Reproduced with plain MAUI, no Reactor involved. A

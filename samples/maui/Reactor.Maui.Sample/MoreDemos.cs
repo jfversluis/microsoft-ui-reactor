@@ -84,7 +84,7 @@ public sealed class ListDemo : Component
             HStack(8,
                 Button("Shuffle", () => update(list => [.. list.OrderBy(_ => Random.Shared.Next())])).AutomationId("ShuffleButton"),
                 Button("Clear selection", () => setSelected(null)).AutomationId("ClearSelectionButton"),
-                Label($"{contacts.Count} loaded").AutomationId("LoadedLabel")).Grid(1, 0),
+                Label($"{contacts.Count} loaded").VerticalOptions(LayoutOptions.Center).AutomationId("LoadedLabel")).Grid(1, 0),
             list.Grid(2, 0));
     }
 }
