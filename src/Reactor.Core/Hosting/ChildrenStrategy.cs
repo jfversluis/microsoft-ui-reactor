@@ -17,6 +17,21 @@ public interface IChildrenStrategy<TElement, TControl>
     void Sync(TControl control, IReadOnlyList<object> natives);
 }
 
+/// <summary>
+/// A children strategy for controls whose children fill distinct slots (a navigation stack's pages
+/// and modals, a flyout and its detail). It receives the native views grouped per child element,
+/// in order, instead of one flattened list; a child that rendered nothing has an empty group.
+/// </summary>
+public interface ISlottedChildrenStrategy<TElement, TControl> : IChildrenStrategy<TElement, TControl>
+    where TElement : Element
+    where TControl : class
+{
+    void SyncSlots(TElement element, TControl control, IReadOnlyList<IReadOnlyList<object>> slots);
+
+    void IChildrenStrategy<TElement, TControl>.Sync(TControl control, IReadOnlyList<object> natives) =>
+        throw new NotSupportedException("A slotted strategy is synchronized through SyncSlots.");
+}
+
 public static class ChildrenStrategy
 {
     /// <summary>A control whose children live in an ordered list (a stack or grid panel).</summary>

@@ -36,7 +36,11 @@ public static class MauiHandlers
         .Register(new RefreshViewHandler())
         .Register(new SwipeViewHandler())
         .Register(new CollectionViewHandler())
-        .Register(new CarouselViewHandler());
+        .Register(new CarouselViewHandler())
+        .Register(new PageHandler())
+        .Register(new NavigationStackHandler())
+        .Register(new TabsHandler())
+        .Register(new FlyoutHandler());
 
     /// <summary>
     /// Hosts any native view in a Controls slot typed as <see cref="View"/>; a view from another

@@ -31,6 +31,8 @@ internal interface IHandlerAdapter
     bool CanUpdate(Element oldElement, Element newElement);
     IReadOnlyList<Element?> GetChildren(Element element);
     void SyncChildren(object control, IReadOnlyList<object> natives);
+    bool IsSlotted { get; }
+    void SyncSlots(Element element, object control, IReadOnlyList<IReadOnlyList<object>> slots);
 }
 
 internal sealed class HandlerAdapter<TElement, TControl>(IElementHandler<TElement, TControl> handler) : IHandlerAdapter
@@ -55,4 +57,9 @@ internal sealed class HandlerAdapter<TElement, TControl>(IElementHandler<TElemen
 
     public void SyncChildren(object control, IReadOnlyList<object> natives) =>
         _children?.Sync((TControl)control, natives);
+
+    public bool IsSlotted => _children is ISlottedChildrenStrategy<TElement, TControl>;
+
+    public void SyncSlots(Element element, object control, IReadOnlyList<IReadOnlyList<object>> slots) =>
+        ((ISlottedChildrenStrategy<TElement, TControl>)_children!).SyncSlots((TElement)element, (TControl)control, slots);
 }

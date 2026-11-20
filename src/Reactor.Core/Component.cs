@@ -44,6 +44,9 @@ public abstract class Component
     protected Ref<T> UseRef<T>(T initialValue = default!)
         => Context.UseRef(initialValue);
 
+    protected RouteStack<T> UseRouteStack<T>(T root)
+        => Context.UseRouteStack(root);
+
     protected T UseContext<T>(Context<T> context)
         => Context.UseContext(context);
 

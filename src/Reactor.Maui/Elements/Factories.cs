@@ -117,6 +117,20 @@ public static class Factories
 
     public static SwipeViewElement SwipeView(Element? content) => new(content);
 
+    // ── Pages and navigation ────────────────────────────────────────────────
+
+    public static PageElement Page(string? title, Element? content) => new(title, content);
+
+    /// <summary>A navigation stack of <paramref name="pages"/>, root first. <paramref name="onPopped"/> receives the new depth after a back gesture.</summary>
+    public static NavigationStackElement NavigationStack(IEnumerable<Element?> pages, Action<int>? onPopped = null) =>
+        new([.. pages]) { OnPopped = onPopped };
+
+    public static TabsElement Tabs(int selectedIndex, Action<int>? onSelectedIndexChanged, params Element?[] pages) =>
+        new(pages, selectedIndex, onSelectedIndexChanged);
+
+    public static FlyoutElement Flyout(Element? flyout, Element? detail, bool isPresented, Action<bool>? onIsPresentedChanged = null) =>
+        new(flyout, detail, isPresented, onIsPresentedChanged);
+
     // ── Virtualized collections ─────────────────────────────────────────────
 
     /// <summary>A virtualized list of <paramref name="items"/>, matched across renders by <paramref name="key"/>.</summary>

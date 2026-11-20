@@ -672,6 +672,19 @@ public sealed class ReactorRoot
 
     private void SyncHost(Node host)
     {
+        if (host.Handler!.IsSlotted)
+        {
+            var slots = new List<IReadOnlyList<object>>(host.Children.Count);
+            foreach (var child in host.Children)
+            {
+                var slot = new List<object>();
+                CollectNatives(child, slot);
+                slots.Add(slot);
+            }
+            host.Handler.SyncSlots(host.Element, host.Native!, slots);
+            return;
+        }
+
         var natives = new List<object>();
         foreach (var child in host.Children) CollectNatives(child, natives);
         host.Handler!.SyncChildren(host.Native!, natives);

@@ -152,6 +152,15 @@ public sealed class RenderContext
     public Ref<T> UseRef<T>(T initialValue = default!)
         => Acquire(() => new Ref<T>(initialValue), "UseRef");
 
+    /// <summary>A navigation stack in state, starting at <paramref name="root"/>.</summary>
+    public RouteStack<T> UseRouteStack<T>(T root)
+    {
+        var (items, update) = UseReducer<IReadOnlyList<T>>([root]);
+        var stack = UseRef<RouteStack<T>?>(null);
+        if (stack.Current is null || !ReferenceEquals(stack.Current.Items, items)) stack.Current = new RouteStack<T>(items, update);
+        return stack.Current;
+    }
+
     /// <summary>
     /// Reads the value of the nearest enclosing <see cref="Context{T}.Provide"/>, or the context's
     /// default. The component re-renders when that provider's value changes.
