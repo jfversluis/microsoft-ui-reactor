@@ -53,6 +53,19 @@ public sealed record ComponentElement<TProps> : ComponentElement
 /// <summary>An inline function component. It re-renders whenever its parent does.</summary>
 public sealed record FuncElement(Func<RenderContext, Element?> RenderFunc) : Element;
 
+/// <summary>
+/// An inline function component that re-renders only when one of <see cref="Dependencies"/>
+/// changes, or when its own state does.
+/// </summary>
+public sealed record MemoElement(Func<RenderContext, Element?> RenderFunc, object?[] Dependencies) : Element;
+
+/// <summary>
+/// Catches errors thrown while rendering, mounting or running effects in <see cref="Child"/>'s
+/// subtree, and renders <see cref="Fallback"/> instead. The subtree is unmounted, so its effect
+/// cleanups run. When the boundary itself re-renders it retries <see cref="Child"/>.
+/// </summary>
+public sealed record ErrorBoundaryElement(Element? Child, Func<Exception, Element?> Fallback) : Element;
+
 public static class ElementExtensions
 {
     /// <summary>Returns a copy of <paramref name="element"/> with <see cref="Element.Key"/> set.</summary>

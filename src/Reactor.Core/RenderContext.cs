@@ -16,6 +16,7 @@ public sealed class RenderContext
     // Wired by the reconciler when the owning node mounts.
     internal Action? RequestRerender;
     internal IRenderScheduler? Scheduler;
+    internal Node? Owner;
 
     internal void BeginRender() => _hookIndex = 0;
 
@@ -47,8 +48,11 @@ public sealed class RenderContext
         }
     }
 
-    /// <summary>Runs every effect cleanup. Called when the owning node unmounts.</summary>
-    internal void RunCleanups()
+    /// <summary>
+    /// Runs every effect cleanup. Called when the owning node unmounts. A throwing cleanup does
+    /// not stop the others; its exception is added to <paramref name="errors"/>.
+    /// </summary>
+    internal void RunCleanups(List<Exception> errors)
     {
         _pendingEffects = null;
         foreach (var slot in _hooks)
@@ -56,7 +60,14 @@ public sealed class RenderContext
             if (slot is EffectHook { Cleanup: { } cleanup } hook)
             {
                 hook.Cleanup = null;
-                cleanup();
+                try
+                {
+                    cleanup();
+                }
+                catch (Exception ex)
+                {
+                    errors.Add(ex);
+                }
             }
         }
     }
@@ -138,6 +149,56 @@ public sealed class RenderContext
 
     public Ref<T> UseRef<T>(T initialValue = default!)
         => Acquire(() => new Ref<T>(initialValue), "UseRef");
+
+    /// <summary>
+    /// Reads the value of the nearest enclosing <see cref="Context{T}.Provide"/>, or the context's
+    /// default. The component re-renders when that provider's value changes.
+    /// </summary>
+    public T UseContext<T>(Context<T> context)
+    {
+        Acquire(static () => new ContextHook(), "UseContext");
+        return Owner is null ? context.DefaultValue : Owner.ReadContext(context);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="fetch"/> after the first render and again whenever a dependency changes
+    /// or <see cref="Resource{T}.Reload"/> is called, and re-renders with its progress. A fetch that
+    /// is superseded or unmounted is cancelled and its result is ignored. The previous value is kept
+    /// while a reload is in flight.
+    /// </summary>
+    public Resource<T> UseResource<T>(Func<CancellationToken, Task<T>> fetch, params object?[] dependencies)
+    {
+        var (state, update) = UseReducer(new ResourceState<T>(true, default, null), threadSafe: true);
+        var (version, setVersion) = UseReducer(0);
+        var latestFetch = UseRef(fetch);
+        latestFetch.Current = fetch;
+
+        UseEffect(() =>
+        {
+            var cancellation = new CancellationTokenSource();
+            update(static s => s.IsLoading && s.Error is null ? s : s with { IsLoading = true, Error = null });
+            _ = RunAsync();
+            return cancellation.Cancel;
+
+            async Task RunAsync()
+            {
+                try
+                {
+                    var value = await latestFetch.Current(cancellation.Token).ConfigureAwait(false);
+                    if (!cancellation.IsCancellationRequested) update(_ => new ResourceState<T>(false, value, null));
+                }
+                catch (Exception ex) when (!cancellation.IsCancellationRequested)
+                {
+                    update(s => s with { IsLoading = false, Error = ex });
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+        }, [.. dependencies, version]);
+
+        return new Resource<T>(state.IsLoading, state.Value, state.Error, () => setVersion(static v => v + 1));
+    }
 
     private THook Acquire<THook>(Func<THook> create, string hookName) where THook : class
     {
@@ -225,6 +286,10 @@ public sealed class RenderContext
         public Func<Action>? PendingEffectWithCleanup;
         public Action? Cleanup;
     }
+
+    private sealed class ContextHook;
+
+    private sealed record ResourceState<T>(bool IsLoading, T? Value, Exception? Error);
 
     private sealed class MemoHook<T>
     {

@@ -22,6 +22,15 @@ public static class Factories
 
     public static FuncElement RenderEachTime(Func<RenderContext, Element?> render) => CoreFactories.RenderEachTime(render);
 
+    public static MemoElement Memo(Func<RenderContext, Element?> render, params object?[] dependencies) =>
+        CoreFactories.Memo(render, dependencies);
+
+    public static ErrorBoundaryElement ErrorBoundary(Element? child, Func<Exception, Element?> fallback) =>
+        CoreFactories.ErrorBoundary(child, fallback);
+
+    public static GroupElement ForEach<T>(IEnumerable<T> items, Func<T, string> key, Func<T, Element?> render) =>
+        CoreFactories.ForEach(items, key, render);
+
     public static LabelElement Label(string text) => new(text);
 
     public static ButtonElement Button(string text, Action? onClick = null) => new(text, onClick);

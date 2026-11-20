@@ -29,6 +29,8 @@ public sealed class FakeView(string kind)
 public sealed record BoxElement(params Element?[] Children) : Element;
 public sealed record TextElement(string Text) : Element;
 public sealed record InputElement(string Value, Action<string>? OnChanged = null) : Element;
+/// <summary>Its handler throws on mount, after the elements before it in a list mounted.</summary>
+public sealed record ExplodingElement(string Message) : Element;
 
 public sealed class FakeRenderer
 {
@@ -37,7 +39,8 @@ public sealed class FakeRenderer
     public ElementHandlerRegistry CreateRegistry() => new ElementHandlerRegistry()
         .Register(new BoxHandler(this))
         .Register(new TextHandler(this))
-        .Register(new InputHandler(this));
+        .Register(new InputHandler(this))
+        .Register(new ExplodingHandler());
 
     private FakeView Create(string kind)
     {
@@ -70,6 +73,14 @@ public sealed class FakeRenderer
         public void Unmount(FakeView control) => control.Unmounted = true;
     }
 
+    private sealed class ExplodingHandler : IElementHandler<ExplodingElement, FakeView>
+    {
+        public FakeView Mount(HandlerContext<ExplodingElement> context, ExplodingElement element) =>
+            throw new InvalidOperationException(element.Message);
+
+        public void Update(HandlerContext<ExplodingElement> context, ExplodingElement oldElement, ExplodingElement newElement, FakeView control) { }
+    }
+
     private sealed class InputHandler(FakeRenderer renderer) : IElementHandler<InputElement, FakeView>
     {
         public FakeView Mount(HandlerContext<InputElement> context, InputElement element)
@@ -80,6 +91,7 @@ public sealed class FakeRenderer
             {
                 if (context.IsEchoing(view)) return;
                 context.Current.OnChanged?.Invoke(text);
+                context.RestoreAfterEvent();
             };
             return view;
         }

@@ -43,6 +43,12 @@ public abstract class Component
 
     protected Ref<T> UseRef<T>(T initialValue = default!)
         => Context.UseRef(initialValue);
+
+    protected T UseContext<T>(Context<T> context)
+        => Context.UseContext(context);
+
+    protected Resource<T> UseResource<T>(Func<CancellationToken, Task<T>> fetch, params object?[] dependencies)
+        => Context.UseResource(fetch, dependencies);
 }
 
 internal interface IPropsReceiver

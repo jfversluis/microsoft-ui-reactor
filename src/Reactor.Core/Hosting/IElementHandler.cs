@@ -53,6 +53,17 @@ public readonly struct HandlerContext<TElement> where TElement : Element
 
     /// <summary>Whether <paramref name="control"/> is inside a <see cref="WriteSuppressed"/> write.</summary>
     public bool IsEchoing(object control) => _echo.IsSuppressed(control);
+
+    /// <summary>
+    /// Call after reporting user input: once state has settled, the control is updated with the
+    /// element that is current then. A controlled control whose callback did not accept the input
+    /// (did not change state) therefore returns to its declared value.
+    /// </summary>
+    public void RestoreAfterEvent()
+    {
+        var node = (Node)_live;
+        node.Root.RequestRestore(node);
+    }
 }
 
 internal interface ILiveElement

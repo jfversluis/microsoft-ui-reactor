@@ -87,6 +87,7 @@ public static class DirectHandlers
             {
                 if (context.IsEchoing(entry)) return;
                 context.Current.OnTextChanged?.Invoke(text);
+                context.RestoreAfterEvent();
             };
             return entry;
         }

@@ -98,6 +98,7 @@ public static class MauiHandlers
             {
                 if (context.IsEchoing(entry)) return;
                 context.Current.OnTextChanged?.Invoke(e.NewTextValue ?? "");
+                context.RestoreAfterEvent();
             };
             return entry;
         }
@@ -122,6 +123,7 @@ public static class MauiHandlers
             {
                 if (context.IsEchoing(checkBox)) return;
                 context.Current.OnCheckedChanged?.Invoke(e.Value);
+                context.RestoreAfterEvent();
             };
             return checkBox;
         }

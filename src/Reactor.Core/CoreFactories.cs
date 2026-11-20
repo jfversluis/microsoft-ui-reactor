@@ -25,4 +25,22 @@ public static class CoreFactories
 
     /// <summary>An inline function component with its own hooks.</summary>
     public static FuncElement RenderEachTime(Func<RenderContext, Element?> render) => new(render);
+
+    /// <summary>
+    /// An inline function component that re-renders only when a dependency changes or its own state
+    /// does. With no dependencies it renders once, then only for its own state.
+    /// </summary>
+    public static MemoElement Memo(Func<RenderContext, Element?> render, params object?[] dependencies) =>
+        new(render, dependencies);
+
+    /// <summary>Renders <paramref name="fallback"/> instead of <paramref name="child"/> when its subtree throws.</summary>
+    public static ErrorBoundaryElement ErrorBoundary(Element? child, Func<Exception, Element?> fallback) =>
+        new(child, fallback);
+
+    /// <summary>
+    /// One keyed element per item. Keys let the reconciler keep each item's state and native
+    /// views when the list is reordered, inserted into or filtered.
+    /// </summary>
+    public static GroupElement ForEach<T>(IEnumerable<T> items, Func<T, string> key, Func<T, Element?> render) =>
+        new([.. items.Select(item => (render(item) ?? EmptyElement.Instance) with { Key = key(item) })]);
 }
