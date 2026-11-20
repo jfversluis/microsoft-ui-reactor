@@ -52,7 +52,8 @@ internal sealed class Node(Element element, Node? parent, NodeKind kind, Reactor
     /// <summary>Reads the nearest enclosing provider of <paramref name="context"/> and subscribes to it.</summary>
     public T ReadContext<T>(Context<T> context)
     {
-        for (var ancestor = Parent; ancestor is not null; ancestor = ancestor.Parent)
+        // A child root's tree continues at the element that created it.
+        for (var ancestor = Parent ?? Root.ContextParent; ancestor is not null; ancestor = ancestor.Parent ?? ancestor.Root.ContextParent)
         {
             if (ancestor.Kind != NodeKind.Provider) continue;
             var provider = (ContextProviderElement)ancestor.Element;

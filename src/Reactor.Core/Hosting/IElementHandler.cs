@@ -21,6 +21,13 @@ public interface IElementHandler<TElement, TControl>
 
     /// <summary>How this control hosts child elements, or <c>null</c> for a leaf.</summary>
     IChildrenStrategy<TElement, TControl>? Children => null;
+
+    /// <summary>
+    /// Whether <paramref name="newElement"/> can update the control mounted for <paramref name="oldElement"/>.
+    /// Return <c>false</c> when the change needs a different kind of control; the reconciler then
+    /// unmounts it and mounts a new one. Default: always <c>true</c>.
+    /// </summary>
+    bool CanUpdate(TElement oldElement, TElement newElement) => true;
 }
 
 /// <summary>
@@ -53,6 +60,18 @@ public readonly struct HandlerContext<TElement> where TElement : Element
 
     /// <summary>Whether <paramref name="control"/> is inside a <see cref="WriteSuppressed"/> write.</summary>
     public bool IsEchoing(object control) => _echo.IsSuppressed(control);
+
+    /// <summary>
+    /// Creates a separate tree that renders through the same renderer and inherits this element's
+    /// context. Errors it does not catch go to the error boundaries above this element. Use it for
+    /// content a control creates on its own schedule, such as the cells of a virtualized list.
+    /// Unmount it when the control no longer shows it.
+    /// </summary>
+    public ReactorRoot CreateChildRoot(Action<object?> setRootNative)
+    {
+        var node = (Node)_live;
+        return node.Root.CreateChildRoot(node, setRootNative);
+    }
 
     /// <summary>
     /// Call after reporting user input: once state has settled, the control is updated with the

@@ -39,8 +39,10 @@ public sealed class RenderContext
         if (pending is null) return;
         foreach (var hook in pending)
         {
-            hook.Cleanup?.Invoke();
+            // Cleared before running, so a cleanup that throws is not run again at unmount.
+            var cleanup = hook.Cleanup;
             hook.Cleanup = null;
+            cleanup?.Invoke();
             if (hook.PendingEffect is { } effect) effect();
             else if (hook.PendingEffectWithCleanup is { } withCleanup) hook.Cleanup = withCleanup();
             hook.PendingEffect = null;
@@ -168,10 +170,11 @@ public sealed class RenderContext
     /// </summary>
     public Resource<T> UseResource<T>(Func<CancellationToken, Task<T>> fetch, params object?[] dependencies)
     {
-        var (state, update) = UseReducer(new ResourceState<T>(true, default, null), threadSafe: true);
+        var (state, update) = UseReducer(new ResourceState<T>(true, default, null));
         var (version, setVersion) = UseReducer(0);
         var latestFetch = UseRef(fetch);
         latestFetch.Current = fetch;
+        var scheduler = Scheduler;
 
         UseEffect(() =>
         {
@@ -180,19 +183,29 @@ public sealed class RenderContext
             _ = RunAsync();
             return cancellation.Cancel;
 
+            // Results are applied on the render thread, where cancellation also happens, so a fetch
+            // superseded by a newer one can never overwrite the newer result.
+            void Apply(Func<ResourceState<T>, ResourceState<T>> change)
+            {
+                void Run()
+                {
+                    if (!cancellation.IsCancellationRequested) update(change);
+                }
+                if (scheduler is { } s && !s.CheckAccess()) s.Post(Run);
+                else Run();
+            }
+
             async Task RunAsync()
             {
                 try
                 {
                     var value = await latestFetch.Current(cancellation.Token).ConfigureAwait(false);
-                    if (!cancellation.IsCancellationRequested) update(_ => new ResourceState<T>(false, value, null));
+                    Apply(_ => new ResourceState<T>(false, value, null));
                 }
-                catch (Exception ex) when (!cancellation.IsCancellationRequested)
+                catch (Exception ex)
                 {
-                    update(s => s with { IsLoading = false, Error = ex });
-                }
-                catch (OperationCanceledException)
-                {
+                    // A superseded fetch's failure (often just cancellation) is dropped by Apply.
+                    Apply(s => s with { IsLoading = false, Error = ex });
                 }
             }
         }, [.. dependencies, version]);

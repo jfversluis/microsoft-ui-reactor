@@ -27,6 +27,8 @@ public sealed class FakeView(string kind)
 }
 
 public sealed record BoxElement(params Element?[] Children) : Element;
+/// <summary>Hosts at most one child, like a scroll view.</summary>
+public sealed record FrameElement(Element? Child) : Element;
 public sealed record TextElement(string Text) : Element;
 public sealed record InputElement(string Value, Action<string>? OnChanged = null) : Element;
 /// <summary>Its handler throws on mount, after the elements before it in a list mounted.</summary>
@@ -40,7 +42,8 @@ public sealed class FakeRenderer
         .Register(new BoxHandler(this))
         .Register(new TextHandler(this))
         .Register(new InputHandler(this))
-        .Register(new ExplodingHandler());
+        .Register(new ExplodingHandler())
+        .Register(new FrameHandler(this));
 
     private FakeView Create(string kind)
     {
@@ -71,6 +74,19 @@ public sealed class FakeRenderer
             => control.SetText(newElement.Text);
 
         public void Unmount(FakeView control) => control.Unmounted = true;
+    }
+
+    private sealed class FrameHandler(FakeRenderer renderer) : IElementHandler<FrameElement, FakeView>
+    {
+        public FakeView Mount(HandlerContext<FrameElement> context, FrameElement element) => renderer.Create("frame");
+        public void Update(HandlerContext<FrameElement> context, FrameElement oldElement, FrameElement newElement, FakeView control) { }
+        public void Unmount(FakeView control) => control.Unmounted = true;
+        public IChildrenStrategy<FrameElement, FakeView> Children { get; } =
+            ChildrenStrategy.Single<FrameElement, FakeView, FakeView>(e => e.Child, (frame, child) =>
+            {
+                frame.Children.Clear();
+                if (child is not null) frame.Children.Add(child);
+            });
     }
 
     private sealed class ExplodingHandler : IElementHandler<ExplodingElement, FakeView>

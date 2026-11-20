@@ -31,6 +31,9 @@ public sealed class ReactorRoot
     private object? _rootNative;
     private bool _flushScheduled;
 
+    /// <summary>For a child root, the node that created it: context lookups and errors continue there.</summary>
+    internal Node? ContextParent { get; private init; }
+
     /// <param name="registry">The renderer's element handlers.</param>
     /// <param name="scheduler">The renderer's UI thread.</param>
     /// <param name="setRootNative">Receives the root native control (or <c>null</c>) whenever it changes.</param>
@@ -59,7 +62,8 @@ public sealed class ReactorRoot
         var next = element ?? EmptyElement.Instance;
         try
         {
-            if (_root is not null && SameIdentity(_root.Element, next))
+            if (_root is not null && SameIdentity(_root.Element, next)
+                && (_root.Kind != NodeKind.Host || _root.Handler!.CanUpdate(_root.Element, next)))
             {
                 Update(_root, next);
             }
@@ -70,14 +74,13 @@ public sealed class ReactorRoot
                 if (previous is not null) UnmountAndReport(previous);
                 _root = Mount(next, null);
             }
-            SyncRoot();
         }
         catch (Exception ex)
         {
             FailRoot(ex);
             return;
         }
-        RunEffects();
+        Commit(new HashSet<Node>(), syncRoot: true);
     }
 
     /// <summary>Unmounts the whole tree, running every effect cleanup.</summary>
@@ -91,6 +94,33 @@ public sealed class ReactorRoot
         Unmount(root, errors);
         SyncRoot();
         Report(errors);
+    }
+
+    internal ReactorRoot CreateChildRoot(Node owner, Action<object?> setRootNative)
+    {
+        var child = new ReactorRoot(_registry, _scheduler, setRootNative) { ContextParent = owner };
+        // Posted, so the parent tree is not changed while the child root is still unwinding.
+        child.UnhandledException += error => _scheduler.Post(() => HandleChildError(owner, error));
+        return child;
+    }
+
+    private void HandleChildError(Node owner, Exception error)
+    {
+        if (owner.Unmounted) return;
+        var hosts = new HashSet<Node>();
+        var syncRoot = false;
+        try
+        {
+            var boundary = RouteToBoundary(owner, error);
+            if (NearestHost(boundary) is { } host) hosts.Add(host);
+            else syncRoot = true;
+        }
+        catch (Exception unhandled)
+        {
+            FailRoot(unhandled);
+            return;
+        }
+        Commit(hosts, syncRoot);
     }
 
     /// <summary>Re-renders every component of every live root. Used by hot reload.</summary>
@@ -129,10 +159,17 @@ public sealed class ReactorRoot
     internal void Flush()
     {
         _flushScheduled = false;
-        // Hosts are re-synced once the whole batch has rendered: an intermediate state (one
-        // component shown before its sibling is hidden) may not be valid for its host.
-        var hostsToSync = new HashSet<Node>();
-        var syncRoot = false;
+        Commit(new HashSet<Node>(), syncRoot: false);
+    }
+
+    /// <summary>
+    /// Finishes a render: re-renders every dirty component (parents first, in passes until nothing is
+    /// dirty), then synchronizes the native children of every host that changed, restores controlled
+    /// values and runs effects. Hosts are synchronized only once the whole batch has rendered, because
+    /// an intermediate state (one component shown before its sibling is hidden) may not be valid for its host.
+    /// </summary>
+    private void Commit(HashSet<Node> hostsToSync, bool syncRoot)
+    {
         try
         {
             for (var pass = 0; _dirty.Count > 0; pass++)
@@ -166,8 +203,7 @@ public sealed class ReactorRoot
                 }
             }
 
-            foreach (var host in hostsToSync)
-                if (!host.Unmounted) SyncHost(host);
+            SyncHosts(hostsToSync, ref syncRoot);
             if (syncRoot) SyncRoot();
             RestoreControlledValues();
         }
@@ -177,6 +213,30 @@ public sealed class ReactorRoot
             return;
         }
         RunEffects();
+    }
+
+    /// <summary>
+    /// Synchronizes each host's native children. A host whose children strategy rejects the result
+    /// (for example two controls in a single-child host) is treated like a render error: the nearest
+    /// boundary above it shows its fallback, and that boundary's host is synchronized in turn.
+    /// </summary>
+    private void SyncHosts(HashSet<Node> hosts, ref bool syncRoot)
+    {
+        var pending = new Queue<Node>(hosts);
+        while (pending.TryDequeue(out var host))
+        {
+            if (host.Unmounted) continue;
+            try
+            {
+                SyncHost(host);
+            }
+            catch (Exception ex)
+            {
+                var boundary = RouteToBoundary(host, ex);
+                if (NearestHost(boundary) is { } parentHost) pending.Enqueue(parentHost);
+                else syncRoot = true;
+            }
+        }
     }
 
     private void ScheduleFlush()
@@ -329,16 +389,24 @@ public sealed class ReactorRoot
         // their props did not change.
         var changed = !Equals(previous.Value, next.Value);
         var readers = changed && node.Subscribers is { Count: > 0 } ? node.Subscribers.ToArray() : [];
-        foreach (var reader in readers) reader.Dirty = true;
+        foreach (var reader in readers)
+            if (reader.Root == this && !reader.Unmounted) reader.Dirty = true;
 
         ReconcileChildren(node, [next.Child]);
 
-        // Readers below a component that skipped re-rendering were not reached by the descent.
-        foreach (var reader in readers.OrderBy(static r => r.Depth))
+        // Readers below a component that skipped re-rendering were not reached by the descent. They
+        // render in the commit that is already running, with the rest of the batch, so host
+        // synchronization and error boundaries apply to them as to any other state change.
+        foreach (var reader in readers)
         {
-            if (reader.Unmounted || !reader.Dirty) continue;
-            RenderNode(reader);
-            if (NearestHost(reader) is { } host && host != NearestHost(node)) SyncHost(host);
+            if (reader.Unmounted) continue;
+            if (reader.Root != this)
+            {
+                // A reader in a child root re-renders in that root's own flush.
+                reader.Root.MarkDirty(reader);
+                continue;
+            }
+            if (reader.Dirty && !_dirty.Contains(reader)) _dirty.Add(reader);
         }
     }
 
@@ -382,7 +450,8 @@ public sealed class ReactorRoot
     {
         for (var ancestor = origin.Parent; ancestor is not null; ancestor = ancestor.Parent)
         {
-            if (ancestor.Kind != NodeKind.Boundary || ancestor.Unmounted) continue;
+            // A boundary already showing its fallback cannot catch an error from that fallback.
+            if (ancestor.Kind != NodeKind.Boundary || ancestor.Unmounted || ancestor.Error is not null) continue;
             try
             {
                 ShowFallback(ancestor, error);
@@ -403,14 +472,34 @@ public sealed class ReactorRoot
     {
         node.Dirty = false;
         var context = node.Context!;
-        context.BeginRender();
-        var rendered = node.Kind switch
+        // Subscriptions are rebuilt by this render's UseContext calls; providers no longer read are dropped.
+        var previousSubscriptions = node.Subscriptions;
+        node.Subscriptions = null;
+        Element? rendered;
+        try
         {
-            NodeKind.Component => node.Component!.Render(),
-            NodeKind.Memo => ((MemoElement)node.Element).RenderFunc(context),
-            _ => ((FuncElement)node.Element).RenderFunc(context),
-        };
-        context.EndRender();
+            context.BeginRender();
+            rendered = node.Kind switch
+            {
+                NodeKind.Component => node.Component!.Render(),
+                NodeKind.Memo => ((MemoElement)node.Element).RenderFunc(context),
+                _ => ((FuncElement)node.Element).RenderFunc(context),
+            };
+            context.EndRender();
+        }
+        catch
+        {
+            // Keep every subscription reachable so unmounting the failed node removes them all.
+            if (previousSubscriptions is not null) (node.Subscriptions ??= []).UnionWith(previousSubscriptions);
+            throw;
+        }
+
+        if (previousSubscriptions is not null)
+        {
+            foreach (var provider in previousSubscriptions)
+                if (node.Subscriptions is null || !node.Subscriptions.Contains(provider))
+                    provider.Subscribers?.Remove(node);
+        }
 
         ReconcileChildren(node, [rendered]);
         if (context.HasPendingEffects) _effectQueue.Add(node);
@@ -457,7 +546,8 @@ public sealed class ReactorRoot
                     unkeyedIndex++;
                 }
 
-                if (candidate is not null && SameIdentity(candidate.Element, element))
+                if (candidate is not null && SameIdentity(candidate.Element, element)
+                    && (candidate.Kind != NodeKind.Host || candidate.Handler!.CanUpdate(candidate.Element, element)))
                 {
                     // Held in the result before updating, so a failed update still leaves it reachable.
                     result.Add(candidate);
@@ -623,17 +713,38 @@ public sealed class ReactorRoot
         if (_restoreQueue.Count == 0) return;
         var nodes = _restoreQueue.ToArray();
         _restoreQueue.Clear();
+        var hosts = new HashSet<Node>();
+        var syncRoot = false;
         foreach (var node in nodes)
         {
-            // Updating with the same element on both sides re-asserts only values the control drifted from.
-            if (!node.Unmounted) node.Handler!.Update(node, _echo, node.Element, node.Element, node.Native!);
+            if (node.Unmounted) continue;
+            try
+            {
+                // Updating with the same element on both sides re-asserts only values the control drifted from.
+                node.Handler!.Update(node, _echo, node.Element, node.Element, node.Native!);
+            }
+            catch (Exception ex)
+            {
+                var boundary = RouteToBoundary(node, ex);
+                if (NearestHost(boundary) is { } host) hosts.Add(host);
+                else syncRoot = true;
+            }
         }
+        SyncHosts(hosts, ref syncRoot);
+        if (syncRoot) SyncRoot();
     }
 
     private void RunEffects()
     {
-        while (_effectQueue.Count > 0)
+        for (var pass = 0; _effectQueue.Count > 0; pass++)
         {
+            if (pass == MaxFlushPasses)
+            {
+                FailRoot(new InvalidOperationException(
+                    $"Effects did not settle after {MaxFlushPasses} passes. An effect or error fallback is probably re-triggering itself."));
+                return;
+            }
+
             // Deepest first, so a child's effects run before any ancestor's, even when the two
             // rendered separately because a memoized component between them was skipped.
             var batch = _effectQueue.OrderByDescending(static node => node.Depth).ToArray();
@@ -650,8 +761,12 @@ public sealed class ReactorRoot
                     try
                     {
                         var boundary = RouteToBoundary(node, ex);
-                        if (NearestHost(boundary) is { } host) SyncHost(host);
-                        else SyncRoot();
+                        var hosts = new HashSet<Node>();
+                        var syncRoot = false;
+                        if (NearestHost(boundary) is { } host) hosts.Add(host);
+                        else syncRoot = true;
+                        SyncHosts(hosts, ref syncRoot);
+                        if (syncRoot) SyncRoot();
                     }
                     catch (Exception unhandled)
                     {

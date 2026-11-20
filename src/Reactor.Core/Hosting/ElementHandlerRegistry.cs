@@ -28,6 +28,7 @@ internal interface IHandlerAdapter
     object Mount(ILiveElement live, EchoGuard echo);
     void Update(ILiveElement live, EchoGuard echo, Element oldElement, Element newElement, object control);
     void Unmount(object control);
+    bool CanUpdate(Element oldElement, Element newElement);
     IReadOnlyList<Element?> GetChildren(Element element);
     void SyncChildren(object control, IReadOnlyList<object> natives);
 }
@@ -45,6 +46,9 @@ internal sealed class HandlerAdapter<TElement, TControl>(IElementHandler<TElemen
         handler.Update(new HandlerContext<TElement>(live, echo), (TElement)oldElement, (TElement)newElement, (TControl)control);
 
     public void Unmount(object control) => handler.Unmount((TControl)control);
+
+    public bool CanUpdate(Element oldElement, Element newElement) =>
+        handler.CanUpdate((TElement)oldElement, (TElement)newElement);
 
     public IReadOnlyList<Element?> GetChildren(Element element) =>
         _children?.GetChildren((TElement)element) ?? [];

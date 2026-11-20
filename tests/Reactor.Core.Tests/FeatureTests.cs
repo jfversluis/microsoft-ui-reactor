@@ -384,3 +384,188 @@ public class HotReloadTests
         Assert.Equal(2, ReloadCounter.Renders);
     }
 }
+
+// ── Regressions from the milestone 2 review ─────────────────────────────────
+
+public static class Mode
+{
+    public static readonly Context<string> Current = new("a");
+    public static readonly Context<string> Other = new("other default");
+}
+
+/// <summary>Visible only while the mode equals <see cref="Show"/>.</summary>
+public sealed class ModeGated : Component<string>
+{
+    public override Element? Render() => UseContext(Mode.Current) == Props ? new TextElement(Props) : null;
+}
+
+public sealed class ModeRoot : Component<(Probe Probe, Func<Element> Body)>
+{
+    public override Element Render()
+    {
+        var (mode, setMode) = UseState("a");
+        Props.Probe.Setters["mode"] = v => setMode(v == 0 ? "a" : "b");
+        return Mode.Current.Provide(mode, Props.Body());
+    }
+}
+
+/// <summary>Never re-renders from its parent, so context changes reach its subtree only through subscriptions.</summary>
+public sealed class Skipper : Component<Func<Element>>
+{
+    protected override bool ShouldUpdate(Func<Element>? oldProps, Func<Element>? newProps) => false;
+    public override Element Render() => Props();
+}
+
+public sealed class ThrowsOnB : Component
+{
+    public override Element Render() =>
+        UseContext(Mode.Current) == "b" ? throw new InvalidOperationException("reader failed") : new TextElement("reader ok");
+}
+
+public sealed class FailingFallback : Component<Probe>
+{
+    public override Element Render()
+    {
+        UseEffect(() => { Props.Log.Add("fallback effect"); throw new InvalidOperationException("fallback effect failed"); });
+        return new TextElement("inner fallback");
+    }
+}
+
+public sealed class Splitter : Component<Probe>
+{
+    public override Element Render()
+    {
+        var (split, setSplit) = UseState(false);
+        Props.Setters["split"] = v => setSplit(v == 1);
+        return split ? Group(new TextElement("one"), new TextElement("two")) : new TextElement("single");
+    }
+}
+
+public sealed class ContextSwitcher : Component<Probe>
+{
+    public override Element Render()
+    {
+        var (useOther, setUseOther) = UseState(false);
+        Props.Setters["switch"] = v => setUseOther(v == 1);
+        var value = UseContext(useOther ? Mode.Other : Mode.Current);
+        Props.CountRender("switcher");
+        return new TextElement(value);
+    }
+}
+
+public sealed class CleanupThrower : Component<Probe>
+{
+    public override Element Render()
+    {
+        var (dep, setDep) = UseState(0);
+        Props.Setters["dep"] = setDep;
+        UseEffect(() => () =>
+        {
+            Props.Log.Add($"cleanup {dep}");
+            throw new InvalidOperationException("cleanup failed");
+        }, dep);
+        return new TextElement($"dep {dep}");
+    }
+}
+
+public class ReviewRegressionTests2
+{
+    private static Element Fallback(Exception ex) => new TextElement($"fallback: {ex.Message}");
+
+    [Fact]
+    public void AFallbackWhoseEffectThrows_IsCaughtByTheNextBoundaryUp_NotByItself()
+    {
+        var probe = new Probe();
+        var host = new TestHost().Render(ErrorBoundary(
+            ErrorBoundary(new ExplodingElement("inner"), _ => Component<FailingFallback, Probe>(probe)),
+            Fallback));
+
+        Assert.Equal("fallback: fallback effect failed", host.RootView!.Text);
+        Assert.Equal(["fallback effect"], probe.Log);
+    }
+
+    [Fact]
+    public void ContextChange_ThroughASkippedComponent_SyncsSingleChildHostsAfterTheWholeBatch()
+    {
+        var probe = new Probe();
+        var host = new TestHost().Render(Component<ModeRoot, (Probe, Func<Element>)>((probe, () =>
+            Component<Skipper, Func<Element>>(() => new FrameElement(Group(
+                Component<ModeGated, string>("b"),
+                Component<ModeGated, string>("a")))))));
+        Assert.Equal("a", Assert.Single(host.RootView!.Children).Text);
+
+        probe.Setters["mode"](1);
+        host.Scheduler.Drain();
+
+        Assert.Equal("b", Assert.Single(host.RootView.Children).Text);
+    }
+
+    [Fact]
+    public void AContextReaderThatThrows_IsCaughtByTheBoundaryAboveIt_EvenBelowASkippedComponent()
+    {
+        var probe = new Probe();
+        var host = new TestHost().Render(Component<ModeRoot, (Probe, Func<Element>)>((probe, () =>
+            new BoxElement(
+                new TextElement("outside"),
+                Component<Skipper, Func<Element>>(() => ErrorBoundary(Component<ThrowsOnB>(), Fallback))))));
+        Exception? unhandled = null;
+        host.Root.UnhandledException += ex => unhandled = ex;
+
+        probe.Setters["mode"](1);
+        host.Scheduler.Drain();
+
+        Assert.Null(unhandled);
+        Assert.Equal(["outside", "fallback: reader failed"], host.RootView!.Children.Select(v => v.Text));
+    }
+
+    [Fact]
+    public void AHostThatRejectsItsChildren_IsTreatedLikeARenderError()
+    {
+        var probe = new Probe();
+        var host = new TestHost().Render(new BoxElement(ErrorBoundary(new FrameElement(Component<Splitter, Probe>(probe)), Fallback)));
+        Exception? unhandled = null;
+        host.Root.UnhandledException += ex => unhandled = ex;
+
+        probe.Setters["split"](1);
+        host.Scheduler.Drain();
+
+        Assert.Null(unhandled);
+        Assert.StartsWith("fallback: FrameElement hosts a single child", host.RootView!.Children[0].Text);
+    }
+
+    [Fact]
+    public void ACleanupThatThrows_RunsOnlyOnce()
+    {
+        var probe = new Probe();
+        var host = new TestHost().Render(Component<CleanupThrower, Probe>(probe));
+        var reported = new List<Exception>();
+        host.Root.UnhandledException += reported.Add;
+
+        // The cleanup throws while the effect re-runs; with no boundary that unmounts the tree,
+        // which must not run the same cleanup a second time.
+        probe.Setters["dep"](1);
+        host.Scheduler.Drain();
+        host.Root.Unmount();
+
+        Assert.Equal(["cleanup 0"], probe.Log);
+        Assert.Equal("cleanup failed", Assert.Single(reported).Message);
+    }
+
+    [Fact]
+    public void AComponentThatStopsReadingAContext_IsNoLongerRerenderedByIt()
+    {
+        var probe = new Probe();
+        var host = new TestHost().Render(Component<ModeRoot, (Probe, Func<Element>)>((probe, () =>
+            Component<Skipper, Func<Element>>(() => Component<ContextSwitcher, Probe>(probe)))));
+
+        probe.Setters["switch"](1);
+        host.Scheduler.Drain();
+        Assert.Equal("other default", host.RootView!.Text);
+        var renders = probe.Renders["switcher"];
+
+        probe.Setters["mode"](1);
+        host.Scheduler.Drain();
+
+        Assert.Equal(renders, probe.Renders["switcher"]);
+    }
+}
