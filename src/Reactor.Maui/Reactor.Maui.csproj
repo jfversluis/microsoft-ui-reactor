@@ -38,6 +38,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Ships Reactor's global usings and the Element alias to consumers; see the file for why. -->
+    <None Include="buildTransitive\Microsoft.UI.Reactor.Maui.props" Pack="true" PackagePath="buildTransitive;build" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="Reactor.Maui.Tests" />
     <InternalsVisibleTo Include="Reactor.Maui.DeviceTests" />
   </ItemGroup>

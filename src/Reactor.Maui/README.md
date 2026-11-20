@@ -1,11 +1,23 @@
 # Microsoft.UI.Reactor.Maui
 
 Reactor for .NET MAUI: declarative, component-based UI written in C#, with React-style hooks
-and keyed reconciliation, rendered to native MAUI views on Android, iOS, Mac Catalyst and Windows.
+and keyed reconciliation, rendered to native views on Android, iOS, Mac Catalyst and Windows.
+
+> **Status: preview.** The API can still change. Design notes, decisions and what has been verified
+> on which platform: [spec 065](https://github.com/microsoft/microsoft-ui-reactor/blob/main/docs/specs/065-maui-renderer.md).
+
+## Get started
+
+Add the package to a .NET MAUI app (`dotnet new maui`):
+
+```bash
+dotnet add package Microsoft.UI.Reactor.Maui --prerelease
+```
+
+Write a component. `Render()` returns a description of the UI; Reactor creates and updates the
+real controls to match it.
 
 ```csharp
-using Microsoft.UI.Reactor.Core;
-using Microsoft.UI.Reactor.Maui;
 using static Microsoft.UI.Reactor.Maui.Factories;
 
 public sealed class Counter : Component
@@ -13,27 +25,174 @@ public sealed class Counter : Component
     public override Element Render()
     {
         var (count, setCount) = UseState(0);
-        return VStack(8,
-            Label($"Clicked {count} times"),
-            Button("+", () => setCount(count + 1)));
+        return VStack(12,
+            Label($"Clicked {count} times").FontSize(18),
+            Button("Click me", () => setCount(count + 1)))
+            .Padding(24);
     }
 }
 ```
 
-Host it in a page:
+Show it in a window:
 
 ```csharp
 // MauiProgram.cs
-builder.UseMauiApp<App>().UseReactorDirectViews();
+builder
+    .UseMauiApp<App>()
+    .UseReactorDirectViews();
 
-// App.cs
-protected override Window CreateWindow(IActivationState? activationState) =>
-    new(new ReactorPage(Factories.Component<Counter>(), DirectHandlers.CreateRegistry()));
+// App.xaml.cs
+using static Microsoft.UI.Reactor.Maui.Factories;
+
+public partial class App : Application
+{
+    public App() => InitializeComponent();
+
+    protected override Window CreateWindow(IActivationState? activationState) =>
+        new ReactorWindow(Component<Counter>(), DirectHandlers.CreateRegistry());
+}
 ```
 
-`DirectHandlers.CreateRegistry()` renders primitives and layouts as lightweight views that skip
-the MAUI Controls layer, and everything else as regular MAUI controls. Pass no registry to use
-MAUI controls throughout.
+The package adds global usings for `Microsoft.UI.Reactor.Core`, `Microsoft.UI.Reactor.Maui`,
+`Microsoft.UI.Reactor.Maui.Hosting` and `Microsoft.UI.Reactor.Maui.Direct`, plus an `Element`
+alias, because MAUI's own `Microsoft.Maui.Controls.Element` would otherwise make a bare `Element`
+ambiguous. The factories are a `using static` you add per file, since names such as `Grid` and
+`Label` would otherwise shadow MAUI's types everywhere. Set
+`<ReactorImplicitUsings>false</ReactorImplicitUsings>` in the project to opt out of the global usings.
 
-Design notes and status:
-[spec 065](https://github.com/microsoft/microsoft-ui-reactor/blob/main/docs/specs/065-maui-renderer.md).
+## Two renderers
+
+Both renderers take the same components. They differ only in the registry you pass:
+
+| Registry | What it creates | Use it when |
+|---|---|---|
+| `DirectHandlers.CreateRegistry()` (needs `UseReactorDirectViews()`) | Labels, buttons, entries, check boxes, switches, sliders, progress, images and the stack and grid layouts as lightweight views that MAUI's platform handlers render directly, skipping the Controls layer (no bindable properties, bindings or logical tree). Everything else is a regular MAUI control. | You want the fastest rendering. Mounting and full updates are 27–58% faster, with 59–87% fewer allocations (spec 065 §4.1). |
+| `MauiHandlers.CreateRegistry()`, or no registry | Regular MAUI controls for everything. | You rely on implicit styles, `VisualStateManager`, effects or behaviors for every view. |
+
+The direct renderer switches an element to its Controls version when it uses a setting that only
+Controls supports (`.Style()`, `.StyleClass()`, gestures, shadows, clipping, `MaxLines`…), so you
+never lose a feature by choosing it. Implicit styles in `App.xaml` (`Styles.xaml` in the template)
+apply to Controls views only. Style direct views with modifiers.
+
+## Elements
+
+Create elements with the factories in `Factories` (`using static Microsoft.UI.Reactor.Maui.Factories;`)
+and refine them with modifiers. Elements are immutable records, so `with` works too.
+
+| Group | Factories |
+|---|---|
+| Text and media | `Label`, `Image`, `BoxView`, `GraphicsView`, `WebView`, `HtmlView`, `ActivityIndicator`, `ProgressBar` |
+| Input | `Button`, `ImageButton`, `Entry`, `Editor`, `SearchBar`, `CheckBox`, `Switch`, `Slider`, `Stepper`, `Picker`, `DatePicker`, `TimePicker`, `RadioButton` |
+| Layout | `VStack`, `HStack`, `Grid`, `FlexLayout`, `AbsoluteLayout`, `ScrollView`, `Border`, `RefreshView`, `SwipeView` |
+| Lists | `CollectionView`, `CarouselView` (virtualized; each item is its own tree) |
+| Pages and navigation | `Page`, `NavigationStack`, `Tabs`, `Flyout` |
+| Composition | `Component<T>()`, `Component<T, TProps>(props)`, `Group`, `Empty`, `Memo`, `ErrorBoundary`, `Context.Provide` |
+
+Common modifiers: `.Margin()`, `.Padding()`, `.Width()`, `.Height()`, `.Size()`,
+`.HorizontalOptions()`, `.VerticalOptions()`, `.Center()`, `.BackgroundColor()`, `.Opacity()`,
+`.IsVisible()`, `.IsEnabled()`, `.FontSize()`, `.Bold()`, `.TextColor()`, `.Grid(row, column)`,
+`.OnTap()`, `.AutomationId()`, `.Semantics()`, `.WithKey()`.
+
+```csharp
+Grid("auto,*", "*,auto",
+    Label("Name").Bold(),
+    Entry(name, setName, placeholder: "Your name").Grid(1, 0),
+    Button("Save", Save).Grid(1, 1))
+```
+
+## State, effects and other hooks
+
+Hooks are called in `Render()`, unconditionally and in the same order every render.
+
+| Hook | Purpose |
+|---|---|
+| `UseState(initial)` | A value and its setter. Setting an equal value does nothing. |
+| `UseReducer(initial)` | A value and an `update(old => new)` function, for updates that depend on the previous value. |
+| `UseEffect(effect, deps…)` | Runs after the UI is updated, again when a dependency changes; return a cleanup from the `Func<Action>` overload. |
+| `UseMemo`, `UseCallback`, `UseRef` | Cache a computed value, keep a callback identity stable, keep a mutable box across renders. |
+| `UseContext(context)` | Read a value provided higher up with `context.Provide(value, child)`. |
+| `UseResource(load, deps…)` | Load data asynchronously; returns loading, value or error, and cancels stale loads. |
+| `UseRouteStack(root)` | A navigation stack held in state (below). |
+| `UseAppTheme()`, `UseWindowSize()` | The app theme and the window size, re-rendering when they change. In a component class call them on `this`. |
+
+State setters can be called from any thread; the update is applied on the UI thread, and several
+updates in a row render once.
+
+**Inputs are controlled.** An `Entry`, `Slider`, `Switch` and the like always show the value you
+pass. Their callback reports what the user did; you decide whether it becomes the new value. If you
+don't accept it, the control returns to your value:
+
+```csharp
+Entry(code, value => setCode(value.ToUpperInvariant()), placeholder: "Code")
+```
+
+**Keys keep identity.** Give list items a stable `.WithKey(id)`. Then a reorder moves the existing
+controls, and each item's component state (text typed into its own entry, for example) moves with it.
+
+## Navigation
+
+The navigation stack is state. Render it with `NavigationStack`, and pass `stack.PopTo` so that the
+back button and back gesture update your state:
+
+```csharp
+public sealed class App : Component
+{
+    public override Element Render()
+    {
+        var stack = UseRouteStack("home");
+        return NavigationStack(
+            stack.Items.Select(route => route == "home"
+                ? Page("Home", Button("Details", () => stack.Push("details"))).WithKey(route)
+                : Page("Details", Label("Details")).WithKey(route)),
+            stack.PopTo);
+    }
+}
+```
+
+Pushing and popping animate as usual. If a pop callback doesn't accept a back navigation, the page
+is pushed back. Modals are a second list on the same element:
+`NavigationStack(…) with { Modals = […], OnModalDismissed = … }`. `Tabs(selectedIndex, onSelected, pages…)`
+and `Flyout(flyout, detail, isPresented, onIsPresentedChanged)` follow the same controlled pattern.
+
+## Hosting
+
+- `ReactorWindow(root, registry)`: the whole window is Reactor. The root can render a page
+  (`NavigationStack`, `Tabs`, `Flyout`, `Page`) or a plain view.
+- `ReactorPage(root, registry)`: a `ContentPage` with Reactor content, for an existing app. It
+  works as a Shell route through `ReactorPage.Template(() => Component<Settings>())`, or pushed onto a
+  XAML navigation stack. Call `Unmount()` when the page is discarded for good.
+
+Both raise `UnhandledException` for errors that no `ErrorBoundary` caught. By then the tree has been
+unmounted.
+
+## Lists
+
+```csharp
+CollectionView(contacts, c => c.Id.ToString(), c =>
+    HStack(12, Label(c.Name).Bold(), Label(c.Role)))
+    with
+{
+    SelectionMode = SelectionMode.Single,
+    SelectedKey = selectedId,
+    OnSelectionChanged = keys => setSelectedId(keys.FirstOrDefault()),
+    RemainingItemsThreshold = 5,
+    OnRemainingItemsThresholdReached = LoadMore,
+}
+```
+
+Each item renders its own component tree; the list only creates trees for the items on screen.
+Items are matched by key across updates, and selection is controlled.
+
+## Hot reload
+
+Reactor registers a .NET Hot Reload handler: after an edit is applied, every live Reactor tree
+re-renders, keeping component state.
+
+## Samples and tests
+
+- [`samples/maui/Reactor.Maui.Sample`](https://github.com/microsoft/microsoft-ui-reactor/tree/main/samples/maui/Reactor.Maui.Sample):
+  a gallery app with tabs, a navigation stack, controls, a `CollectionView` and the app hooks. Set
+  `REACTOR_RENDERER=direct` to use the direct renderer, or `REACTOR_SAMPLE_ROUTE=<demo>` to open a
+  demo at startup.
+- [`tests/Reactor.Maui.DeviceTests`](https://github.com/microsoft/microsoft-ui-reactor/tree/main/tests/Reactor.Maui.DeviceTests):
+  fixtures that run against the real platform controls (`run.sh maccatalyst|ios|android`).

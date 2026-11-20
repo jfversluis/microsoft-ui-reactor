@@ -1,6 +1,7 @@
 # Spec 065 — Reactor for .NET MAUI
 
-> Status: in progress. Grew out of a proof of concept on this branch; §7 tracks what is built.
+> Status: preview. Grew out of a proof of concept on this branch. §6 records what has been verified
+> and where, §7 what is still open.
 
 ## 1. Goal
 
@@ -26,8 +27,9 @@ model targets Android, iOS, Mac Catalyst and Windows through MAUI.
 | `src/Reactor.Maui` | `net11.0` + `-android/-ios/-maccatalyst/-windows` | MAUI element records, both renderers (§4), `ReactorPage`. The plain `net11.0` target exists for headless tests. |
 | `tests/Reactor.Core.Tests` | `net10.0` | Headless core tests against an in-memory fake renderer. |
 | `tests/Reactor.Maui.Tests` | `net11.0` | Headless renderer tests: real Controls objects and direct views, no platform handlers. |
+| `tests/Reactor.Maui.DeviceTests` | MAUI app | Device tier: fixtures that mount trees through the real platform handlers, act like the platform (taps, typing, back button, modal dismissal, tab selection) and check what the native views show. Prints TAP; `run.sh maccatalyst\|ios\|android`. |
 | `tests/Reactor.Maui.Benchmark` | MAUI app | Renders the same tree through both renderers and reports timings and allocations. |
-| `samples/maui/Reactor.Maui.Sample` | MAUI app | Counter, background-timer effect, keyed todo list. `REACTOR_RENDERER=direct` switches renderer. |
+| `samples/maui/Reactor.Maui.Sample` | MAUI app | Gallery: tabs, a navigation stack held in state, counter, background-timer effect, keyed todo list, value controls, a `CollectionView`, the app hooks. `REACTOR_RENDERER=direct` switches renderer; `REACTOR_SAMPLE_ROUTE=<demo>` opens a demo at startup. |
 
 `Reactor.Core` targets `net10.0` so the WinUI renderer (`net10.0-windows`) can consume it later.
 The MAUI projects target `net11.0` because that is what the MAUI workload ships for SDK 11.
@@ -40,6 +42,11 @@ dotnet restore Reactor.Maui.slnx -p:Configuration=Release
 dotnet test tests/Reactor.Core.Tests --no-restore -c Release
 dotnet test tests/Reactor.Maui.Tests --no-restore -c Release
 dotnet build Reactor.Maui.slnx --no-restore -c Release
+
+# Device tests: builds, installs, runs and gates on the TAP report (artifacts/device-tests/).
+tests/Reactor.Maui.DeviceTests/run.sh maccatalyst
+tests/Reactor.Maui.DeviceTests/run.sh ios          # the booted simulator
+tests/Reactor.Maui.DeviceTests/run.sh android      # the attached device
 
 # Sample (Mac Catalyst shown)
 dotnet build samples/maui/Reactor.Maui.Sample -t:Run -f net11.0-maccatalyst
@@ -65,17 +72,28 @@ handler registry differs.
   architecture. Register it with `builder.UseReactorDirectViews()` and pass
   `DirectHandlers.CreateRegistry()` to `ReactorPage`.
 
-The direct renderer covers Label, Button, Entry and the two stacks; every other element falls
-back to the Controls renderer in the same tree. Mixing works in both directions because
-Controls layouts accept any `IView` child; the one boundary is a Controls slot typed as
-`View` (page or scroll view content), where a direct view is hosted in a reused `Grid`. The
-sample runs unchanged on either renderer, with identical geometry.
+The direct renderer covers Label, Button, Entry, CheckBox, Switch, Slider, ProgressBar,
+ActivityIndicator, Image, the two stacks and Grid. Every other element, and any element that uses
+a setting only Controls implements (styles, gestures, shadows, clipping, brushes, Flex/Absolute
+placement, `.Set()`; per element, for example Label `MaxLines`), falls back to the Controls
+renderer in the same tree (`HybridHandler`). Mixing works in both directions because Controls
+layouts accept any `IView` child. The one boundary is a Controls slot typed as `View` (page or
+scroll view content), where a direct view is hosted in a reused `DirectViewHost` grid. A Controls
+view inside a direct tree gets that host as its logical parent, so resources reach it. The sample
+and the device fixtures run unchanged on either renderer, with identical geometry.
 
-Two bugs found while building it show the cost of skipping Controls: every default Controls
-supplies has to be re-derived. Text was larger until the direct views used the font manager's
-default size, as Controls does; and on iOS every direct stack was pushed down by the safe-area
-inset until it stopped opting in to safe areas, which nested Controls layouts do through an
-internal interface (`ISafeAreaView2`).
+Three bugs found while building it show the cost of skipping Controls: every default Controls
+supplies has to be re-derived.
+- Text was larger until the direct views used the font manager's default size, as Controls does.
+- On iOS every direct stack was pushed down by the safe-area inset until it stopped opting in to
+  safe areas, which nested Controls layouts do through an internal interface (`ISafeAreaView2`).
+- Direct labels didn't wrap on iOS and Mac Catalyst. Core's `ILabel` has no line-break mode;
+  Controls maps `Label.LineBreakMode` (word wrap by default) itself, so a Core label keeps
+  `UILabel`'s single truncated line. `DirectLabelHandler` adds the mapping.
+
+Direct views implement `IVisualTreeElement`, so MAUI's visual-tree tools, inspectors and
+test drivers see them. Controls layouts list only Controls elements as visual children, so
+`DirectViewHost` re-implements the interface to list its direct child.
 
 ### 4.1 Benchmark results
 
@@ -126,9 +144,9 @@ flowchart LR
     R --> S[IRenderScheduler]
   end
   subgraph Maui["Reactor.Maui"]
-    MH[Handlers: Label, Button, Entry,<br/>CheckBox, VStack, HStack, ScrollView]
+    MH[Handlers: controls, layouts,<br/>lists, pages, navigation]
     MS[Dispatcher-backed scheduler]
-    P[ReactorPage]
+    P[ReactorWindow / ReactorPage]
   end
   H -.implemented by.-> MH
   S -.implemented by.-> MS
@@ -154,38 +172,78 @@ Design choices that differ from today's WinUI Reactor, and why:
 
 ## 6. What has been proven
 
-Core, headless (`tests/Reactor.Core.Tests`, 21 tests): mounting through components and
-groups; keyed reorder keeps component state *and* the same native controls; removal
-unmounts and runs effect cleanups; duplicate keys fail loudly; changing the root's key
-remounts it; setters are batched into one posted flush, across components, and hosts are
-re-synced only after the whole batch has rendered; equal values don't re-render; off-thread
-setters are posted to the render thread; children with equal props skip re-rendering but
-still receive the latest props; effects run after commit, descendants before ancestors, and
-re-run only on dependency changes, even when a setter runs during render; hook order
-violations throw; controlled input doesn't echo. A boundary test fails if the core ever
-references anything but `System.*`. Each of these behaviours was confirmed to have a test
-that fails when the code under test is broken.
+**Core, headless** (`tests/Reactor.Core.Tests`, 42 tests). Mounting through components and
+groups. A keyed reorder keeps component state *and* the same native controls. Removal unmounts
+and runs effect cleanups. Duplicate keys fail loudly, and changing the root's key remounts it.
+Setters are batched into one posted flush, across components, and hosts are re-synced only after
+the whole batch has rendered. Equal values don't re-render, and off-thread setters are posted to
+the render thread. Effects run after commit, descendants before ancestors, and re-run only on
+dependency changes. Hook order violations throw. Also covered: context (including readers in child
+roots), `Memo`, `ErrorBoundary` with recovery, `UseResource` cancellation, controlled values
+restored when a callback rejects input, `CanUpdate` remounts, and hot reload re-rendering every live
+root. A boundary test fails if the core references anything but `System.*`.
 
-MAUI, at runtime on Mac Catalyst (driven through real input, verified through the
-accessibility tree): clicks update state; a `System.Threading.Timer` updates state every
-second from a background thread; typing into the controlled draft `Entry` keeps every
-character in order while that timer re-renders; Add clears the draft through state;
-Reverse moves rows *with* the text typed into each row's own note `Entry`, so keyed state
-follows the row; toggling and removing rows update the derived count. The same pass gives the
-same results on the direct renderer (`REACTOR_RENDERER=direct`), with identical control
-geometry. The sample also builds for iOS and Android.
+**Renderer, headless** (`tests/Reactor.Maui.Tests`, 33 tests). Real Controls objects and direct
+views, no platform handlers: modifiers, every control's props and echo-free events, the hybrid
+fallback and mixed trees, `CollectionView` cells as child roots, pages, toolbar items, the
+navigation stack's reconcile, the user-pop rule (below), tabs and flyout.
+
+**Device tier** (`tests/Reactor.Maui.DeviceTests`, 20 fixtures). All pass on Mac Catalyst (macOS 26,
+Apple silicon), an iPhone 18 Pro simulator (iOS 27) and a Pixel 10 (Android 16). They check what the
+native views show, not the virtual tree:
+- Taps reach state, and the platform label updates in place. Typing into a controlled `Entry` is
+  corrected by the app's rule on the platform field. Keyed rows keep their typed text across a
+  reorder. All of these run on both renderers.
+- Grid geometry in window coordinates (column widths, row offsets, rows filling the page), and the
+  content's top edge against the platform's safe-area inset (62 pt on the iPhone, 65.9 dp on the
+  Pixel), for both renderers. Mac Catalyst is exempt: MAUI lays page content under its title bar
+  there, whatever renders it.
+- A long label wraps (several lines' height) on both renderers, with identical metrics.
+- Navigation: a push reaches the platform stack (`UINavigationController` depth on iOS); the back
+  button reaches app state; a back press *while the push animation still runs* is reported; a pop
+  the app refuses is undone; the navigator's own pops are never reported as the user's; a modal
+  dismissal is reported. Also: tab selection accepted and refused, `CollectionView` virtualizes
+  (a few of 200 cells realized) and reports selection, `UseWindowSize` and `UseAppTheme` follow the
+  window and the theme, an `ErrorBoundary` catches an event-handler failure, and effects clean up on
+  unmount.
+
+The device tier found two bugs the headless tiers could not. Both are fixed:
+- **Back navigation was swallowed.** The navigator ignored `Popped` while one of its own operations
+  was running, and on iOS `PushAsync`'s task stays pending well after the page has loaded. A back
+  press in that window was dropped, and the navigator then pushed the page back. A user pop is now
+  identified by the declaration, not timing: the navigator only ever pops pages the app no longer
+  declares, so a pop of a still-declared page is the user's. The new depth is that page's position
+  in the declared stack, because iOS raises `Popped` before it updates `NavigationStack`.
+- **Direct labels didn't wrap** (§4).
+
+**Packages.** `dotnet pack` produces both packages. A stock `dotnet new maui` app that references only
+the packages builds the README's snippets unchanged and runs. The Maui package ships global usings
+(the Reactor namespaces, plus an `Element` alias that beats `Microsoft.Maui.Controls.Element`)
+through `buildTransitive`, with an opt-out (`ReactorImplicitUsings=false`).
+
+**Sample.** Runs on all three platforms. Screenshots of the gallery, the controls page, the list
+and the direct-renderer todos page were checked on the iPhone simulator.
 
 ## 7. Open issues
 
-- **Type-name collisions with MAUI.** MAUI declares `Microsoft.Maui.IElementHandler<,>` and
-  `Microsoft.Maui.Controls.Element`, and MAUI projects import those namespaces implicitly. The
-  renderer qualifies the handler interface; projects add a global
-  `using Element = Microsoft.UI.Reactor.Core.Element` alias, which the package should ship
-  through `buildTransitive`.
+- **Windows is untested.** The packages target `net11.0-windows10.0.19041.0`, but this work was done
+  on macOS; nothing has been built or run on Windows yet.
+- **Implicit styles don't reach direct views.** An app's `Styles.xaml` styles Controls views only.
+  Direct views take modifiers, or switch to Controls with `.Style()`.
+- **Controls layouts with direct children.** A Controls layout (used when a layout element needs a
+  Controls-only setting) still lists only its Controls children in the visual tree. Only
+  `DirectViewHost` re-implements that.
 - **Components never own a native control.** WinUI Reactor can wrap a component in a control so
   modifiers such as `Component<T>().Margin(8)` apply to it. This core treats components as
   purely compositional, so WinUI convergence needs a renderer-owned wrapper extension point.
-- **Controlled values only re-assert on re-render.** If an `OnTextChanged` callback rejects
-  input *without* changing state, nothing re-renders and the control keeps the rejected text.
+- **Hot reload is verified headlessly only**, by invoking the metadata-update handler. It has not
+  been exercised from an IDE session.
+- **CI device runs.** `.github/workflows/maui.yml` runs the device tier on Mac Catalyst and an iOS
+  simulator. Android runs locally only (an emulator on a hosted macOS runner is too slow). The
+  workflow has not run on GitHub yet.
+- **App projects must not be trimmable.** The repo enables `IsAotCompatible` everywhere, which marks
+  app assemblies trimmable. Apple builds then trim them even in Debug, and drop `SceneDelegate`,
+  which only `Info.plist` names. The result is a blank window. The sample sets
+  `IsTrimmable=false`; any new app project in the repo must too.
 - **About 46,000 outstanding JNI global references** were logged during the Android benchmark;
   worth investigating for leaks (§4.1).
