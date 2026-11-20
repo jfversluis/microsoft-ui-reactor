@@ -24,6 +24,7 @@
     <InternalsVisibleTo Include="Reactor.Core.Tests" />
     <InternalsVisibleTo Include="Microsoft.UI.Reactor.Maui" />
     <InternalsVisibleTo Include="Reactor.Maui.Tests" />
+    <InternalsVisibleTo Include="Reactor.Maui.DeviceTests" />
   </ItemGroup>
 
 </Project>

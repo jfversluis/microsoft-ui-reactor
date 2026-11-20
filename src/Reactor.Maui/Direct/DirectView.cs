@@ -12,12 +12,19 @@ namespace Microsoft.UI.Reactor.Maui.Direct;
 /// property is involved. Properties are plain fields: a write stores the value and asks the
 /// handler to re-map that one property.
 /// </summary>
-public abstract class DirectView : IView
+public abstract class DirectView : IView, IVisualTreeElement
 {
     private IViewHandler? _handler;
     private ControlsElement? _controlsAnchor;
 
     public IElement? Parent { get; internal set; }
+
+    // Visual-tree tools (hot reload, inspectors, UI test drivers) walk this tree.
+    IVisualTreeElement? IVisualTreeElement.GetVisualParent() => Parent as IVisualTreeElement;
+
+    IReadOnlyList<IVisualTreeElement> IVisualTreeElement.GetVisualChildren() => VisualChildren;
+
+    private protected virtual IReadOnlyList<IVisualTreeElement> VisualChildren => [];
 
     public IViewHandler? Handler
     {

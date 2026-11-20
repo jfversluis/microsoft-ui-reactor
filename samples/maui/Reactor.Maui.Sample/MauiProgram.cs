@@ -20,15 +20,14 @@ public sealed class App : Application
 {
     protected override Window CreateWindow(IActivationState? activationState)
     {
-        // REACTOR_RENDERER=direct renders Label, Button, Entry and the stacks as direct views
-        // (MAUI Core interfaces, no Controls objects); the rest stays on the Controls renderer.
+        // REACTOR_RENDERER=direct renders primitives and layouts as direct views (MAUI Core
+        // interfaces, no Controls objects); pages, lists and the rest stay on Controls.
         var direct = Environment.GetEnvironmentVariable("REACTOR_RENDERER") == "direct";
-        var page = new ReactorPage(
-            Microsoft.UI.Reactor.Maui.Factories.Component<HomePage>(),
-            direct ? DirectHandlers.CreateRegistry() : null);
-        var window = new Window(page) { Title = direct ? "Reactor on MAUI (direct)" : "Reactor on MAUI" };
-        // Stops the clock's timer: effect cleanups only run when the tree unmounts.
-        window.Destroying += (_, _) => page.Unmount();
-        return window;
+        return new ReactorWindow(
+            Microsoft.UI.Reactor.Maui.Factories.Component<GalleryApp>(),
+            direct ? DirectHandlers.CreateRegistry() : null)
+        {
+            Title = direct ? "Reactor on MAUI (direct)" : "Reactor on MAUI",
+        };
     }
 }

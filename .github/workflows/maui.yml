@@ -89,3 +89,55 @@ jobs:
         with:
           name: maui-packages
           path: artifacts/packages
+
+  device-tests:
+    # The fixtures in tests/Reactor.Maui.DeviceTests mount trees through the real platform
+    # handlers and print TAP. Android runs locally (tests/Reactor.Maui.DeviceTests/run.sh android);
+    # an emulator on a hosted macOS runner is too slow to be worth the minutes.
+    name: Device tests (${{ matrix.platform }})
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [maccatalyst, ios]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 11.0.x
+
+      - name: Select the newest Xcode
+        run: |
+          xcode=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "Using $xcode"
+          sudo xcode-select -s "$xcode"
+
+      - name: Install the maui workload
+        run: dotnet workload install maui
+
+      - name: Boot an iPhone simulator
+        if: matrix.platform == 'ios'
+        run: |
+          # The newest iOS runtime's first iPhone.
+          udid=$(xcrun simctl list devices available --json | python3 -c '
+          import json, re, sys
+          devices = json.load(sys.stdin)["devices"]
+          version = lambda runtime: [int(n) for n in re.findall(r"\d+", runtime.split("iOS-")[-1])]
+          runtimes = sorted((r for r in devices if ".iOS-" in r), key=version, reverse=True)
+          print(next(d["udid"] for r in runtimes for d in devices[r] if d["name"].startswith("iPhone")))')
+          echo "Booting $udid"
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+
+      - name: Run device tests
+        run: tests/Reactor.Maui.DeviceTests/run.sh ${{ matrix.platform }}
+
+      - name: Upload TAP report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: device-tests-${{ matrix.platform }}
+          path: artifacts/device-tests

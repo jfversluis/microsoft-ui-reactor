@@ -79,12 +79,32 @@ public class PageTests
 
         // What the platform does for the back button. Without a platform handler MAUI does not raise
         // Popped, so the test raises the handler's report itself.
+        var popped = navigation.CurrentPage;
         navigation.PopAsync();
-        ((ReactorNavigationPage)navigation).ReportPopped!();
+        ((ReactorNavigationPage)navigation).ReportPopped!(popped);
         Settle(host, () => stack!.Count == 1);
 
         Assert.Equal(["home"], stack!.Items);
         Assert.Equal(["home"], navigation.Navigation.NavigationStack.Select(p => p.Title));
+    }
+
+    [Fact]
+    public void APopOfAPageTheAppNoLongerDeclares_IsNotReported()
+    {
+        var reported = new List<int>();
+        var pages = new[] { Page("home", null).WithKey("home"), Page("detail", null).WithKey("detail") };
+        var host = Host().Render(NavigationStack(pages, reported.Add));
+        var navigation = host.View<ReactorNavigationPage>();
+        Settle(host, () => navigation.Navigation.NavigationStack.Count == 2);
+        var detail = navigation.CurrentPage;
+
+        host.Render(NavigationStack(pages[..1], reported.Add));
+        Settle(host, () => navigation.Navigation.NavigationStack.Count == 1);
+        // The navigator's own pop, reported by MAUI (headless MAUI raises no Popped, so raise it here).
+        navigation.ReportPopped!(detail);
+        host.Scheduler.Drain();
+
+        Assert.Empty(reported);
     }
 
     [Fact]
@@ -94,8 +114,9 @@ public class PageTests
         var navigation = host.View<ReactorNavigationPage>();
         Settle(host, () => navigation.Navigation.NavigationStack.Count == 2);
 
+        var popped = navigation.CurrentPage;
         navigation.PopAsync();
-        navigation.ReportPopped!();
+        navigation.ReportPopped!(popped);
         Settle(host, () => navigation.Navigation.NavigationStack.Count == 2);
 
         Assert.Equal(["home", "detail"], navigation.Navigation.NavigationStack.Select(p => p.Title));

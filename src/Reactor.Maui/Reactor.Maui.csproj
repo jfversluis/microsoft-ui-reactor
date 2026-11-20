@@ -39,6 +39,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Reactor.Maui.Tests" />
+    <InternalsVisibleTo Include="Reactor.Maui.DeviceTests" />
   </ItemGroup>
 
   <ItemGroup>

@@ -54,6 +54,8 @@ public abstract class DirectLayout : DirectView, Microsoft.Maui.ILayout, IList<I
     public int Count => _children.Count;
     public bool IsReadOnly => false;
 
+    private protected override IReadOnlyList<IVisualTreeElement> VisualChildren => [.. _children.OfType<IVisualTreeElement>()];
+
     public void Add(IView item) => Insert(_children.Count, item);
 
     public void Insert(int index, IView item)

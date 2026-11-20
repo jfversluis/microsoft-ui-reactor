@@ -12,6 +12,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
     <SingleProject>true</SingleProject>
+    <!-- The repo turns on IsAotCompatible for trim analysis, which would also mark this app
+         assembly trimmable; Apple builds then trim it even in Debug and drop SceneDelegate,
+         which only Info.plist references (by name). Keep the analysis, not the trimming. -->
+    <IsTrimmable>false</IsTrimmable>
 
     <ApplicationTitle>Reactor on MAUI</ApplicationTitle>
     <ApplicationId>com.microsoft.reactor.maui.sample</ApplicationId>

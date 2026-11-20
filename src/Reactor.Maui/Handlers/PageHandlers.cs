@@ -80,12 +80,27 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
     private IReadOnlyList<Page> _modals = [];
     private bool _running;
 
-    /// <summary>True while the navigator itself is changing the stacks, so its own pops are not reported as the user's.</summary>
-    public bool IsNavigating { get; private set; }
+    // MAUI pops only the top modal, so reordering modals pops ones that are still declared.
+    private Page? _poppingModal;
 
     public Action<Exception>? OnError { get; set; }
 
-    public bool HasModal(Page page) => _modals.Contains(page);
+    /// <summary>
+    /// Whether a pop of <paramref name="popped"/> was the user's: the app still declares the page,
+    /// so only the platform can have removed it (the navigator pops only undeclared pages). When it
+    /// was, <paramref name="depth"/> is the depth left: the page's position in the declared stack.
+    /// This is decided by the declaration, not by timing or MAUI's stack, which iOS updates only
+    /// after it raises <c>Popped</c>.
+    /// </summary>
+    public bool IsUserPop(Page popped, bool modal, out int depth)
+    {
+        depth = 0;
+        if (modal && ReferenceEquals(popped, _poppingModal)) return false;
+        var declared = modal ? _modals : _pages;
+        for (depth = 0; depth < declared.Count; depth++)
+            if (ReferenceEquals(declared[depth], popped)) return true;
+        return false;
+    }
 
     public void SetDesired(IReadOnlyList<Page> pages, IReadOnlyList<Page> modals)
     {
@@ -109,15 +124,7 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
             {
                 var operation = NextOperation();
                 if (operation is null) return;
-                IsNavigating = true;
-                try
-                {
-                    await operation();
-                }
-                finally
-                {
-                    IsNavigating = false;
-                }
+                await operation();
             }
             throw new InvalidOperationException("The navigation stack did not settle.");
         }
@@ -172,7 +179,22 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
         var actual = navigation.ModalStack;
         var common = 0;
         while (common < actual.Count && common < _modals.Count && ReferenceEquals(actual[common], _modals[common])) common++;
-        if (common < actual.Count) return () => navigation.PopModalAsync(animated: true);
+        if (common < actual.Count)
+        {
+            var top = actual[^1];
+            return async () =>
+            {
+                _poppingModal = top;
+                try
+                {
+                    await navigation.PopModalAsync(animated: true);
+                }
+                finally
+                {
+                    _poppingModal = null;
+                }
+            };
+        }
         if (common < _modals.Count) return () => navigation.PushModalAsync(_modals[common], animated: true);
         return null;
     }
@@ -188,9 +210,9 @@ internal sealed class ReactorNavigationPage : NavigationPage
 {
     public StackNavigator Navigator = null!;
     public EventHandler<ModalPoppedEventArgs>? ModalPoppedHandler;
-    public Action? ReportPopped;
+    public Action<Page>? ReportPopped;
 
-    public ReactorNavigationPage() => Popped += (_, _) => ReportPopped?.Invoke();
+    public ReactorNavigationPage() => Popped += (_, e) => ReportPopped?.Invoke(e.Page);
 }
 
 internal sealed class NavigationStackHandler : Reactor.Hosting.IElementHandler<NavigationStackElement, ReactorNavigationPage>
@@ -199,17 +221,17 @@ internal sealed class NavigationStackHandler : Reactor.Hosting.IElementHandler<N
     {
         var page = new ReactorNavigationPage();
         page.Navigator = new StackNavigator(page);
-        page.ReportPopped = () =>
+        page.ReportPopped = popped =>
         {
-            if (page.Navigator.IsNavigating) return;
-            context.Current.OnPopped?.Invoke(page.Navigation.NavigationStack.Count);
+            if (!page.Navigator.IsUserPop(popped, modal: false, out var depth)) return;
+            context.Current.OnPopped?.Invoke(depth);
             context.RestoreAfterEvent();
         };
         page.Loaded += (_, _) => page.Navigator.Run(); // Modals wait for a window.
         page.ModalPoppedHandler = (_, e) =>
         {
-            if (page.Navigator.IsNavigating || !page.Navigator.HasModal(e.Modal)) return;
-            context.Current.OnModalDismissed?.Invoke(page.Navigation.ModalStack.Count);
+            if (!page.Navigator.IsUserPop(e.Modal, modal: true, out var remaining)) return;
+            context.Current.OnModalDismissed?.Invoke(remaining);
             context.RestoreAfterEvent();
         };
         if (Application.Current is { } app) app.ModalPopped += page.ModalPoppedHandler;
@@ -231,6 +253,8 @@ internal sealed class NavigationStackHandler : Reactor.Hosting.IElementHandler<N
 
     private static void Apply(NavigationPage page, NavigationStackElement? previous, NavigationStackElement next)
     {
+        Props.SetRef(page, Page.TitleProperty, previous?.Title, next.Title);
+        Props.SetImage(page, Page.IconImageSourceProperty, previous?.Icon, next.Icon, previous is null);
         Props.SetRef(page, NavigationPage.BarBackgroundColorProperty, previous?.BarBackgroundColor, next.BarBackgroundColor);
         Props.SetRef(page, NavigationPage.BarTextColorProperty, previous?.BarTextColor, next.BarTextColor);
     }

@@ -158,11 +158,28 @@ public static class ViewElementExtensions
     public static LabelElement Underline(this LabelElement element, bool enabled = true) =>
         element with { TextDecorations = enabled ? Microsoft.Maui.TextDecorations.Underline : null };
 
+    public static LabelElement Padding(this LabelElement element, double uniform) => element with { Padding = new Thickness(uniform) };
+
+    public static LabelElement Padding(this LabelElement element, double horizontal, double vertical) =>
+        element with { Padding = new Thickness(horizontal, vertical) };
+
     public static LabelElement MaxLines(this LabelElement element, int lines) =>
         element with { MaxLines = lines, LineBreakMode = Microsoft.Maui.LineBreakMode.TailTruncation };
 
     public static LabelElement TextAlignment(this LabelElement element, TextAlignment horizontal, TextAlignment? vertical = null) =>
         element with { HorizontalTextAlignment = horizontal, VerticalTextAlignment = vertical ?? element.VerticalTextAlignment };
+
+    // ── Border ──────────────────────────────────────────────────────────────
+
+    public static BorderElement Padding(this BorderElement element, double uniform) => element with { Padding = new Thickness(uniform) };
+
+    public static BorderElement Padding(this BorderElement element, double horizontal, double vertical) =>
+        element with { Padding = new Thickness(horizontal, vertical) };
+
+    public static BorderElement Stroke(this BorderElement element, Color? color, double thickness = 1) =>
+        element with { Stroke = color, StrokeThickness = thickness };
+
+    public static BorderElement CornerRadius(this BorderElement element, double radius) => element with { CornerRadius = new CornerRadius(radius) };
 
     // ── Layout containers ───────────────────────────────────────────────────
 

@@ -172,11 +172,14 @@ public class DirectRendererTests
         var host = Host().Render(ScrollView(VStack(Stepper(1), Label("x"))));
 
         var scrollView = host.View<ScrollView>();
-        var wrapper = Assert.IsType<Grid>(scrollView.Content);
+        var wrapper = Assert.IsType<Grid>(scrollView.Content, exactMatch: false);
         var stack = Assert.IsType<DirectStackLayout>(Assert.Single(wrapper));
         var stepper = Assert.IsType<Stepper>(stack[0]);
         // A Controls view inside a direct tree gets the wrapper as its logical parent, so styles reach it.
         Assert.Same(wrapper, stepper.Parent);
+        // Visual-tree tools see through the wrapper and the direct stack down to the Controls view.
+        Assert.Same(stack, Assert.Single(((IVisualTreeElement)wrapper).GetVisualChildren()));
+        Assert.Equal<IVisualTreeElement>([stepper, (IVisualTreeElement)stack[1]], ((IVisualTreeElement)stack).GetVisualChildren());
 
         host.Render(ScrollView(VStack(Stepper(2), Label("y"))));
 

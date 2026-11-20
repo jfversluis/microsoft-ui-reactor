@@ -15,5 +15,6 @@
     <Project Path="tests/Reactor.Core.Tests/Reactor.Core.Tests.csproj" />
     <Project Path="tests/Reactor.Maui.Tests/Reactor.Maui.Tests.csproj" />
     <Project Path="tests/Reactor.Maui.Benchmark/Reactor.Maui.Benchmark.csproj" />
+    <Project Path="tests/Reactor.Maui.DeviceTests/Reactor.Maui.DeviceTests.csproj" />
   </Folder>
 </Solution>

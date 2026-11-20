@@ -86,7 +86,7 @@ internal static class Props
         else if (!mounting) target.ClearValue(property);
     }
 
-    private static readonly ConditionalWeakTable<IView, Grid> Wrappers = new();
+    private static readonly ConditionalWeakTable<IView, DirectViewHost> Wrappers = new();
 
     /// <summary>
     /// Controls-only slots (page, scroll view or border content) take a <see cref="View"/>. A view
@@ -95,7 +95,7 @@ internal static class Props
     public static View AsView(object native) =>
         native as View ?? Wrappers.GetValue((IView)native, static view =>
         {
-            var wrapper = new Grid { view };
+            var wrapper = new DirectViewHost { view };
             if (view is Direct.DirectView direct) direct.SetControlsAnchor(wrapper);
             return wrapper;
         });
@@ -223,4 +223,13 @@ internal static class ViewApplier
             state.Pan = null;
         }
     }
+}
+
+/// <summary>
+/// The Grid that hosts a direct view in a Controls slot. Controls layouts list only Controls
+/// elements as visual children; this one lists the direct view too, so visual-tree tools see it.
+/// </summary>
+internal sealed class DirectViewHost : Grid, IVisualTreeElement
+{
+    IReadOnlyList<IVisualTreeElement> IVisualTreeElement.GetVisualChildren() => [.. Children.OfType<IVisualTreeElement>()];
 }

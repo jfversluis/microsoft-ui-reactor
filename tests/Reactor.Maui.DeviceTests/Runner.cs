@@ -1,0 +1,184 @@
+using System.Diagnostics;
+using Microsoft.Maui.Dispatching;
+using Microsoft.UI.Reactor.Hosting;
+using Microsoft.UI.Reactor.Maui.Handlers;
+using Microsoft.UI.Reactor.Maui.Hosting;
+
+namespace Reactor.Maui.DeviceTests;
+
+public sealed record Fixture(string Name, Func<FixtureContext, Task> Run);
+
+/// <summary>A failed check inside a fixture.</summary>
+public sealed class CheckFailedException(string message) : Exception(message);
+
+/// <summary>
+/// Mounts one fixture's tree into the test window, through the real MAUI handlers of the platform
+/// the app runs on, and gives the fixture ways to wait for and inspect the result.
+/// </summary>
+public sealed class FixtureContext(Window window)
+{
+    private ReactorRoot? _root;
+    private readonly ContentPage _viewHost = new();
+
+    public Window Window => window;
+    public List<Exception> UnhandledErrors { get; } = [];
+
+    public void Show(Element element, ElementHandlerRegistry? registry = null)
+    {
+        _root = new ReactorRoot(registry ?? MauiHandlers.CreateRegistry(), new MauiRenderScheduler(window.Dispatcher), SetNative);
+        _root.UnhandledException += UnhandledErrors.Add;
+        Render(element);
+    }
+
+    public void Render(Element element) => _root!.Render(MauiContexts.Window.Provide(window, element));
+
+    public void Unmount()
+    {
+        _root?.Unmount();
+        _root = null;
+    }
+
+    private void SetNative(object? native)
+    {
+        if (native is Page page)
+        {
+            window.Page = page;
+            return;
+        }
+        _viewHost.Content = native is null ? null : Props.AsView(native);
+        if (!ReferenceEquals(window.Page, _viewHost)) window.Page = _viewHost;
+    }
+
+    /// <summary>Waits, letting the UI thread run, until <paramref name="condition"/> holds.</summary>
+    public async Task WaitFor(Func<bool> condition, string what, int timeoutMs = 5000)
+    {
+        var clock = Stopwatch.StartNew();
+        while (!condition())
+        {
+            if (clock.ElapsedMilliseconds > timeoutMs) throw new CheckFailedException($"timed out after {timeoutMs} ms waiting for {what}");
+            await Task.Delay(16);
+        }
+    }
+
+    /// <summary>Lets animations and posted work finish, so a later check sees the settled state.</summary>
+    public Task Settle(int milliseconds = 400) => Task.Delay(milliseconds);
+
+    public T Find<T>(Func<T, bool>? predicate = null) where T : class =>
+        FindAll(predicate).FirstOrDefault() ?? throw new CheckFailedException($"no {typeof(T).Name} found on screen");
+
+    public T? TryFind<T>(Func<T, bool>? predicate = null) where T : class => FindAll(predicate).FirstOrDefault();
+
+    public T ById<T>(string automationId) where T : class, IView =>
+        Find<T>(v => v.AutomationId == automationId);
+
+    public IEnumerable<T> FindAll<T>(Func<T, bool>? predicate = null) where T : class
+    {
+        var pending = new Stack<IVisualTreeElement>();
+        pending.Push(window);
+        while (pending.Count > 0)
+        {
+            var node = pending.Pop();
+            if (node is T match && (predicate is null || predicate(match))) yield return match;
+            var children = node.GetVisualChildren();
+            for (var i = children.Count - 1; i >= 0; i--) pending.Push(children[i]);
+        }
+    }
+
+    public static void Check(bool condition, string message)
+    {
+        if (!condition) throw new CheckFailedException(message);
+    }
+
+    public static void Equal<T>(T expected, T actual, string what)
+    {
+        if (!EqualityComparer<T>.Default.Equals(expected, actual))
+            throw new CheckFailedException($"{what}: expected <{expected}>, got <{actual}>");
+    }
+
+    public static void Close(double expected, double actual, string what, double tolerance = 1)
+    {
+        if (double.IsNaN(actual) || Math.Abs(expected - actual) > tolerance)
+            throw new CheckFailedException($"{what}: expected {expected:0.##} ± {tolerance}, got {actual:0.##}");
+    }
+}
+
+/// <summary>Runs the fixtures one by one and reports TAP on stdout and in a file.</summary>
+public static class Runner
+{
+    public const string DoneMarker = "# REACTOR-DEVICE-TESTS-DONE";
+
+    public static async Task RunAsync(Window window, string? filter)
+    {
+        var fixtures = Fixtures.All
+            .Where(f => string.IsNullOrEmpty(filter) || f.Name.Contains(filter, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var report = new List<string>();
+        void Emit(string line)
+        {
+            report.Add(line);
+            Console.WriteLine(line);
+        }
+
+        Emit($"# Reactor MAUI device tests on {DeviceInfo.Platform} {DeviceInfo.VersionString} ({DeviceInfo.Idiom}, {DeviceInfo.DeviceType})");
+        Emit($"1..{fixtures.Count}");
+        var failures = 0;
+        for (var i = 0; i < fixtures.Count; i++)
+        {
+            var fixture = fixtures[i];
+            var context = new FixtureContext(window);
+            var clock = Stopwatch.StartNew();
+            string? failure = null;
+            try
+            {
+                var run = fixture.Run(context);
+                if (await Task.WhenAny(run, Task.Delay(30_000)) != run) failure = "timed out after 30 s";
+                else await run;
+                if (failure is null && context.UnhandledErrors.Count > 0) failure = "unhandled render error: " + context.UnhandledErrors[0];
+            }
+            catch (Exception ex)
+            {
+                failure = ex is CheckFailedException ? ex.Message : ex.ToString();
+            }
+            finally
+            {
+                try
+                {
+                    context.Unmount();
+                }
+                catch (Exception ex)
+                {
+                    failure ??= "unmount failed: " + ex;
+                }
+                window.Page = new ContentPage();
+                await Task.Delay(100);
+            }
+
+            if (failure is null)
+            {
+                Emit($"ok {i + 1} - {fixture.Name} # {clock.ElapsedMilliseconds} ms");
+            }
+            else
+            {
+                failures++;
+                Emit($"not ok {i + 1} - {fixture.Name}");
+                foreach (var line in failure.Split('\n')) Emit("#   " + line.TrimEnd());
+            }
+        }
+
+        Emit($"# passed {fixtures.Count - failures}, failed {failures}");
+        Emit($"{DoneMarker} exit={(failures == 0 ? 0 : 1)}");
+        try
+        {
+            File.WriteAllLines(Path.Combine(FileSystem.AppDataDirectory, "device-tests.tap"), report);
+        }
+        catch (IOException)
+        {
+        }
+
+        if (Environment.GetEnvironmentVariable("REACTOR_DEVICE_TESTS_STAY") != "1")
+        {
+            await Task.Delay(200);
+            Environment.Exit(failures == 0 ? 0 : 1);
+        }
+    }
+}

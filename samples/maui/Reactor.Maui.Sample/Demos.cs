@@ -5,19 +5,6 @@ using static Microsoft.UI.Reactor.Maui.Factories;
 
 namespace Reactor.Maui.Sample;
 
-public sealed class HomePage : Component
-{
-    public override Element Render() =>
-        ScrollView(
-            VStack(28,
-                Label("Reactor on .NET MAUI").FontSize(28).Bold(),
-                Label("Components, hooks and keyed reconciliation from a renderer-neutral core."),
-                Component<CounterCard>(),
-                Component<ClockCard>(),
-                Component<TodoCard>()
-            ).Margin(24));
-}
-
 /// <summary>UseState plus a click handler.</summary>
 public sealed class CounterCard : Component
 {
@@ -84,10 +71,10 @@ public sealed class TodoCard : Component
         return VStack(8,
             Label("Todos").FontSize(20).Bold(),
             Label("Type a note in a row, then press Reverse: the note follows its row because rows are keyed."),
-            HStack(8,
-                Entry(draft, setDraft, placeholder: "What needs doing?").Width(240).AutomationId("DraftEntry"),
-                Button("Add", Add).AutomationId("AddButton"),
-                Button("Reverse", () => update(list => list.Reverse())).AutomationId("ReverseButton")),
+            Grid("auto", "*,auto,auto",
+                Entry(draft, setDraft, placeholder: "What needs doing?").AutomationId("DraftEntry"),
+                Button("Add", Add).AutomationId("AddButton").Grid(0, 1),
+                Button("Reverse", () => update(list => list.Reverse())).AutomationId("ReverseButton").Grid(0, 2)),
             Label($"{todos.Count(t => !t.Done)} of {todos.Count} left").AutomationId("RemainingLabel"),
             VStack(4, [.. todos.Select(todo =>
                 Component<TodoRow, TodoRowProps>(new(todo, toggle, remove)).WithKey(todo.Id.ToString()))]));
@@ -101,10 +88,12 @@ public sealed class TodoRow : Component<TodoRowProps>
         var (todo, toggle, remove) = (Props.Todo, Props.Toggle, Props.Remove);
         // Local state owned by the row, not the list.
         var (note, setNote) = UseState("");
-        return HStack(8,
-            CheckBox(todo.Done, _ => toggle(todo.Id)).AutomationId($"Done{todo.Id}"),
-            Label(todo.Title).Strikethrough(todo.Done).Width(260),
-            Entry(note, setNote, placeholder: "note").Width(160).AutomationId($"Note{todo.Id}"),
-            Button("Remove", () => remove(todo.Id)).AutomationId($"Remove{todo.Id}"));
+        // Check box, then the title over the row's own note, then Remove; the middle column takes the rest.
+        return Grid("auto", "auto,*,auto",
+            CheckBox(todo.Done, _ => toggle(todo.Id)).VerticalOptions(LayoutOptions.Center).AutomationId($"Done{todo.Id}"),
+            VStack(2,
+                Label(todo.Title).Strikethrough(todo.Done),
+                Entry(note, setNote, placeholder: "note").AutomationId($"Note{todo.Id}")).Grid(0, 1),
+            Button("Remove", () => remove(todo.Id)).VerticalOptions(LayoutOptions.Center).AutomationId($"Remove{todo.Id}").Grid(0, 2));
     }
 }

@@ -42,6 +42,11 @@ public sealed record PageElement(string? Title, Element? Content) : Element
 public sealed record NavigationStackElement(Element?[] Pages) : Element
 {
     public Action<int>? OnPopped { get; init; }
+
+    /// <summary>The title and icon shown for the stack when it is a tab or flyout detail.</summary>
+    public string? Title { get; init; }
+
+    public ImageSource? Icon { get; init; }
     public Color? BarBackgroundColor { get; init; }
     public Color? BarTextColor { get; init; }
 

@@ -34,7 +34,7 @@ public static class DirectHandlers
     public static MauiAppBuilder UseReactorDirectViews(this MauiAppBuilder builder) =>
         builder.ConfigureMauiHandlers(handlers =>
         {
-            handlers.AddHandler<DirectLabel, Microsoft.Maui.Handlers.LabelHandler>();
+            handlers.AddHandler<DirectLabel, DirectLabelHandler>();
             handlers.AddHandler<DirectButton, Microsoft.Maui.Handlers.ButtonHandler>();
             handlers.AddHandler<DirectEntry, Microsoft.Maui.Handlers.EntryHandler>();
             handlers.AddHandler<DirectCheckBox, Microsoft.Maui.Handlers.CheckBoxHandler>();
