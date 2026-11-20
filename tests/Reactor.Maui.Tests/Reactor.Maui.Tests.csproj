@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Headless renderer tests (spec 065). Runs against Reactor.Maui's plain net11.0 target:
+    MAUI Controls objects and direct views are created and diffed without platform handlers,
+    so this suite runs on any OS. Behaviour that needs real platform views is covered on device.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <LangVersion>15</LangVersion>
+    <Nullable>enable</Nullable>
+    <!-- Test code reflects by design and is never trimmed (see Directory.Build.targets). -->
+    <ReactorSkipAotAnalysis>true</ReactorSkipAotAnalysis>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Microsoft.UI.Reactor.Maui.Tests</RootNamespace>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <Using Include="Xunit" />
+    <Using Include="Microsoft.UI.Reactor.Core.Element" Alias="Element" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Reactor.Maui\Reactor.Maui.csproj" />
+  </ItemGroup>
+
+</Project>

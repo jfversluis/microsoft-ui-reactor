@@ -1,0 +1,8 @@
+<Project>
+  <!--
+    The MAUI samples chain straight to the repo root, skipping samples/Directory.Build.props:
+    that file wires the WinUI analyzer bundle, devtools and a Windows .ico into every sample,
+    none of which apply to a MAUI app.
+  -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../../'))" />
+</Project>

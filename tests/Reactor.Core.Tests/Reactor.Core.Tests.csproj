@@ -2,6 +2,11 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>15</LangVersion>
+    <Nullable>enable</Nullable>
+    <!-- Test code reflects by design and is never trimmed (see Directory.Build.targets). -->
+    <ReactorSkipAotAnalysis>true</ReactorSkipAotAnalysis>
+    <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Microsoft.UI.Reactor.Core.Tests</RootNamespace>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
@@ -9,8 +14,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="xunit.v3" Version="4.0.3" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
     <Using Include="Xunit" />
   </ItemGroup>
 

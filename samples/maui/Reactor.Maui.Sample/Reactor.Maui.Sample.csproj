@@ -1,14 +1,23 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- The MAUI renderer: element records, handlers and hosting on top of Reactor.Core. -->
   <PropertyGroup>
     <TargetFrameworks>net11.0-android</TargetFrameworks>
     <TargetFrameworks Condition="!$([MSBuild]::IsOSPlatform('linux'))">$(TargetFrameworks);net11.0-ios;net11.0-maccatalyst</TargetFrameworks>
     <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('windows'))">$(TargetFrameworks);net11.0-windows10.0.19041.0</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Reactor.Maui.Sample</RootNamespace>
     <UseMaui>true</UseMaui>
+    <LangVersion>15</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
     <SingleProject>true</SingleProject>
-    <AssemblyName>Microsoft.UI.Reactor.Maui</AssemblyName>
-    <RootNamespace>Microsoft.UI.Reactor.Maui</RootNamespace>
+
+    <ApplicationTitle>Reactor on MAUI</ApplicationTitle>
+    <ApplicationId>com.microsoft.reactor.maui.sample</ApplicationId>
+    <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+    <ApplicationVersion>1</ApplicationVersion>
+    <WindowsPackageType>None</WindowsPackageType>
 
     <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">15.0</SupportedOSPlatformVersion>
     <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">17.0</SupportedOSPlatformVersion>
@@ -18,16 +27,23 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
+    <MauiIcon Include="Resources\AppIcon\appicon.svg" ForegroundFile="Resources\AppIcon\appiconfg.svg" Color="#512BD4" />
+    <MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#512BD4" BaseSize="128,128" />
+    <MauiFont Include="Resources\Fonts\*" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Microsoft.Maui.Controls (an implicit using) also declares Element; an alias outranks it. -->
+    <PackageReference Include="Microsoft.Maui.Controls" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- MAUI's implicit usings import Microsoft.Maui.Controls, which also declares an Element type.
+         An alias outranks namespace imports; a packaged renderer would ship this via buildTransitive. -->
     <Using Include="Microsoft.UI.Reactor.Core.Element" Alias="Element" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Reactor.Core\Reactor.Core.csproj" />
+    <ProjectReference Include="..\..\..\src\Reactor.Maui\Reactor.Maui.csproj" />
   </ItemGroup>
 
 </Project>

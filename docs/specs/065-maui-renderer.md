@@ -1,48 +1,56 @@
-# Reactor on .NET MAUI: proof of concept
+# Spec 065 — Reactor for .NET MAUI
 
-> **Experimental.** Nothing here ships, nothing here is in `Reactor.slnx` or CI, and nothing
-> under `src/` depends on it. Delete the folder and the repo is unchanged.
+> Status: in progress. Grew out of a proof of concept on this branch; §7 tracks what is built.
 
-This proof of concept answers one question: can Reactor's programming model (components,
-hooks, keyed reconciliation) run on a renderer-neutral core, with .NET MAUI as a second
-renderer next to WinUI?
+## 1. Goal
 
-It is structured the way a real product would be, so a "yes" doesn't mean a rewrite:
+Bring Reactor's programming model (immutable element records, components with React-style
+hooks, keyed reconciliation, echo-safe controlled inputs) to .NET MAUI, so one component
+model targets Android, iOS, Mac Catalyst and Windows through MAUI.
+
+## 2. Decisions
+
+| Decision | Choice | Why |
+|---|---|---|
+| Architecture | A renderer-neutral core plus one renderer per UI framework, as React splits `react-reconciler` from `react-dom` | The hooks, diffing and scheduling are the product; the target framework is a detail. |
+| Renderer strategy | **Hybrid.** Direct views (MAUI Core interfaces, no Controls layer) for primitives and layouts; Controls for `CollectionView`, Shell, navigation and third-party controls | §4: direct is 27–58% faster on bulk work, but Controls owns virtualization, Shell and the ecosystem. |
+| Location | This repo, as `src/Reactor.Core` and `src/Reactor.Maui` with their own solution (`Reactor.Maui.slnx`) and CI (`.github/workflows/maui.yml`, macOS) | Keeps the WinUI build and pipelines untouched while sharing the repo. |
+| WinUI convergence | **Later**, as a separate project, once both renderers have proven the core's seams | Moving the 9,000-line WinUI reconciler is the riskiest step; a core designed from one consumer gets its seams wrong. |
+| Names | `Microsoft.UI.Reactor.Core` and `Microsoft.UI.Reactor.Maui` (packages, assemblies and namespaces) | Component code stays source-compatible with WinUI Reactor. Renaming later is mechanical. |
+
+## 3. Layout
 
 | Project | Target | Role |
 |---|---|---|
 | `src/Reactor.Core` | `net10.0` | Renderer-neutral core: `Element`, `Component`, hooks, keyed reconciler, batched scheduler, handler contract. No UI framework reference. |
-| `src/Reactor.Maui` | `net11.0-android/ios/maccatalyst/windows` | Two MAUI renderers over the same element records, and the `ReactorPage` host. See [Two renderers](#two-renderers-controls-and-direct). |
-| `samples/Reactor.Maui.Sample` | MAUI app | Counter, background-timer effect, todo list with keyed rows. Set `REACTOR_RENDERER=direct` to run it on the direct renderer. |
-| `benchmarks/Reactor.Maui.Benchmark` | MAUI app | Renders the same tree through both renderers and reports timings and allocations. |
+| `src/Reactor.Maui` | `net11.0` + `-android/-ios/-maccatalyst/-windows` | MAUI element records, both renderers (§4), `ReactorPage`. The plain `net11.0` target exists for headless tests. |
 | `tests/Reactor.Core.Tests` | `net10.0` | Headless core tests against an in-memory fake renderer. |
+| `tests/Reactor.Maui.Tests` | `net11.0` | Headless renderer tests: real Controls objects and direct views, no platform handlers. |
+| `tests/Reactor.Maui.Benchmark` | MAUI app | Renders the same tree through both renderers and reports timings and allocations. |
+| `samples/maui/Reactor.Maui.Sample` | MAUI app | Counter, background-timer effect, keyed todo list. `REACTOR_RENDERER=direct` switches renderer. |
 
-`Reactor.Core` targets `net10.0` so the existing WinUI renderer (`net10.0-windows`) could
-consume it too. The MAUI projects target `net11.0` because that is what the MAUI workload
-ships for SDK 11.
-
-## Build, test, run
-
-Everything in this folder builds in isolation: its own `Directory.Build.props`/`.targets`
-and `Directory.Packages.props` stop MSBuild from picking up the repo's WinUI build logic.
+`Reactor.Core` targets `net10.0` so the WinUI renderer (`net10.0-windows`) can consume it later.
+The MAUI projects target `net11.0` because that is what the MAUI workload ships for SDK 11.
+They inherit the repo-root MSBuild settings; `Directory.Packages.props` pins
+`Microsoft.Maui.Controls` to the installed workload's `$(MauiVersion)`, and `samples/maui/`
+chains straight to the root props to skip the WinUI-specific sample wiring.
 
 ```bash
-cd experimental/maui
+dotnet restore Reactor.Maui.slnx -p:Configuration=Release
+dotnet test tests/Reactor.Core.Tests --no-restore -c Release
+dotnet test tests/Reactor.Maui.Tests --no-restore -c Release
+dotnet build Reactor.Maui.slnx --no-restore -c Release
 
-# Core tests (any OS)
-dotnet test tests/Reactor.Core.Tests
+# Sample (Mac Catalyst shown)
+dotnet build samples/maui/Reactor.Maui.Sample -t:Run -f net11.0-maccatalyst
 
-# Sample app (needs the maui workload; Mac Catalyst shown)
-dotnet build samples/Reactor.Maui.Sample -t:Run -f net11.0-maccatalyst
-
-# Renderer benchmark: build Release, launch, and read the REACTOR_BENCH lines from the
-# app's output (stderr on Mac Catalyst, `xcrun simctl launch --console-pty` on iOS,
-# `adb logcat` on Android). The results are also shown on screen when the run finishes.
-dotnet build benchmarks/Reactor.Maui.Benchmark -c Release -f net11.0-maccatalyst
-open --stderr /tmp/bench.log "benchmarks/Reactor.Maui.Benchmark/bin/Release/net11.0-maccatalyst/Reactor Benchmark.app"
+# Renderer benchmark: launch the Release app and read its REACTOR_BENCH lines (stderr on
+# Mac Catalyst, `xcrun simctl launch --console-pty` on iOS, `adb logcat` on Android).
+dotnet build tests/Reactor.Maui.Benchmark -c Release -f net11.0-maccatalyst
+open --stderr /tmp/bench.log "tests/Reactor.Maui.Benchmark/bin/Release/net11.0-maccatalyst/Reactor Benchmark.app"
 ```
 
-## Two renderers: Controls and direct
+## 4. Two renderers: Controls and direct
 
 Both renderers consume the same element records and the same `Reactor.Core`; only the
 handler registry differs.
@@ -69,7 +77,7 @@ default size, as Controls does; and on iOS every direct stack was pushed down by
 inset until it stopped opting in to safe areas, which nested Controls layouts do through an
 internal interface (`ISafeAreaView2`).
 
-### Benchmark results
+### 4.1 Benchmark results
 
 1,000 keyed rows of `HStack(Label, Label, Button)`. Each operation is timed from the Reactor
 render through a forced, complete native measure and arrange at the on-screen size. Values are
@@ -108,7 +116,7 @@ thread blocks on it for about 600 ms at its next JNI call. A Perfetto trace attr
 with thousands of live views can stall the next UI update. The runs also logged about 46,000
 outstanding JNI global references, which is worth investigating separately.
 
-## What the core owns, and what a renderer supplies
+## 5. What the core owns, and what a renderer supplies
 
 ```mermaid
 flowchart LR
@@ -144,7 +152,7 @@ Design choices that differ from today's WinUI Reactor, and why:
 - **Echo suppression is a core primitive** (`HandlerContext.WriteSuppressed` /
   `IsEchoing`), so a programmatic write's change event is not reported as user input.
 
-## What has been proven
+## 6. What has been proven
 
 Core, headless (`tests/Reactor.Core.Tests`, 21 tests): mounting through components and
 groups; keyed reorder keeps component state *and* the same native controls; removal
@@ -167,42 +175,17 @@ follows the row; toggling and removing rows update the derived count. The same p
 same results on the direct renderer (`REACTOR_RENDERER=direct`), with identical control
 geometry. The sample also builds for iOS and Android.
 
-## Findings to resolve before this becomes real
+## 7. Open issues
 
-- **Type-name collisions with MAUI.** MAUI declares its own `Microsoft.Maui.IElementHandler<,>`
-  and `Microsoft.Maui.Controls.Element`, and MAUI projects import those namespaces implicitly.
-  The renderer qualifies the handler interface, and both the renderer and the sample add a
-  global `using Element = Microsoft.UI.Reactor.Core.Element` alias (a package would ship the
-  sample's through `buildTransitive`). Renaming the core's handler interface is worth considering.
-- **Namespace and branding.** Core types keep the namespaces they have in WinUI Reactor today
-  (`Microsoft.UI.Reactor.Core` for `Element`, `Component`, `RenderContext`), so component code
-  keeps compiling when they move into this assembly. That name is WinUI-flavoured; a neutral
-  name would be a deliberate, source-breaking product decision.
-- **Components never own a native control.** WinUI Reactor today can wrap a component in a
-  control so modifiers such as `Component<T>().Margin(8)` apply to it. This core treats
-  components as purely compositional, so moving WinUI onto it needs a renderer-owned wrapper
-  extension point, not just handlers. Prototype that before committing to the migration.
-- **No error recovery.** A render, effect or cleanup that throws leaves the root in an undefined
-  state: unprocessed dirty components are not re-queued, a half-mounted subtree is not rolled
-  back, and teardown stops at the first failing cleanup. This belongs with error boundaries.
+- **Type-name collisions with MAUI.** MAUI declares `Microsoft.Maui.IElementHandler<,>` and
+  `Microsoft.Maui.Controls.Element`, and MAUI projects import those namespaces implicitly. The
+  renderer qualifies the handler interface; projects add a global
+  `using Element = Microsoft.UI.Reactor.Core.Element` alias, which the package should ship
+  through `buildTransitive`.
+- **Components never own a native control.** WinUI Reactor can wrap a component in a control so
+  modifiers such as `Component<T>().Margin(8)` apply to it. This core treats components as
+  purely compositional, so WinUI convergence needs a renderer-owned wrapper extension point.
 - **Controlled values only re-assert on re-render.** If an `OnTextChanged` callback rejects
-  input *without* changing state, nothing re-renders, so the control keeps the rejected text.
-  React re-asserts the value anyway; this core does not yet.
-- **Host lifetime is explicit.** `ReactorPage.Unmount()` runs every cleanup; the sample calls it
-  when its window is destroyed. Navigation would need to decide when a page is gone for good.
-- **Choose a renderer strategy.** The benchmark favours the direct renderer for bulk work. The
-  catch is fidelity, since each Controls default must be re-derived, plus the controls that only
-  exist in Controls (`CollectionView`, Shell, the third-party ecosystem). The proven middle path is
-  direct for primitives and layouts, Controls for the rest, in one tree.
-- **Not built yet:** hot reload, context (`UseContext`), error boundaries, navigation and
-  multiple pages, virtualized lists (`CollectionView`), styling and theming, layout modifiers
-  beyond margin/width/horizontal options, element pooling, and diagnostics.
-
-## The path to a real product
-
-1. Grow the MAUI renderer against this core until it covers a realistic app (navigation,
-   `CollectionView`, context, hot reload), and measure it against XAML and MauiReactor.
-2. Move WinUI Reactor onto `Reactor.Core`: its reconciler becomes handlers plus a children
-   strategy, gated by the existing unit, selftest and E2E suites, and by `perf-compare`.
-3. Decide where the MAUI renderer lives long-term (this repo, dotnet/maui, or its own repo).
-   It ships on MAUI's cadence and needs Android and iOS CI, which this repo doesn't run.
+  input *without* changing state, nothing re-renders and the control keeps the rejected text.
+- **About 46,000 outstanding JNI global references** were logged during the Android benchmark;
+  worth investigating for leaks (§4.1).

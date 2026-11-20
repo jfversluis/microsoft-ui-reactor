@@ -21,6 +21,8 @@ public sealed class ReactorRoot
     private object? _rootNative;
     private bool _flushScheduled;
 
+    /// <param name="registry">The renderer's element handlers.</param>
+    /// <param name="scheduler">The renderer's UI thread.</param>
     /// <param name="setRootNative">Receives the root native control (or <c>null</c>) whenever it changes.</param>
     public ReactorRoot(ElementHandlerRegistry registry, IRenderScheduler scheduler, Action<object?> setRootNative)
     {

@@ -1,0 +1,27 @@
+<Project>
+  <!--
+    NuGet metadata shared by Microsoft.UI.Reactor.Core and Microsoft.UI.Reactor.Maui (spec 065).
+    Version is supplied by the release workflow (-p:Version=...); the default is for local packs.
+  -->
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Version Condition="'$(Version)' == ''">0.0.0-local</Version>
+    <Authors>Microsoft</Authors>
+    <Company>Microsoft</Company>
+    <Copyright>© Microsoft Corporation. All rights reserved.</Copyright>
+    <PackageIcon>Icon.png</PackageIcon>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\LICENSE" Pack="true" PackagePath="" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\assets\Icon.png" Pack="true" PackagePath="" Visible="false" />
+    <None Include="README.md" Pack="true" PackagePath="" Visible="false" />
+  </ItemGroup>
+</Project>

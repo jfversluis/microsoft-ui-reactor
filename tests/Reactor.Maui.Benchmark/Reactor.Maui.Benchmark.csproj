@@ -5,12 +5,18 @@
     <TargetFrameworks Condition="!$([MSBuild]::IsOSPlatform('linux'))">$(TargetFrameworks);net11.0-ios;net11.0-maccatalyst</TargetFrameworks>
     <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('windows'))">$(TargetFrameworks);net11.0-windows10.0.19041.0</TargetFrameworks>
     <OutputType>Exe</OutputType>
-    <RootNamespace>Reactor.Maui.Sample</RootNamespace>
+    <RootNamespace>Reactor.Maui.Benchmark</RootNamespace>
     <UseMaui>true</UseMaui>
+    <LangVersion>15</LangVersion>
+    <Nullable>enable</Nullable>
+    <!-- Test code reflects by design and is never trimmed (see Directory.Build.targets). -->
+    <ReactorSkipAotAnalysis>true</ReactorSkipAotAnalysis>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
     <SingleProject>true</SingleProject>
 
-    <ApplicationTitle>Reactor on MAUI</ApplicationTitle>
-    <ApplicationId>com.microsoft.reactor.maui.sample</ApplicationId>
+    <ApplicationTitle>Reactor Benchmark</ApplicationTitle>
+    <ApplicationId>com.microsoft.reactor.maui.benchmark</ApplicationId>
     <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
     <ApplicationVersion>1</ApplicationVersion>
     <WindowsPackageType>None</WindowsPackageType>
@@ -29,7 +35,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
+    <PackageReference Include="Microsoft.Maui.Controls" />
   </ItemGroup>
 
   <ItemGroup>

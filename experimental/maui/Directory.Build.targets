@@ -1,3 +1,0 @@
-<Project>
-  <!-- Stops MSBuild from walking up to the repo-root (WinUI) Directory.Build.targets. -->
-</Project>

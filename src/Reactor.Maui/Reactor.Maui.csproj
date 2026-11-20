@@ -1,19 +1,23 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!--
+    The .NET MAUI renderer for Reactor (spec 065). The plain net11.0 target has no platform
+    handlers; it exists so Reactor.Maui.Tests can mount element trees headlessly.
+  -->
   <PropertyGroup>
-    <TargetFrameworks>net11.0-android</TargetFrameworks>
+    <TargetFrameworks>net11.0;net11.0-android</TargetFrameworks>
     <TargetFrameworks Condition="!$([MSBuild]::IsOSPlatform('linux'))">$(TargetFrameworks);net11.0-ios;net11.0-maccatalyst</TargetFrameworks>
     <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('windows'))">$(TargetFrameworks);net11.0-windows10.0.19041.0</TargetFrameworks>
-    <OutputType>Exe</OutputType>
-    <RootNamespace>Reactor.Maui.Benchmark</RootNamespace>
     <UseMaui>true</UseMaui>
     <SingleProject>true</SingleProject>
-
-    <ApplicationTitle>Reactor Benchmark</ApplicationTitle>
-    <ApplicationId>com.microsoft.reactor.maui.benchmark</ApplicationId>
-    <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
-    <ApplicationVersion>1</ApplicationVersion>
-    <WindowsPackageType>None</WindowsPackageType>
+    <LangVersion>15</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Microsoft.UI.Reactor.Maui</AssemblyName>
+    <RootNamespace>Microsoft.UI.Reactor.Maui</RootNamespace>
+    <PackageId>Microsoft.UI.Reactor.Maui</PackageId>
+    <Description>Reactor for .NET MAUI: declarative, component-based UI with hooks, rendered to MAUI controls.</Description>
+    <PackageTags>MAUI;.NET MAUI;Android;iOS;Mac Catalyst;Reactor;declarative;functional;reactive;components;hooks;MVU</PackageTags>
 
     <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">15.0</SupportedOSPlatformVersion>
     <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">17.0</SupportedOSPlatformVersion>
@@ -22,24 +26,23 @@
     <TargetPlatformMinVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</TargetPlatformMinVersion>
   </PropertyGroup>
 
+  <Import Project="..\Reactor.Maui.Packaging.props" />
+
   <ItemGroup>
-    <MauiIcon Include="Resources\AppIcon\appicon.svg" ForegroundFile="Resources\AppIcon\appiconfg.svg" Color="#512BD4" />
-    <MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#512BD4" BaseSize="128,128" />
-    <MauiFont Include="Resources\Fonts\*" />
+    <PackageReference Include="Microsoft.Maui.Controls" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <!-- MAUI's implicit usings import Microsoft.Maui.Controls, which also declares an Element type.
-         An alias outranks namespace imports; a packaged renderer would ship this via buildTransitive. -->
+    <!-- Microsoft.Maui.Controls (an implicit using) also declares Element; an alias outranks it. -->
     <Using Include="Microsoft.UI.Reactor.Core.Element" Alias="Element" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Reactor.Maui\Reactor.Maui.csproj" />
+    <InternalsVisibleTo Include="Reactor.Maui.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Reactor.Core\Reactor.Core.csproj" />
   </ItemGroup>
 
 </Project>
