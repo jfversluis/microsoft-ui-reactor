@@ -180,6 +180,35 @@ public class ErrorBoundaryTests
     }
 
     [Fact]
+    public void AnErrorAHandlerReports_FromAnotherThread_ShowsTheNearestFallback()
+    {
+        Action<Exception>? report = null;
+        var host = new TestHost().Render(new BoxElement(ErrorBoundary(new ReporterElement(r => report = r), Fallback)));
+        Assert.Equal("reporter", host.RootView!.Children[0].Kind);
+
+        var worker = new Thread(() => report!(new InvalidOperationException("navigation failed")));
+        worker.Start();
+        worker.Join();
+        host.Scheduler.Drain();
+
+        Assert.Equal("fallback: navigation failed", host.RootView.Children[0].Text);
+    }
+
+    [Fact]
+    public void AnErrorAHandlerReports_WithoutABoundary_IsUnhandled()
+    {
+        Action<Exception>? report = null;
+        var host = new TestHost().Render(new BoxElement(new ReporterElement(r => report = r)));
+        Exception? reported = null;
+        host.Root.UnhandledException += ex => reported = ex;
+
+        report!(new InvalidOperationException("navigation failed"));
+        host.Scheduler.Drain();
+
+        Assert.Equal("navigation failed", reported?.Message);
+    }
+
+    [Fact]
     public void ThrowingFallback_GoesToTheNextBoundaryUp()
     {
         var host = new TestHost().Render(ErrorBoundary(

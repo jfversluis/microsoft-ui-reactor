@@ -118,6 +118,16 @@ public abstract class DirectView : IView, IVisualTreeElement
 
     internal virtual void SetControlsAnchor(ControlsElement anchor) => _controlsAnchor = anchor;
 
+    /// <summary>
+    /// Places this view directly in a Controls element: that element is both its visual parent
+    /// (so MAUI can walk up to the window) and the logical anchor for Controls views inside it.
+    /// </summary>
+    internal void AttachToControlsParent(ControlsElement parent)
+    {
+        Parent = parent;
+        SetControlsAnchor(parent);
+    }
+
     /// <summary>Applies the shared settings. Returns whether anything that affects size changed.</summary>
     internal void ApplyModifiers(ViewModifiers? previous, ViewModifiers? next)
     {

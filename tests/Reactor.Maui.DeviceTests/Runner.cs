@@ -32,14 +32,19 @@ public sealed class FixtureContext(Window window)
 
     public void Render(Element element) => _root!.Render(MauiContexts.Window.Provide(window, element));
 
-    public void Unmount()
+    private bool _keepWindowPage;
+
+    /// <summary>Unmounts the tree. <paramref name="keepWindowPage"/> leaves its page in the window.</summary>
+    public void Unmount(bool keepWindowPage = false)
     {
+        _keepWindowPage = keepWindowPage;
         _root?.Unmount();
         _root = null;
     }
 
     private void SetNative(object? native)
     {
+        if (native is null && _keepWindowPage) return;
         if (native is Page page)
         {
             window.Page = page;
@@ -133,7 +138,6 @@ public static class Runner
                 var run = fixture.Run(context);
                 if (await Task.WhenAny(run, Task.Delay(30_000)) != run) failure = "timed out after 30 s";
                 else await run;
-                if (failure is null && context.UnhandledErrors.Count > 0) failure = "unhandled render error: " + context.UnhandledErrors[0];
             }
             catch (Exception ex)
             {
@@ -152,6 +156,8 @@ public static class Runner
                 window.Page = new ContentPage();
                 await Task.Delay(100);
             }
+            // Checked after teardown: unmounting runs effect cleanups, which can fail too.
+            if (failure is null && context.UnhandledErrors.Count > 0) failure = "unhandled render error: " + context.UnhandledErrors[0];
 
             if (failure is null)
             {
@@ -163,6 +169,13 @@ public static class Runner
                 Emit($"not ok {i + 1} - {fixture.Name}");
                 foreach (var line in failure.Split('\n')) Emit("#   " + line.TrimEnd());
             }
+        }
+
+        if (fixtures.Count == 0)
+        {
+            // A filter that matches nothing must not read as a pass.
+            failures++;
+            Emit($"not ok 1 - no fixture matches the filter '{filter}'");
         }
 
         Emit($"# passed {fixtures.Count - failures}, failed {failures}");

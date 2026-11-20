@@ -179,6 +179,7 @@ public class DirectRendererTests
         Assert.Same(wrapper, stepper.Parent);
         // Visual-tree tools see through the wrapper and the direct stack down to the Controls view.
         Assert.Same(stack, Assert.Single(((IVisualTreeElement)wrapper).GetVisualChildren()));
+        Assert.Same(wrapper, ((IVisualTreeElement)stack).GetVisualParent());
         Assert.Equal<IVisualTreeElement>([stepper, (IVisualTreeElement)stack[1]], ((IVisualTreeElement)stack).GetVisualChildren());
 
         host.Render(ScrollView(VStack(Stepper(2), Label("y"))));

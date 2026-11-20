@@ -172,7 +172,7 @@ Design choices that differ from today's WinUI Reactor, and why:
 
 ## 6. What has been proven
 
-**Core, headless** (`tests/Reactor.Core.Tests`, 42 tests). Mounting through components and
+**Core, headless** (`tests/Reactor.Core.Tests`, 44 tests). Mounting through components and
 groups. A keyed reorder keeps component state *and* the same native controls. Removal unmounts
 and runs effect cleanups. Duplicate keys fail loudly, and changing the root's key remounts it.
 Setters are batched into one posted flush, across components, and hosts are re-synced only after
@@ -181,14 +181,16 @@ the render thread. Effects run after commit, descendants before ancestors, and r
 dependency changes. Hook order violations throw. Also covered: context (including readers in child
 roots), `Memo`, `ErrorBoundary` with recovery, `UseResource` cancellation, controlled values
 restored when a callback rejects input, `CanUpdate` remounts, and hot reload re-rendering every live
-root. A boundary test fails if the core references anything but `System.*`.
+root, and errors a handler reports from its own asynchronous work (`HandlerContext.ReportError`)
+reaching boundaries. A boundary test fails if the core references anything but `System.*`.
 
-**Renderer, headless** (`tests/Reactor.Maui.Tests`, 33 tests). Real Controls objects and direct
+**Renderer, headless** (`tests/Reactor.Maui.Tests`, 34 tests). Real Controls objects and direct
 views, no platform handlers: modifiers, every control's props and echo-free events, the hybrid
 fallback and mixed trees, `CollectionView` cells as child roots, pages, toolbar items, the
-navigation stack's reconcile, the user-pop rule (below), tabs and flyout.
+navigation stack's reconcile, the user-pop rule (below), tabs and flyout (including swapping the
+two flyout pages between slots).
 
-**Device tier** (`tests/Reactor.Maui.DeviceTests`, 20 fixtures). All pass on Mac Catalyst (macOS 26,
+**Device tier** (`tests/Reactor.Maui.DeviceTests`, 24 fixtures). All pass on Mac Catalyst (macOS 26,
 Apple silicon), an iPhone 18 Pro simulator (iOS 27) and a Pixel 10 (Android 16). They check what the
 native views show, not the virtual tree:
 - Taps reach state, and the platform label updates in place. Typing into a controlled `Entry` is
@@ -201,8 +203,10 @@ native views show, not the virtual tree:
 - A long label wraps (several lines' height) on both renderers, with identical metrics.
 - Navigation: a push reaches the platform stack (`UINavigationController` depth on iOS); the back
   button reaches app state; a back press *while the push animation still runs* is reported; a pop
-  the app refuses is undone; the navigator's own pops are never reported as the user's; a modal
-  dismissal is reported. Also: tab selection accepted and refused, `CollectionView` virtualizes
+  the app refuses is undone, including when the navigator is idle; an accepted back never re-pushes
+  the page; the navigator's own pops are never reported as the user's; a modal dismissal is
+  reported; unmounting mid-navigation stops further pushes; two stacks in tabs share the window's
+  modal stack without dismissing each other's modals. Also: tab selection accepted and refused, `CollectionView` virtualizes
   (a few of 200 cells realized) and reports selection, `UseWindowSize` and `UseAppTheme` follow the
   window and the theme, an `ErrorBoundary` catches an event-handler failure, and effects clean up on
   unmount.
@@ -215,6 +219,22 @@ The device tier found two bugs the headless tiers could not. Both are fixed:
   declares, so a pop of a still-declared page is the user's. The new depth is that page's position
   in the declared stack, because iOS raises `Popped` before it updates `NavigationStack`.
 - **Direct labels didn't wrap** (§4).
+
+An independent review (a different model family) of the navigation code found more, each
+reproduced before it was fixed and covered by a fixture that fails without the fix:
+- An accepted back navigation re-pushed the page once (a visible flicker on iOS and Android). The
+  handler ran the navigator from `Update`, which the core calls before syncing the new children,
+  so it reconciled against the previous declaration. It now runs only for an unchanged element
+  (the restore after a refused pop).
+- iOS raises `Popped` before it removes the page, so a refused pop could be judged "already
+  settled". The navigator now gives a platform pop a short grace period (about one pop animation)
+  and keeps re-checking until the page has gone. MAUI can also raise `Popped` mid-push and keep the
+  page; the grace period bounds how long that delays the fix-up.
+- The window's modal stack is shared: a second navigation stack dismissed the first one's modal.
+  Each navigator now manages only the modals it presented.
+- Navigation failures were lost in a discarded task; they now reach error boundaries through
+  `HandlerContext.ReportError`. Unmounting now stops pending navigation and dismisses the modals
+  the stack presented. A swap of the two flyout pages threw; it now goes through placeholders.
 
 **Packages.** `dotnet pack` produces both packages. A stock `dotnet new maui` app that references only
 the packages builds the README's snippets unchanged and runs. The Maui package ships global usings
@@ -245,5 +265,10 @@ and the direct-renderer todos page were checked on the iPhone simulator.
   app assemblies trimmable. Apple builds then trim them even in Debug, and drop `SceneDelegate`,
   which only `Info.plist` names. The result is a blank window. The sample sets
   `IsTrimmable=false`; any new app project in the repo must too.
+- **MAUI bug on Android: replacing `Window.Page` while a `NavigationPage` push is in flight**
+  crashes the app ("NavigationManager cannot be null here", from
+  `NavigationViewFragment.OnCreateView`). Reproduced with plain MAUI, no Reactor involved. A
+  `ReactorWindow` hits it when its root switches away from a `NavigationStack` mid-push. Worth
+  filing in dotnet/maui; a workaround would defer the window page swap until navigation settles.
 - **About 46,000 outstanding JNI global references** were logged during the Android benchmark;
   worth investigating for leaks (§4.1).

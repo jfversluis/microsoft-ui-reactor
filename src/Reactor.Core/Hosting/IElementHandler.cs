@@ -74,6 +74,19 @@ public readonly struct HandlerContext<TElement> where TElement : Element
     }
 
     /// <summary>
+    /// Reports a failure in work the control runs on its own schedule, such as an asynchronous
+    /// platform operation it started. The error goes to the error boundaries above this element, or
+    /// to the root's <c>UnhandledException</c>, as a render error would. Callable from any thread;
+    /// ignored once the element has been unmounted.
+    /// </summary>
+    public void ReportError(Exception error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        var node = (Node)_live;
+        node.Root.ReportHandlerError(node, error);
+    }
+
+    /// <summary>
     /// Call after reporting user input: once state has settled, the control is updated with the
     /// element that is current then. A controlled control whose callback did not accept the input
     /// (did not change state) therefore returns to its declared value.

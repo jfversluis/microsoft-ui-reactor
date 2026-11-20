@@ -96,7 +96,7 @@ internal static class Props
         native as View ?? Wrappers.GetValue((IView)native, static view =>
         {
             var wrapper = new DirectViewHost { view };
-            if (view is Direct.DirectView direct) direct.SetControlsAnchor(wrapper);
+            if (view is Direct.DirectView direct) direct.AttachToControlsParent(wrapper);
             return wrapper;
         });
 }

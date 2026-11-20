@@ -30,8 +30,12 @@ public static class Fixtures
         new("NavigationStack_PushReachesThePlatform_AndBackIsReported", NavigationBack),
         new("NavigationStack_BackDuringThePushAnimation_IsReported", NavigationBackDuringPush),
         new("NavigationStack_BackTheAppRefuses_PushesThePageBack", NavigationRefusedBack),
+        new("NavigationStack_BackTheAppRefuses_WhenTheNavigatorIsIdle_PushesThePageBack", NavigationRefusedBackWhenIdle),
+        new("NavigationStack_AcceptedBack_NeverPushesThePageAgain", NavigationAcceptedBackNoRepush),
         new("NavigationStack_TheNavigatorsOwnPops_AreNotReportedAsBack", NavigatorPopsAreSilent),
         new("NavigationStack_ModalIsShown_AndDismissalIsReported", ModalDismissal),
+        new("NavigationStack_UnmountDuringNavigation_StopsIt", UnmountDuringNavigation),
+        new("NavigationStack_TwoStacks_ShareTheWindowsModalStack", TwoStacksShareModals),
         new("Tabs_UserSelection_IsReported_AndRefusalRestoresTheTab", TabsSelection),
         new("CollectionView_RealizesKeyedCells_AndReportsSelection", CollectionViewCells),
         new("Hooks_WindowSizeAndTheme_TrackTheWindow", WindowHooks),
@@ -221,6 +225,8 @@ public static class Fixtures
         navigation.SendBackButtonPressed();
 
         await c.WaitFor(() => stack!.Count == 1, "the back navigation to reach the app's stack");
+        // MAUI can keep the page after raising Popped mid-push; the navigator then pops it.
+        await c.WaitFor(() => navigation.Navigation.NavigationStack.Count == 1 && Probe(navigation).Idle, "the page to leave", 3000);
         await c.Settle(800);
         Equal("1", string.Join(",", reported), "depths reported");
         Equal(1, navigation.Navigation.NavigationStack.Count, "the page stays popped");
@@ -233,11 +239,60 @@ public static class Fixtures
         await c.WaitFor(() => navigation.Navigation.NavigationStack.Count == 2 && navigation.CurrentPage.IsLoaded, "both pages to be shown");
         await c.Settle();
 
+        var popped = false;
+        var pushedBack = false;
+        navigation.Popped += (_, _) => popped = true;
+        navigation.Pushed += (_, e) => pushedBack |= e.Page.Title == "detail";
         navigation.SendBackButtonPressed();
-        await c.WaitFor(() => navigation.Navigation.NavigationStack.Count == 1, "the platform pop");
-        await c.WaitFor(() => navigation.Navigation.NavigationStack.Count == 2 && navigation.CurrentPage.Title == "detail", "the declared page to be pushed back");
-        await c.Settle();
-        Equal(2, navigation.Navigation.NavigationStack.Count, "the stack stays as declared");
+        await c.WaitFor(() => popped, "the platform pop");
+        await c.WaitFor(() => pushedBack, "the declared page to be pushed back");
+        await c.Settle(1000);
+        Equal("home,detail", string.Join(",", navigation.Navigation.NavigationStack.Select(p => p.Title)), "the stack stays as declared");
+    }
+
+    private static StackNavigatorProbe Probe(NavigationPage page) => new((Microsoft.UI.Reactor.Maui.Handlers.ReactorNavigationPage)page);
+
+    private sealed class StackNavigatorProbe(Microsoft.UI.Reactor.Maui.Handlers.ReactorNavigationPage page)
+    {
+        public bool Idle => page.Navigator.IsIdle;
+    }
+
+    private static async Task NavigationRefusedBackWhenIdle(FixtureContext c)
+    {
+        c.Show(NavigationStack([Page("home", Label("home")).WithKey("home"), Page("detail", Label("detail")).WithKey("detail")]));
+        var navigation = await LoadedPage<NavigationPage>(c);
+        await c.WaitFor(() => navigation.Navigation.NavigationStack.Count == 2 && navigation.CurrentPage.IsLoaded, "both pages to be shown");
+        // Every navigation task, including the slow iOS push, has finished.
+        await c.WaitFor(() => Probe(navigation).Idle, "the navigator to settle", 10_000);
+        await c.Settle(500);
+
+        var popped = false;
+        navigation.Popped += (_, _) => popped = true;
+        navigation.SendBackButtonPressed();
+        await c.WaitFor(() => popped, "the platform pop");
+        await c.Settle(2000);
+        Equal("home,detail", string.Join(",", navigation.Navigation.NavigationStack.Select(p => p.Title)), "the stack stays as declared");
+        Equal("detail", navigation.CurrentPage.Title, "current page");
+    }
+
+    private static async Task NavigationAcceptedBackNoRepush(FixtureContext c)
+    {
+        RouteStack<string>? stack = null;
+        c.Show(Component<StackApp, StackProps>(new(s => stack = s)));
+        var navigation = await LoadedPage<NavigationPage>(c);
+        stack!.Push("detail");
+        await c.WaitFor(() => navigation.CurrentPage?.Title == "detail" && navigation.CurrentPage.IsLoaded, "detail to be shown");
+        await c.WaitFor(() => Probe(navigation).Idle, "the navigator to settle", 10_000);
+        await c.Settle(500);
+
+        var pushes = 0;
+        navigation.Pushed += (_, _) => pushes++;
+        navigation.SendBackButtonPressed();
+        await c.WaitFor(() => stack!.Count == 1, "the back navigation to reach the app's stack");
+        await c.WaitFor(() => navigation.Navigation.NavigationStack.Count == 1, "MAUI's stack to drop the page");
+        await c.Settle(1500);
+        Equal(0, pushes, "pages pushed after an accepted back navigation");
+        Equal(1, navigation.Navigation.NavigationStack.Count, "navigation stack");
     }
 
     private static async Task NavigatorPopsAreSilent(FixtureContext c)
@@ -299,6 +354,58 @@ public static class Fixtures
         {
             Application.Current!.ModalPushed -= Presented;
         }
+    }
+
+    private static async Task UnmountDuringNavigation(FixtureContext c)
+    {
+        c.Show(NavigationStack([Page("home", Label("home")).WithKey("home")]));
+        var navigation = await LoadedPage<NavigationPage>(c);
+        await c.Settle();
+
+        // Three pushes at once; unmount as soon as the first is under way.
+        c.Render(NavigationStack([.. new[] { "home", "one", "two", "three" }.Select(r => Page(r, Label(r)).WithKey(r))]));
+        await c.WaitFor(() => navigation.Navigation.NavigationStack.Count >= 2, "the first push");
+        var depthAtUnmount = navigation.Navigation.NavigationStack.Count;
+        // Keeps the navigation page in the window: replacing a window's page while a push is in
+        // flight crashes MAUI on Android ("NavigationManager cannot be null here"; spec 065 §7).
+        c.Unmount(keepWindowPage: true);
+        await c.Settle(3000);
+        Console.WriteLine($"#   depth at unmount {depthAtUnmount}, after {navigation.Navigation.NavigationStack.Count}");
+        Check(navigation.Navigation.NavigationStack.Count <= Math.Max(depthAtUnmount, 2),
+            $"no further pushes after unmount: depth {depthAtUnmount} at unmount, {navigation.Navigation.NavigationStack.Count} after");
+    }
+
+    private sealed class TwoStacks : Component<Action<int>>
+    {
+        public override Element Render()
+        {
+            var (tab, setTab) = UseState(0);
+            return Tabs(tab, setTab,
+                NavigationStack([Page("first", Label("first"))]) with
+                {
+                    Title = "First",
+                    Modals = [Page("sheet", Label("sheet"))],
+                    OnModalDismissed = Props,
+                },
+                NavigationStack([Page("second", Label("second"))]) with { Title = "Second" });
+        }
+    }
+
+    private static async Task TwoStacksShareModals(FixtureContext c)
+    {
+        var dismissals = new List<int>();
+        c.Show(Component<TwoStacks, Action<int>>(dismissals.Add));
+        var tabs = await LoadedPage<TabbedPage>(c);
+        await c.WaitFor(() => c.Window.Navigation.ModalStack.Count == 1, "the first stack's modal");
+        await c.Settle();
+        // Showing the second stack makes it reconcile (it loads), with the first stack's modal up.
+        tabs.CurrentPage = tabs.Children[1];
+        await c.WaitFor(() => tabs.Children[1].IsLoaded, "the second stack to load");
+        await c.Settle(2000);
+        // The second stack declares no modals; it must leave the first stack's one alone.
+        Equal(1, c.Window.Navigation.ModalStack.Count, "modals shown");
+        Equal("sheet", c.Window.Navigation.ModalStack[0].Title, "the modal");
+        Equal(0, dismissals.Count, "dismissals reported");
     }
 
     private sealed class TabsApp : Component<bool>
@@ -380,6 +487,23 @@ public static class Fixtures
             c.Show(Component<HooksApp>());
             var size = await Loaded<ILabel>(c, "size");
             await c.WaitFor(() => Platform.Text(size) == $"{c.Window.Width:0}x{c.Window.Height:0}" && c.Window.Width > 0, "the window size");
+
+            if (DeviceInfo.Idiom == DeviceIdiom.Desktop)
+            {
+                // The subscription, not just the first read: resize and follow.
+                var (width, height) = (c.Window.Width, c.Window.Height);
+                try
+                {
+                    c.Window.Width = width - 160;
+                    await c.WaitFor(() => Math.Abs(c.Window.Width - (width - 160)) < 1, "the window to resize");
+                    await c.WaitFor(() => Platform.Text(size) == $"{c.Window.Width:0}x{c.Window.Height:0}", "the size label to follow the resize");
+                }
+                finally
+                {
+                    c.Window.Width = width;
+                    c.Window.Height = height;
+                }
+            }
 
             var target = app.RequestedTheme == AppTheme.Dark ? AppTheme.Light : AppTheme.Dark;
             app.UserAppTheme = target;

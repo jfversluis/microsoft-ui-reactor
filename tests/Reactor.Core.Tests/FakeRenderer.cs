@@ -34,6 +34,9 @@ public sealed record InputElement(string Value, Action<string>? OnChanged = null
 /// <summary>Its handler throws on mount, after the elements before it in a list mounted.</summary>
 public sealed record ExplodingElement(string Message) : Element;
 
+/// <summary>Hands out its handler's <c>ReportError</c>, as a control with its own async work would use it.</summary>
+public sealed record ReporterElement(Action<Action<Exception>> Expose) : Element;
+
 public sealed class FakeRenderer
 {
     public List<FakeView> Mounted { get; } = [];
@@ -43,6 +46,7 @@ public sealed class FakeRenderer
         .Register(new TextHandler(this))
         .Register(new InputHandler(this))
         .Register(new ExplodingHandler())
+        .Register(new ReporterHandler(this))
         .Register(new FrameHandler(this));
 
     private FakeView Create(string kind)
@@ -95,6 +99,17 @@ public sealed class FakeRenderer
             throw new InvalidOperationException(element.Message);
 
         public void Update(HandlerContext<ExplodingElement> context, ExplodingElement oldElement, ExplodingElement newElement, FakeView control) { }
+    }
+
+    private sealed class ReporterHandler(FakeRenderer renderer) : IElementHandler<ReporterElement, FakeView>
+    {
+        public FakeView Mount(HandlerContext<ReporterElement> context, ReporterElement element)
+        {
+            element.Expose(context.ReportError);
+            return renderer.Create("reporter");
+        }
+
+        public void Update(HandlerContext<ReporterElement> context, ReporterElement oldElement, ReporterElement newElement, FakeView control) { }
     }
 
     private sealed class InputHandler(FakeRenderer renderer) : IElementHandler<InputElement, FakeView>

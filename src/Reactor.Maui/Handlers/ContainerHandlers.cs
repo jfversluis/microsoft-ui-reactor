@@ -38,7 +38,7 @@ internal abstract class LayoutHandler<TElement, TLayout> : ViewHandler<TElement,
         {
             _list.Sync(control, natives);
             foreach (var native in natives)
-                if (native is Direct.DirectView direct) direct.SetControlsAnchor(control);
+                if (native is Direct.DirectView direct) direct.AttachToControlsParent(control);
         }
     }
 }

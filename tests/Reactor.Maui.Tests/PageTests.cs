@@ -148,6 +148,19 @@ public class PageTests
         Assert.False(flyout.IsPresented);
     }
 
+    [Fact]
+    public void Flyout_SwappingTheTwoPages_MovesThemBetweenSlots()
+    {
+        var host = Host().Render(Flyout(Page("A", Label("a")).WithKey("a"), Page("B", Label("b")).WithKey("b"), isPresented: false));
+        var flyout = host.View<FlyoutPage>();
+        var (a, b) = (flyout.Flyout, flyout.Detail);
+
+        host.Render(Flyout(Page("B", Label("b")).WithKey("b"), Page("A", Label("a")).WithKey("a"), isPresented: false));
+
+        Assert.Same(b, flyout.Flyout);
+        Assert.Same(a, flyout.Detail);
+    }
+
     // Navigation can complete asynchronously; posted render work is drained on the test (render) thread meanwhile.
     private static void Settle(TestHost host, Func<bool> done)
     {
