@@ -300,6 +300,28 @@ jobs:
           if ($problems.Count -gt 0) { throw "Package layout problems:`n$($problems -join "`n")" }
           Write-Host "One lib/ folder in each of $($packages.Count) packages."
 
+      # Reactor.dll binds Microsoft.UI.Reactor.Core's internals (spec 067), so the framework must
+      # depend on exactly its own core version; Reactor.csproj's _PinReactorCoreDependency
+      # writes the [V] range. Checked here because only a packed nuspec shows it.
+      - name: Check the framework pins its core
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $version = '${{ steps.version.outputs.version }}'
+          $nupkg = Get-ChildItem artifacts/nupkg -Filter "Microsoft.UI.Reactor.$version.nupkg" -File
+          if (-not $nupkg) { throw "No Microsoft.UI.Reactor.$version.nupkg under artifacts/nupkg." }
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($nupkg.FullName)
+          try {
+            $reader = [System.IO.StreamReader]::new($zip.GetEntry('Microsoft.UI.Reactor.nuspec').Open())
+            try { [xml]$nuspec = $reader.ReadToEnd() } finally { $reader.Dispose() }
+          } finally { $zip.Dispose() }
+          $core = @($nuspec.package.metadata.dependencies.group.dependency | Where-Object { $_.id -eq 'Microsoft.UI.Reactor.Core' })
+          if ($core.Count -eq 0) { throw 'Microsoft.UI.Reactor does not depend on Microsoft.UI.Reactor.Core.' }
+          foreach ($d in $core) {
+            if ($d.version -ne "[$version]") { throw "Microsoft.UI.Reactor depends on Microsoft.UI.Reactor.Core '$($d.version)'; expected '[$version]'." }
+          }
+          Write-Host "Microsoft.UI.Reactor depends on Microsoft.UI.Reactor.Core [$version]."
+
       # Packages with code ported from other projects (Yoga, WinUIEx, md4c, D3, WinUI.Dock) must carry their
       # license notices (issue #1535). The ids are listed rather than discovered so a package that
       # failed to pack fails here instead of passing vacuously. Mirrored in

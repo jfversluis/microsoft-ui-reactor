@@ -38,6 +38,13 @@ public sealed class LocalPackageFeedFixture : IDisposable
             RepoRoot,
             CommandEnvironment,
             timeoutMs: 300_000);
+        // Microsoft.UI.Reactor depends on the neutral core (spec 067) at the same version, and
+        // no other source carries this version, so the feed needs it for any consumer restore.
+        RunHelpers.RunDotnet(
+            $"pack \"{Path.Join(RepoRoot, "src", "Reactor.Core", "Reactor.Core.csproj")}\" --no-restore --configuration Release -o \"{PackageSourceDir}\" -p:Version={PackageVersion}",
+            RepoRoot,
+            CommandEnvironment,
+            timeoutMs: 300_000);
         // Devtools depends on Advanced (spec-062), and consumers can pull both
         // transitively, so pack all three at the same version to keep a restore
         // from falling through to NuGet.org and hitting an NU1605 downgrade.
@@ -53,6 +60,7 @@ public sealed class LocalPackageFeedFixture : IDisposable
             timeoutMs: 300_000);
 
         _ = FindPackage(PackageSourceDir, "Microsoft.UI.Reactor", PackageVersion);
+        _ = FindPackage(PackageSourceDir, "Microsoft.UI.Reactor.Core", PackageVersion);
         _ = FindPackage(PackageSourceDir, "Microsoft.UI.Reactor.Devtools", PackageVersion);
         _ = FindPackage(PackageSourceDir, "Microsoft.UI.Reactor.Advanced", PackageVersion);
     }

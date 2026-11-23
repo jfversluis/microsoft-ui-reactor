@@ -56,7 +56,7 @@ reconciler is the single mutator.
 | Component shell | `src/Reactor/Core/Component.cs` | `Render()` contract, `ShouldUpdate`, hook convenience methods |
 | Hook table | `src/Reactor/Core/RenderContext.cs` | Slot table, hook implementations, UI-thread invariant |
 | Elements | `src/Reactor/Core/Element.cs`, `ElementFactory.cs` | Immutable records, factory plumbing for ItemsRepeater |
-| Reconciler | `src/Reactor/Core/Reconciler*.cs`, `ChildReconciler.cs` | Mount / Update / Unmount, keyed LIS diff |
+| Reconciler | `src/Reactor/Core/Reconciler*.cs`, `src/Reactor.Core/Engine/ChildReconciler.cs` | Mount / Update / Unmount, keyed LIS diff |
 | Pool | `src/Reactor/Core/ElementPool.cs` | `TryRent` / `Return` for poolable leaf controls |
 | Modifiers | `src/Reactor/Elements/ElementExtensions*.cs` | Fluent modifier fold |
 | Hosting | `src/Reactor/Hosting/` | Window/app bootstrap, UI dispatcher capture |
@@ -96,7 +96,8 @@ Every node in the tree is a `record` deriving from `Element`. The shape
 matters: records are value-like, structurally immutable, and cheap to
 allocate. A render produces a fresh tree on the heap; the previous
 tree's records become garbage as soon as the reconciler finishes the
-pass. The `Key` slot is the identity primitive — set it via `.WithKey()`
+pass. `Key`, inherited from the framework-neutral `ReactorElement` base
+(spec 067), is the identity primitive — set it via `.WithKey()`
 on collection items so the [child reconciler](reconciliation.md) can
 match elements across reorderings.
 

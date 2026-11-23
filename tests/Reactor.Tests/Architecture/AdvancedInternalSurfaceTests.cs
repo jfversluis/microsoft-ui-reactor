@@ -36,8 +36,6 @@ namespace Microsoft.UI.Reactor.Tests.Architecture;
 /// </summary>
 public class AdvancedInternalSurfaceTests
 {
-    private const string CoreAssemblyName = "Reactor";
-
     /// <summary>
     /// The reviewed set of core internals that <c>Reactor.Advanced</c> is allowed
     /// to touch. Entries are <c>kind: name</c>, where <c>kind</c> is:
@@ -154,6 +152,27 @@ public class AdvancedInternalSurfaceTests
     }
 
     /// <summary>
+    /// Spec 067: the framework-neutral core grants Reactor.Advanced internals too (it mirrors
+    /// Reactor's grants, because engine internals used to live in Reactor.dll). Advanced uses
+    /// none of them, and any future use should be a reviewed decision like the list above.
+    /// </summary>
+    [Fact]
+    [global::System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("SingleFile", "IL3000", Justification = "Test-only metadata scan; see the sibling test. Behaviour-neutral.")]
+    public void Advanced_TouchesNoNeutralCoreInternals()
+    {
+        var actual = ScanInternalSurface(typeof(ReactorElement).Assembly.Location, out var coreTypesIndexed, out var advancedTypesScanned);
+
+        Assert.True(coreTypesIndexed > 5,
+            $"Indexed only {coreTypesIndexed} neutral core types — the scan is misconfigured and would pass vacuously.");
+        Assert.True(advancedTypesScanned > 50,
+            $"Scanned only {advancedTypesScanned} Reactor.Advanced types — the scan is misconfigured and would pass vacuously.");
+        Assert.True(actual.IsEmpty,
+            "Reactor.Advanced reaches Microsoft.UI.Reactor.Core internals (spec 067). Prefer the public " +
+            "API; if the internal is really required, pin it with a reviewed allowlist like " +
+            "ApprovedSurface.\n  " + string.Join("\n  ", actual));
+    }
+
+    /// <summary>
     /// Meta-test: proves the scanner resolves real references rather than silently
     /// returning nothing (which would make the pin above vacuous). Reactor.Advanced
     /// provably uses core internals today, so the scan must find some — and it must
@@ -182,11 +201,17 @@ public class AdvancedInternalSurfaceTests
     [global::System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("SingleFile", "IL3000", Justification = "Test-only: reads the on-disk Location of Reactor.dll / Reactor.Advanced.dll to feed the metadata scanner (PEReader). IL3000 only affects single-file publish (Location is empty there); this metadata-scanning test cannot run single-file and this host is not single-file-published. Behaviour-neutral.")]
     private static ImmutableSortedSet<string> ScanInternalSurface(
         out int coreTypesIndexed,
+        out int advancedTypesScanned) =>
+        ScanInternalSurface(typeof(Element).Assembly.Location, out coreTypesIndexed, out advancedTypesScanned);
+
+    [global::System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("SingleFile", "IL3000", Justification = "Test-only metadata scan; see the sibling overload. Behaviour-neutral.")]
+    private static ImmutableSortedSet<string> ScanInternalSurface(
+        string corePath,
+        out int coreTypesIndexed,
         out int advancedTypesScanned)
     {
-        var corePath = typeof(Element).Assembly.Location;
         var advancedPath = typeof(global::Microsoft.UI.Reactor.Advanced.Factories).Assembly.Location;
-        Assert.False(string.IsNullOrEmpty(corePath), "Could not locate Reactor.dll on disk.");
+        Assert.False(string.IsNullOrEmpty(corePath), $"Could not locate {corePath} on disk.");
         Assert.False(string.IsNullOrEmpty(advancedPath), "Could not locate Reactor.Advanced.dll on disk.");
 
         using var coreStream = global::System.IO.File.OpenRead(corePath);
@@ -214,12 +239,13 @@ public class AdvancedInternalSurfaceTests
 
     private static IEnumerable<string> CollectTypeAndMemberReferences(MetadataReader adv, CoreIndex coreIndex)
     {
-        var provider = new UnderlyingTypeNameProvider(adv);
+        var coreName = coreIndex.AssemblyName;
+        var provider = new UnderlyingTypeNameProvider(adv, coreName);
 
         foreach (var handle in adv.TypeReferences)
         {
             var typeRef = adv.GetTypeReference(handle);
-            if (!IsRootedInCore(adv, typeRef)) continue;
+            if (!IsRootedInCore(adv, typeRef, coreName)) continue;
 
             var name = TypeRefFullName(adv, typeRef);
             if (coreIndex.Visibility.TryGetValue(name, out var visibility) && !IsPublicType(visibility))
@@ -234,7 +260,7 @@ public class AdvancedInternalSurfaceTests
             if (memberRef.Parent.Kind == HandleKind.TypeReference)
             {
                 var typeRef = adv.GetTypeReference((TypeReferenceHandle)memberRef.Parent);
-                if (IsRootedInCore(adv, typeRef)) owner = TypeRefFullName(adv, typeRef);
+                if (IsRootedInCore(adv, typeRef, coreName)) owner = TypeRefFullName(adv, typeRef);
             }
             else if (memberRef.Parent.Kind == HandleKind.TypeSpecification)
             {
@@ -285,7 +311,7 @@ public class AdvancedInternalSurfaceTests
 
             if (overrideNames.Length == 0) continue;
 
-            var coreBase = ResolveCoreBaseName(adv, typeDef);
+            var coreBase = ResolveCoreBaseName(adv, typeDef, coreIndex.AssemblyName);
             if (coreBase is null) continue;
 
             foreach (var name in overrideNames)
@@ -298,7 +324,7 @@ public class AdvancedInternalSurfaceTests
     }
 
     /// <summary>Resolves an Advanced type's base type to a core type name, or null.</summary>
-    private static string? ResolveCoreBaseName(MetadataReader adv, TypeDefinition typeDef)
+    private static string? ResolveCoreBaseName(MetadataReader adv, TypeDefinition typeDef, string coreName)
     {
         var baseHandle = typeDef.BaseType;
         if (baseHandle.IsNil) return null;
@@ -306,13 +332,13 @@ public class AdvancedInternalSurfaceTests
         if (baseHandle.Kind == HandleKind.TypeReference)
         {
             var baseRef = adv.GetTypeReference((TypeReferenceHandle)baseHandle);
-            return IsRootedInCore(adv, baseRef) ? TypeRefFullName(adv, baseRef) : null;
+            return IsRootedInCore(adv, baseRef, coreName) ? TypeRefFullName(adv, baseRef) : null;
         }
 
         if (baseHandle.Kind == HandleKind.TypeSpecification)
         {
             var spec = adv.GetTypeSpecification((TypeSpecificationHandle)baseHandle);
-            var decoded = spec.DecodeSignature(new UnderlyingTypeNameProvider(adv), default(object?));
+            var decoded = spec.DecodeSignature(new UnderlyingTypeNameProvider(adv, coreName), default(object?));
             return decoded.RootedInCore ? decoded.Name : null;
         }
 
@@ -321,7 +347,7 @@ public class AdvancedInternalSurfaceTests
         if (baseHandle.Kind == HandleKind.TypeDefinition)
         {
             var baseDef = adv.GetTypeDefinition((TypeDefinitionHandle)baseHandle);
-            return ResolveCoreBaseName(adv, baseDef);
+            return ResolveCoreBaseName(adv, baseDef, coreName);
         }
 
         return null;
@@ -346,7 +372,7 @@ public class AdvancedInternalSurfaceTests
     private static bool IsPublicAccess(string access) =>
         access is "Public" or "Family" or "FamORAssem";
 
-    private static bool IsRootedInCore(MetadataReader adv, TypeReference typeRef)
+    private static bool IsRootedInCore(MetadataReader adv, TypeReference typeRef, string coreName)
     {
         var scope = typeRef.ResolutionScope;
         while (scope.Kind == HandleKind.TypeReference)
@@ -355,7 +381,7 @@ public class AdvancedInternalSurfaceTests
         return scope.Kind == HandleKind.AssemblyReference
             && string.Equals(
                 adv.GetString(adv.GetAssemblyReference((AssemblyReferenceHandle)scope).Name),
-                CoreAssemblyName,
+                coreName,
                 StringComparison.Ordinal);
     }
 
@@ -380,6 +406,7 @@ public class AdvancedInternalSurfaceTests
         public required Dictionary<string, Dictionary<string, string>> MemberAccess { get; init; }
         public required Dictionary<string, string?> BaseName { get; init; }
         public required Dictionary<string, HashSet<string>> NonPublicVirtuals { get; init; }
+        public required string AssemblyName { get; init; }
 
         public static CoreIndex Build(MetadataReader core)
         {
@@ -445,6 +472,7 @@ public class AdvancedInternalSurfaceTests
                 MemberAccess = memberAccess,
                 BaseName = baseName,
                 NonPublicVirtuals = nonPublicVirtuals,
+                AssemblyName = core.GetString(core.GetAssemblyDefinition().Name),
             };
         }
 
@@ -539,13 +567,13 @@ public class AdvancedInternalSurfaceTests
     /// </summary>
     private readonly record struct TypeName(string Name, bool RootedInCore);
 
-    private sealed class UnderlyingTypeNameProvider(MetadataReader adv)
+    private sealed class UnderlyingTypeNameProvider(MetadataReader adv, string coreName)
         : ISignatureTypeProvider<TypeName, object?>
     {
         public TypeName GetTypeFromReference(MetadataReader reader, TypeReferenceHandle handle, byte rawTypeKind)
         {
             var typeRef = reader.GetTypeReference(handle);
-            return new TypeName(TypeRefFullName(adv, typeRef), IsRootedInCore(adv, typeRef));
+            return new TypeName(TypeRefFullName(adv, typeRef), IsRootedInCore(adv, typeRef, coreName));
         }
 
         public TypeName GetTypeFromDefinition(MetadataReader reader, TypeDefinitionHandle handle, byte rawTypeKind)

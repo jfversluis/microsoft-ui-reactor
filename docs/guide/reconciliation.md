@@ -258,18 +258,22 @@ swap forces unmount + mount.
 
 ## Child reconciler — keyed vs positional
 
+The child diff lives in the framework-neutral core (spec 067), generic over the element
+type, the native control type and a renderer host. WinUI runs it with `Element`, `UIElement`
+and a host that forwards to the reconciler.
+
 ```csharp
 internal static void Reconcile(
-    Element[] oldChildren,
-    Element[] newChildren,
-    IChildCollection children,
-    Reconciler reconciler,
+    TElement[] oldChildren,
+    TElement[] newChildren,
+    IChildList<TNative> children,
+    THost host,
     Action requestRerender,
-    UIElement? parentControl = null)
+    TNative? parentControl = null)
 {
-    // Filter out nulls and EmptyElements, keeping each kept child's slot (ChildSlots)
-    var oldFiltered = Filter(oldChildren, out var oldSlots);
-    var newFiltered = Filter(newChildren, out var newSlots);
+    // Filter out nulls and empty elements, keeping each kept child's slot (ChildSlots)
+    var oldFiltered = Filter(oldChildren, host, out var oldSlots);
+    var newFiltered = Filter(newChildren, host, out var newSlots);
 
     bool hasKeys = HasAnyKeys(oldFiltered) || HasAnyKeys(newFiltered);
 
@@ -279,31 +283,24 @@ internal static void Reconcile(
     // appeared, here or at mount, so a stable keyed panel's re-render pays one compare
     // per child (the prefix walk below does the same) rather than a duplicate scan.
     if (hasKeys && newFiltered.Length > 1 && !SameKeys(oldFiltered, newFiltered))
-        KeyedListDiff.ReportDuplicateSiblingKeys(newFiltered, reconciler, parentControl);
-
-    // Spec 042 §6 — read the active Animations.Animate ambient once
-    // per reconcile so insert / move / unmount paths can apply the
-    // same kind without re-reading AsyncLocal for every child. Stays
-    // null in the overwhelmingly common no-ambient case.
-    var ambient = AnimationAmbient.Current;
-    AnimationKind? ambientKind = ambient is { HasEffect: true } ? ambient.Kind : null;
+        host.ReportDuplicateSiblingKeys(newFiltered, parentControl);
 
     // Children that lead to a component which updated its own state. Their elements can be
     // unchanged — a reused instance, a memoized wrapper, a reused children array — and the
     // skip arms below must still descend into them, or the pass never reaches the
     // component. Resolved once here (default when nothing in the pass self-triggered).
-    var dirty = reconciler.ResolveDirtyChildIndices(parentControl, children);
+    var dirty = host.ResolveDirtyChildIndices(parentControl, children);
 
     if (hasKeys)
-        ReconcileKeyed(oldFiltered, newFiltered, children, reconciler, requestRerender, ambientKind, dirty);
+        ReconcileKeyed(oldFiltered, newFiltered, children, host, requestRerender, dirty);
     // The slot walk also steps past controls an earlier pass left playing an exit
     // transition in this collection (they inflate its count); the index walk would pair
     // every later child with the wrong control.
     else if (!ChildSlots.AlignByIndex(oldSlots, oldFiltered.Length, newSlots, newFiltered.Length)
-        || HoldsExitingControls(children, reconciler))
-        ReconcileSlotted(oldFiltered, oldSlots, newFiltered, newSlots, children, reconciler, requestRerender, ambientKind, dirty);
+        || host.HoldsExitingControlIn(children))
+        ReconcileSlotted(oldFiltered, oldSlots, newFiltered, newSlots, children, host, requestRerender, dirty);
     else
-        ReconcilePositional(oldFiltered, newFiltered, children, reconciler, requestRerender, ambientKind, parentControl, dirty);
+        ReconcilePositional(oldFiltered, newFiltered, children, host, requestRerender, parentControl, dirty);
 }
 ```
 
@@ -485,14 +482,8 @@ old element and mounts a new one — the per-row state, focus, and
 animations restart from scratch. Use an immutable identifier.
 
 ```csharp
-public abstract record Element
+public abstract record Element : ReactorElement
 {
-    /// <summary>
-    /// Optional key for stable identity across re-renders (like React's key prop).
-    /// When set, the reconciler uses it to match elements across list reorderings.
-    /// </summary>
-    public string? Key { get; init; }
-
     /// <summary>
     /// Layout modifiers (margin, padding, size, alignment, etc.) applied to this element.
     /// Set via fluent extension methods: TextBlock("hi").Margin(10).Width(200)
@@ -533,16 +524,16 @@ ForEach(items.Select((item, i) => (item, i)),
 
 ```csharp
 internal static void Reconcile(
-    Element[] oldChildren,
-    Element[] newChildren,
-    IChildCollection children,
-    Reconciler reconciler,
+    TElement[] oldChildren,
+    TElement[] newChildren,
+    IChildList<TNative> children,
+    THost host,
     Action requestRerender,
-    UIElement? parentControl = null)
+    TNative? parentControl = null)
 {
-    // Filter out nulls and EmptyElements, keeping each kept child's slot (ChildSlots)
-    var oldFiltered = Filter(oldChildren, out var oldSlots);
-    var newFiltered = Filter(newChildren, out var newSlots);
+    // Filter out nulls and empty elements, keeping each kept child's slot (ChildSlots)
+    var oldFiltered = Filter(oldChildren, host, out var oldSlots);
+    var newFiltered = Filter(newChildren, host, out var newSlots);
 
     bool hasKeys = HasAnyKeys(oldFiltered) || HasAnyKeys(newFiltered);
 
@@ -552,31 +543,24 @@ internal static void Reconcile(
     // appeared, here or at mount, so a stable keyed panel's re-render pays one compare
     // per child (the prefix walk below does the same) rather than a duplicate scan.
     if (hasKeys && newFiltered.Length > 1 && !SameKeys(oldFiltered, newFiltered))
-        KeyedListDiff.ReportDuplicateSiblingKeys(newFiltered, reconciler, parentControl);
-
-    // Spec 042 §6 — read the active Animations.Animate ambient once
-    // per reconcile so insert / move / unmount paths can apply the
-    // same kind without re-reading AsyncLocal for every child. Stays
-    // null in the overwhelmingly common no-ambient case.
-    var ambient = AnimationAmbient.Current;
-    AnimationKind? ambientKind = ambient is { HasEffect: true } ? ambient.Kind : null;
+        host.ReportDuplicateSiblingKeys(newFiltered, parentControl);
 
     // Children that lead to a component which updated its own state. Their elements can be
     // unchanged — a reused instance, a memoized wrapper, a reused children array — and the
     // skip arms below must still descend into them, or the pass never reaches the
     // component. Resolved once here (default when nothing in the pass self-triggered).
-    var dirty = reconciler.ResolveDirtyChildIndices(parentControl, children);
+    var dirty = host.ResolveDirtyChildIndices(parentControl, children);
 
     if (hasKeys)
-        ReconcileKeyed(oldFiltered, newFiltered, children, reconciler, requestRerender, ambientKind, dirty);
+        ReconcileKeyed(oldFiltered, newFiltered, children, host, requestRerender, dirty);
     // The slot walk also steps past controls an earlier pass left playing an exit
     // transition in this collection (they inflate its count); the index walk would pair
     // every later child with the wrong control.
     else if (!ChildSlots.AlignByIndex(oldSlots, oldFiltered.Length, newSlots, newFiltered.Length)
-        || HoldsExitingControls(children, reconciler))
-        ReconcileSlotted(oldFiltered, oldSlots, newFiltered, newSlots, children, reconciler, requestRerender, ambientKind, dirty);
+        || host.HoldsExitingControlIn(children))
+        ReconcileSlotted(oldFiltered, oldSlots, newFiltered, newSlots, children, host, requestRerender, dirty);
     else
-        ReconcilePositional(oldFiltered, newFiltered, children, reconciler, requestRerender, ambientKind, parentControl, dirty);
+        ReconcilePositional(oldFiltered, newFiltered, children, host, requestRerender, parentControl, dirty);
 }
 ```
 
@@ -593,7 +577,8 @@ hash) or skip the key and let positional matching handle it.
 
 **Read `Reconciler.cs` as a routing function, not as the algorithm.**
 The interesting code is in `Reconciler.Mount.cs`,
-`Reconciler.Update.cs`, and `ChildReconciler.cs`. The orchestration
+`Reconciler.Update.cs`, and the child-diff engine in
+`src/Reactor.Core/Engine/ChildReconciler.cs`. The orchestration
 file is short; the per-type handlers are where the patching logic
 lives.
 

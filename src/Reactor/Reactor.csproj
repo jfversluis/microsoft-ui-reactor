@@ -198,6 +198,18 @@
     </ItemGroup>
   </Target>
 
+  <!-- Pin the Microsoft.UI.Reactor.Core dependency to this exact version ([V], not >= V).
+       Reactor.dll binds the core's internals (InternalsVisibleTo), which no version
+       promises to keep, so a newer core resolved beside an older framework would fail at
+       runtime (MissingMethod/TypeLoad) instead of at restore. -->
+  <Target Name="_PinReactorCoreDependency" AfterTargets="_GetProjectReferenceVersions">
+    <ItemGroup>
+      <_ProjectReferencesWithVersions Update="@(_ProjectReferencesWithVersions)"
+                                      Condition="'%(Filename)' == 'Reactor.Core'"
+                                      ProjectVersion="[%(ProjectVersion)]" />
+    </ItemGroup>
+  </Target>
+
   <!-- Pack ReactorApplication.xbf, which WinUI's LoadComponent needs at runtime. A pack-time
        target, because a <None> guarded by Exists() is evaluated before the build creates the
        file. Packed as build output so it lands in the same lib/ folder as Reactor.dll; a

@@ -97,9 +97,18 @@ supplies a host:
 **Performance rule.** The hot paths named in the reconciler map are the LIS scratch buffers, the
 per-leaf state allocation avoidance, pooled rents, cached render delegates and the update fast
 paths. They must not gain interface dispatch or allocations without a `perf-compare` run within
-noise. Shared generic code over reference types uses runtime dictionary lookups; if that shows up,
-WinUI gets a sealed host type and the engine uses constrained calls (`where THost : struct,
-INativeHost<TNative>`), which the JIT specializes.
+noise. Shared generic code over reference types uses runtime dictionary lookups, so the engine takes
+the host as a struct type parameter (`where THost : struct, …`) and the JIT specializes each
+renderer's instantiation, keeping host calls direct.
+
+**As built so far (§9).** The spike applies this to the child diff:
+`ChildReconciler<TElement, TNative, THost>`, with the host contract split into
+`IChildReconcileHost<TElement, TNative>` (mount, update, skip policy, exit transitions, keys,
+ambient animation), `IChildList<TNative>` (today's `IChildCollection`, made generic) and
+`IDirtyPathProbe<TNative>`. The element type is a parameter too, so the engine reads `Key` from
+`ReactorElement` and hands each renderer its own element type without casts. `INativeHost<TNative>`
+above is the union these pieces grow into as step 2 moves the rest of the reconciler; it stays a
+set of narrow interfaces rather than one wide one where that keeps each engine part's host small.
 
 ## 5. The central decision: component anchors
 
@@ -123,7 +132,8 @@ no anchor (phase 0 report, `docs/reports/2026-11-23-phase-0-baselines.md`):
 | iOS simulator | +16% | +17% | +12% |
 
 Android emulator timings varied 6× run to run and are not evidence; a Pixel measurement is pending.
-Anchors cost more than the 10% threshold on every bulk leg, so **option B is recommended**: a
+Anchors cost 9–18% on the bulk legs, above the 10% threshold on five of the six, so **option B is
+recommended**: a
 retained node tree where WinUI keeps `Border` anchors as a host policy and MAUI flattens. The WinUI
 node-tree prototype on the StressPerf legs is the first task of step 2 (§6), and the decision is
 confirmed there. If keying state by managed nodes can't hold WinUI perf, per-native state stays
@@ -133,8 +143,9 @@ behind the host (WinUI's attached DP) and only the component structure is retain
 
 1. **Foundations:** neutral types and the WinUI subclasses; hook storage; the scheduler seam
    (`DispatcherQueue` behind `IRenderScheduler`); context, errors and hot reload.
-2. **Engine:** the generic `Reconciler<TNative>`; `ChildReconciler`, diff hints and slots generic;
-   WinUI orchestration split from WinUI control behavior.
+2. **Engine:** the generic `Reconciler<TNative>`; diff hints generic (the child diff and
+   `ChildSlots` moved in the phase 1 spike, §9); WinUI orchestration split from WinUI control
+   behavior. Starts with the WinUI node-tree prototype that confirms §5's choice.
 3. **Protocol:** `TControl : class`; generic strategies; registry and latches; descriptor core
    versus WinUI DP features.
 4. **Tooling:** analyzers, the wrapper generator, the API index, docs and AOT proofs.
@@ -194,9 +205,29 @@ Seams the spike found, each now guarded:
   depend on whether the core had loaded. Tests that bind against the real `Reactor.dll` reference
   the core too.
 
-Packaging: `release.yml`, the internal pipeline (build, sign, pack), `mur pack-local`, build
-metrics and bootstrap's feed check all carry `Microsoft.UI.Reactor.Core`.
+Packaging: `Microsoft.UI.Reactor.Core` is its own package, and the framework depends on exactly
+its own version (`[V]`, written by `_PinReactorCoreDependency` and checked by `release.yml`),
+because Reactor.dll binds the core's internals. `release.yml`, the internal pipeline (build, sign,
+pack), `mur pack-local`/`clean-local`, build metrics, coverage instrumentation, the integration
+tests' feed, the toolkit package-consumer harness and bootstrap's feed check all carry it.
+Bundling the DLL into the framework's `lib/` (as `Reactor.Wrappers.Abstractions` is) was
+considered: it saves the extra package now, but the MAUI renderer needs the same core in phase 3,
+and two packages each bundling it would put two copies of the same assembly in one app's restore
+graph.
+
+Tests: `NeutralChildReconcilerTests` drives the engine through a fake renderer with no WinUI types
+(keyed rotation by one move, keyed middle replacement, skip, slot-aligned conditional child, and a
+host whose natives carry no key); each fails when the keyed path or the slot walk is disabled.
+`AdvancedInternalSurfaceTests` pins Reactor.Advanced's reach into the core's internals to none.
 
 Not yet checked by the spike and owned by step 4 (§6): analyzers and the source-map generator, which
 match Reactor types by the `Microsoft.UI.Reactor.Core` namespace string; nothing they match has
-moved yet.
+moved yet. Step 4 also indexes the core assembly in `reactor.api.txt` directly, once types such as
+`RenderContext` move with their full names; lifting properties onto `Element` only covers the
+spike's one moved member.
+
+**Open for the phase 1 gate.** `Key` moving to the base breaks one thing a recompile can see:
+`cref="Element.Key"` in a consumer's XML doc comment (CS1574, an error only with warnings as
+errors). A forwarding `new Key` on `Element` would hide it but makes record `ToString()` print `Key`
+twice, so the spike documents the break (CHANGELOG) instead; the gate decides whether that is
+acceptable under the source-compatibility rule.

@@ -76,7 +76,8 @@ public class AnimationBugTests
         var method = typeof(Reconciler).GetMethod("RemoveChildWithExitTransition",
             global::System.Reflection.BindingFlags.NonPublic | global::System.Reflection.BindingFlags.Instance)!;
         var parameters = method.GetParameters();
-        Assert.Equal(typeof(IChildCollection), parameters[0].ParameterType);
+        // The child-collection seam the neutral engine passes (spec 067); IChildCollection derives from it.
+        Assert.Equal(typeof(IChildList<global::Microsoft.UI.Xaml.UIElement>), parameters[0].ParameterType);
         Assert.Equal(typeof(int), parameters[1].ParameterType);
     }
 
@@ -90,8 +91,8 @@ public class AnimationBugTests
             global::System.Reflection.BindingFlags.NonPublic | global::System.Reflection.BindingFlags.Instance);
         var exitMethod = reconcilerMethods.FirstOrDefault(m => m.Name == "RemoveChildWithExitTransition");
         Assert.NotNull(exitMethod);
-        // The method must accept IChildCollection (used by ChildReconciler) as first param
-        Assert.Equal(typeof(IChildCollection), exitMethod!.GetParameters()[0].ParameterType);
+        // The method must accept the child list ChildReconciler passes (IChildList<UIElement>, spec 067)
+        Assert.Equal(typeof(IChildList<global::Microsoft.UI.Xaml.UIElement>), exitMethod!.GetParameters()[0].ParameterType);
     }
 
     [Fact]

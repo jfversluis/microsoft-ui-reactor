@@ -20,7 +20,6 @@ internal static class ChildReconciler
     /// <summary>
     /// Reconciles old and new child element arrays against a Panel's Children collection.
     /// </summary>
-    // <snippet:child-diff>
     internal static void Reconcile(
         Element[] oldChildren,
         Element[] newChildren,
@@ -38,7 +37,6 @@ internal static class ChildReconciler
         ChildReconciler<Element, UIElement, WinUIChildHost>.Reconcile(
             oldChildren, newChildren, children, new WinUIChildHost(reconciler, ambientKind), requestRerender, parentControl);
     }
-    // </snippet:child-diff>
 
     internal static Element[] Filter(Element[] elements, out long[]? slots) =>
         ChildReconciler<Element, UIElement, WinUIChildHost>.Filter(elements, default, out slots);

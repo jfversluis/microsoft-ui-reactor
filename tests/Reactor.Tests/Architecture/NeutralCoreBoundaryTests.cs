@@ -53,7 +53,7 @@ public class NeutralCoreBoundaryTests
     /// <summary>
     /// Engine internals used to live in Reactor.dll, so every assembly with access to Reactor's
     /// internals (tests, hosts, companions) relied on them. The core must grant each of those
-    /// access too, or moving an internal type into it breaks them.
+    /// access too, or moving an internal type into it breaks them, and grant nobody else.
     /// </summary>
     [Fact]
     public void NeutralCore_GrantsInternalsToEveryAssemblyReactorDoes()
@@ -68,7 +68,8 @@ public class NeutralCoreBoundaryTests
         var core = Grants("src/Reactor.Core/Reactor.Core.csproj");
 
         Assert.NotEmpty(reactor);
-        Assert.Contains("Reactor", core);
-        Assert.Empty(reactor.Except(core));
+        // Exactly Reactor's grants plus Reactor itself: a missing one breaks an assembly that
+        // used engine internals, and an extra one widens the core's internals unreviewed.
+        Assert.Equal(reactor.Append("Reactor").Order(global::System.StringComparer.Ordinal), core.Order(global::System.StringComparer.Ordinal));
     }
 }

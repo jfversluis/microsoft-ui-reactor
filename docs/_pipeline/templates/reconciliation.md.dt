@@ -172,7 +172,11 @@ swap forces unmount + mount.
 
 ## Child reconciler — keyed vs positional
 
-```csharp snippet="source:src/Reactor/Core/ChildReconciler.cs#child-diff"
+The child diff lives in the framework-neutral core (spec 067), generic over the element
+type, the native control type and a renderer host. WinUI runs it with `Element`, `UIElement`
+and a host that forwards to the reconciler.
+
+```csharp snippet="source:src/Reactor.Core/Engine/ChildReconciler.cs#child-diff"
 ```
 
 A panel's `Children` is just a list. Diffing two lists isn't free; the
@@ -369,7 +373,7 @@ ForEach(items.Select((item, i) => (item, i)),
         x => Card(x.item).WithKey(x.i.ToString()))
 ```
 
-```csharp snippet="source:src/Reactor/Core/ChildReconciler.cs#child-diff"
+```csharp snippet="source:src/Reactor.Core/Engine/ChildReconciler.cs#child-diff"
 ```
 
 An index-based key matches positions across renders, which is exactly
@@ -385,7 +389,8 @@ hash) or skip the key and let positional matching handle it.
 
 **Read `Reconciler.cs` as a routing function, not as the algorithm.**
 The interesting code is in `Reconciler.Mount.cs`,
-`Reconciler.Update.cs`, and `ChildReconciler.cs`. The orchestration
+`Reconciler.Update.cs`, and the child-diff engine in
+`src/Reactor.Core/Engine/ChildReconciler.cs`. The orchestration
 file is short; the per-type handlers are where the patching logic
 lives.
 

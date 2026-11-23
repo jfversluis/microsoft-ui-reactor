@@ -69,14 +69,14 @@ Conventions for contributors:
 
 ### Changed
 
-- **`Microsoft.UI.Reactor` now depends on a new `Microsoft.UI.Reactor.Core` package (spec 067).**
-  It is the framework-neutral core that the WinUI and MAUI renderers will share. This first stage
-  moves element identity and the keyed child-reconciliation engine into it: `Element` now derives
-  from `Microsoft.UI.Reactor.Core.ReactorElement`, which declares `Key`. Apps recompile unchanged,
-  and NuGet restores the new package with the framework. One edge: an XML doc comment written as
-  `cref="Element.Key"` no longer resolves (CS1574); write `cref="ReactorElement.Key"`. An offline
-  feed needs `Microsoft.UI.Reactor.Core.<version>.nupkg` next to the framework package; `mur
-  pack-local` and the release assets include it.
+- **`Microsoft.UI.Reactor` now depends on a new `Microsoft.UI.Reactor.Core` package (spec 067).** It
+  is the framework-neutral core that the WinUI and MAUI renderers will share. This first stage moves
+  element identity and the keyed child-reconciliation engine into it: `Element` now derives from
+  `Microsoft.UI.Reactor.Core.ReactorElement`, which declares `Key`. Apps recompile unchanged, and
+  NuGet restores the new package with the framework, pinned to exactly the same version. One edge:
+  an XML doc comment written as `cref="Element.Key"` no longer resolves (CS1574); write
+  `cref="ReactorElement.Key"`. An offline feed needs `Microsoft.UI.Reactor.Core.<version>.nupkg`
+  next to the framework package; `mur pack-local` and the release assets include it.
 
 - Opt-in Markdown text selection supports double-click to select a word and
   triple-click to select a text surface, including drag extension by either unit.

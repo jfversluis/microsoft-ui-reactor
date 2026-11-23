@@ -33,6 +33,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
     /// <summary>
     /// Reconciles old and new child element arrays against a container's live children.
     /// </summary>
+    // <snippet:child-diff>
     internal static void Reconcile(
         TElement[] oldChildren,
         TElement[] newChildren,
@@ -72,6 +73,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
         else
             ReconcilePositional(oldFiltered, newFiltered, children, host, requestRerender, parentControl, dirty);
     }
+    // </snippet:child-diff>
 
     /// <summary>
     /// Unkeyed reconciliation when a conditional child (null / an empty element / a resized

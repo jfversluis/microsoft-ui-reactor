@@ -65,6 +65,9 @@ public class RuleTargetResolutionTests
         // main assembly works as the load anchor; AsyncValue is small,
         // dependency-free, and unlikely to be retired.
         _ = typeof(Microsoft.UI.Reactor.Core.AsyncValue<int>).Assembly;
+        // Element derives from the neutral core's ReactorElement (spec 067), so binding any
+        // element member needs that assembly too, and nothing above forces it to load.
+        _ = typeof(Microsoft.UI.Reactor.Core.ReactorElement).Assembly;
 
         var refs = new List<MetadataReference>();
         foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())

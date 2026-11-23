@@ -22,6 +22,12 @@ if ($LASTEXITCODE) { throw 'Reactor restore failed; see restore.log.' }
 & dotnet pack $reactor --no-restore -c Release -p:Platform=x64 -p:SkipSignaturesGen=true `
     "-p:Version=$version" -o $feed -m:1 -nr:false --verbosity quiet *> (Join-Path $destinationPath 'pack.log')
 if ($LASTEXITCODE) { throw 'Reactor pack failed; see pack.log.' }
+# Microsoft.UI.Reactor depends on the neutral core (spec 067) at the same version; only this feed has it.
+& dotnet pack (Join-Path $repo 'src\Reactor.Core\Reactor.Core.csproj') --no-restore -c Release `
+    "-p:Version=$version" -o $feed -m:1 -nr:false --verbosity quiet *> (Join-Path $destinationPath 'pack-core.log')
+if ($LASTEXITCODE) { throw 'Reactor.Core pack failed; see pack-core.log.' }
+$corePackagePath = Join-Path $feed "Microsoft.UI.Reactor.Core.$version.nupkg"
+if (-not (Test-Path $corePackagePath)) { throw "Missing $corePackagePath" }
 
 $packagePath = Join-Path $feed "Microsoft.UI.Reactor.$version.nupkg"
 $archive = [IO.Compression.ZipFile]::OpenRead($packagePath)
@@ -111,6 +117,7 @@ $nuget.Save((Join-Path $destinationPath 'NuGet.Config'))
     dirty = @(& git -C $repo status --short)
     packageVersion = $version
     packageSha256 = (Get-FileHash $packagePath -Algorithm SHA256).Hash
+    corePackageSha256 = (Get-FileHash $corePackagePath -Algorithm SHA256).Hash
     reactorAssemblySha256 = $reactorAssemblyHash
     sampleMappingsSha256 = (Get-FileHash (Join-Path $sample 'WctControls.cs') -Algorithm SHA256).Hash
     project = $projectPath
