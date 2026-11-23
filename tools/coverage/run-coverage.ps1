@@ -78,7 +78,7 @@ if ($UnitOnly) {
   # Spec 062 Track B moved charting/docking/markdown/data-grid into Reactor.Advanced.dll,
   # so it is instrumented alongside core — otherwise the selftest leg contributes no
   # coverage for those subsystems.
-  foreach ($dllName in @('Reactor.dll', 'Reactor.Advanced.dll')) {
+  foreach ($dllName in @('Reactor.dll', 'Reactor.Advanced.dll', 'Microsoft.UI.Reactor.Core.dll')) {
     $dll = Get-ChildItem -Path "tests/Reactor.AppTests.Host/bin" -Recurse -Filter $dllName |
              Where-Object { $_.FullName -notmatch 'ref[\\/]' } |
              Select-Object -First 1

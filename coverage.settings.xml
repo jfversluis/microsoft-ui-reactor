@@ -14,6 +14,9 @@
              report silently stops measuring them and the headline percentage drops even
              though nothing regressed. -->
         <ModulePath>.*[/\\]Reactor\.Advanced\.dll$</ModulePath>
+        <!-- Spec 067: the framework-neutral core holds engine code (the keyed child
+             reconciler first) that used to live in Reactor.dll; same reason as above. -->
+        <ModulePath>.*[/\\]Microsoft\.UI\.Reactor\.Core\.dll$</ModulePath>
       </Include>
     </ModulePaths>
     <Sources>

@@ -20,6 +20,7 @@ public class CleanLocalCommandTests
     public void PackageIds_ContainsExpectedEntries()
     {
         Assert.Contains("microsoft.ui.reactor", CleanLocalCommand.PackageIds);
+        Assert.Contains("microsoft.ui.reactor.core", CleanLocalCommand.PackageIds);
         Assert.Contains("microsoft.ui.reactor.projecttemplates", CleanLocalCommand.PackageIds);
     }
 }

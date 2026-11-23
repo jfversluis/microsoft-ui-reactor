@@ -93,6 +93,14 @@ $targets = @(
         PackageId = 'Microsoft.UI.Reactor'
         ExtraArgs = @()
     }
+    # The neutral core (spec 067) holds engine code that used to live in Reactor.dll, so a
+    # framework-size comparison is only honest with it tracked beside Reactor.
+    [pscustomobject]@{
+        PkgKey = 'Core'; PkgLabel = 'Microsoft.UI.Reactor.Core.nupkg'
+        Project = 'src/Reactor.Core/Reactor.Core.csproj'
+        PackageId = 'Microsoft.UI.Reactor.Core'
+        ExtraArgs = @('-p:Platform=AnyCPU')
+    }
     [pscustomobject]@{
         PkgKey = 'Advanced'; PkgLabel = 'Microsoft.UI.Reactor.Advanced.nupkg'
         Project = 'src/Reactor.Advanced/Reactor.Advanced.csproj'

@@ -1,12 +1,9 @@
 # Microsoft.UI.Reactor.Core
 
-The renderer-neutral core of Reactor: immutable element records, components with React-style
-hooks (`UseState`, `UseReducer`, `UseEffect`, `UseMemo`, `UseCallback`, `UseRef`), keyed
-reconciliation, and batched re-rendering.
+The framework-neutral core of Reactor (spec 067), shared by the WinUI renderer
+(`Microsoft.UI.Reactor`) and, as spec 067 lands, the .NET MAUI renderer. It references no UI
+framework. It holds element identity (`ReactorElement`, which carries `Key`) and the keyed
+child-reconciliation engine; components, hooks and the rest of the engine move here in later
+stages of spec 067.
 
-It has no UI framework dependency. A renderer supplies one handler per element type and a
-scheduler for its UI thread; the core owns component state, identity, ordering and lifetime.
-
-You normally consume this package through a renderer, such as
-[`Microsoft.UI.Reactor.Maui`](https://www.nuget.org/packages/Microsoft.UI.Reactor.Maui) for .NET MAUI.
-Design notes: [spec 065](https://github.com/microsoft/microsoft-ui-reactor/blob/main/docs/specs/065-maui-renderer.md).
+You don't reference this package directly; a renderer brings it in.

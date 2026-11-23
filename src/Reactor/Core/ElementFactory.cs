@@ -228,7 +228,7 @@ public sealed partial class ElementFactory<T> : IElementFactory, IContextCapturi
     /// <para><c>keyed</c> is true on the spec-042 <see cref="ReactorRow"/>
     /// path, where <paramref name="key"/> is the author's <c>keySelector</c>
     /// projection (a stable per-item identity). When set, the projection is
-    /// propagated to the row's top-level <see cref="Element.Key"/> — see
+    /// propagated to the row's top-level <see cref="ReactorElement.Key"/> — see
     /// <see cref="ApplyItemIdentityKey"/> (issue #326). It is false on the
     /// legacy int-index path, where the "key" is just the realized index and
     /// propagating it would force a control swap on every scroll.</para>
@@ -278,7 +278,7 @@ public sealed partial class ElementFactory<T> : IElementFactory, IContextCapturi
 
     /// <summary>
     /// Issue #326 — propagate the author's per-item <c>keySelector</c>
-    /// projection onto the row's top-level <see cref="Element.Key"/> so the
+    /// projection onto the row's top-level <see cref="ReactorElement.Key"/> so the
     /// recycle-on-reuse <see cref="Reconciler.Reconcile"/> path (see
     /// <see cref="GetElement"/>) observes a different key when a realized
     /// container is reused for a <em>different</em> logical item. That flips
@@ -291,7 +291,7 @@ public sealed partial class ElementFactory<T> : IElementFactory, IContextCapturi
     ///
     /// <para>An explicit author-supplied key (<c>row.WithKey(...)</c> inside
     /// the row builder) always wins: it is only applied when the built row's
-    /// <see cref="Element.Key"/> is still null. Same-item re-renders
+    /// <see cref="ReactorElement.Key"/> is still null. Same-item re-renders
     /// (RefreshRealizedItems) keep the same key on both old and new elements,
     /// so <see cref="Reconciler.CanUpdate"/> stays true and the row diffs in
     /// place — state is preserved exactly when the logical item is unchanged.</para>

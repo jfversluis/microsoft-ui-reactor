@@ -15,23 +15,24 @@ model targets Android, iOS, Mac Catalyst and Windows through MAUI.
 |---|---|---|
 | Architecture | A renderer-neutral core plus one renderer per UI framework, as React splits `react-reconciler` from `react-dom` | The hooks, diffing and scheduling are the product; the target framework is a detail. |
 | Renderer strategy | **Hybrid.** Direct views (MAUI Core interfaces, no Controls layer) for primitives and layouts; Controls for `CollectionView`, Shell, navigation and third-party controls | §4: direct is 27–58% faster on bulk work, but Controls owns virtualization, Shell and the ecosystem. |
-| Location | This repo, as `src/Reactor.Core` and `src/Reactor.Maui` with their own solution (`Reactor.Maui.slnx`) and CI (`.github/workflows/maui.yml`, macOS) | Keeps the WinUI build and pipelines untouched while sharing the repo. |
-| WinUI convergence | **Later**, as a separate project, once both renderers have proven the core's seams | Moving the 9,000-line WinUI reconciler is the riskiest step; a core designed from one consumer gets its seams wrong. |
-| Names | `Microsoft.UI.Reactor.Core` and `Microsoft.UI.Reactor.Maui` (packages, assemblies and namespaces) | Component code stays source-compatible with WinUI Reactor. Renaming later is mechanical. |
+| Location | This repo, as `src/Reactor.Maui.Core` (transitional) and `src/Reactor.Maui` with their own solution (`Reactor.Maui.slnx`) and CI (`.github/workflows/maui.yml`, macOS) | Keeps the WinUI build and pipelines untouched while sharing the repo. |
+| WinUI convergence | Superseded by spec 067, which extracts the shared core from the WinUI engine and re-hosts this renderer on it | Originally deferred: moving the 9,000-line WinUI reconciler is the riskiest step; a core designed from one consumer gets its seams wrong. |
+| Names | `Microsoft.UI.Reactor.Maui` plus a transitional core, `Microsoft.UI.Reactor.Maui.Core` (namespace `Microsoft.UI.Reactor.Core`) | Spec 067 extracts the shared `Microsoft.UI.Reactor.Core` from the WinUI engine; the transitional core is deleted once the MAUI renderer is re-hosted on it. |
 
 ## 3. Layout
 
 | Project | Target | Role |
 |---|---|---|
-| `src/Reactor.Core` | `net10.0` | Renderer-neutral core: `Element`, `Component`, hooks, keyed reconciler, batched scheduler, handler contract. No UI framework reference. |
+| `src/Reactor.Maui.Core` | `net10.0` | Transitional renderer-neutral core (spec 067 replaces it): `Element`, `Component`, hooks, keyed reconciler, batched scheduler, handler contract. No UI framework reference. |
 | `src/Reactor.Maui` | `net11.0` + `-android/-ios/-maccatalyst/-windows` | MAUI element records, both renderers (§4), `ReactorPage`. The plain `net11.0` target exists for headless tests. |
-| `tests/Reactor.Core.Tests` | `net10.0` | Headless core tests against an in-memory fake renderer. |
+| `tests/Reactor.Maui.Core.Tests` | `net10.0` | Headless core tests against an in-memory fake renderer. |
 | `tests/Reactor.Maui.Tests` | `net11.0` | Headless renderer tests: real Controls objects and direct views, no platform handlers. |
 | `tests/Reactor.Maui.DeviceTests` | MAUI app | Device tier: fixtures that mount trees through the real platform handlers, act like the platform (taps, typing, back button, modal dismissal, tab selection) and check what the native views show. Prints TAP; `run.sh maccatalyst\|ios\|android`. |
 | `tests/Reactor.Maui.Benchmark` | MAUI app | Renders the same tree through both renderers and reports timings and allocations. |
 | `samples/maui/Reactor.Maui.Sample` | MAUI app | Gallery: tabs, a navigation stack held in state, counter, background-timer effect, keyed todo list, value controls, a `CollectionView`, the app hooks. `REACTOR_RENDERER=direct` switches renderer; `REACTOR_SAMPLE_ROUTE=<demo>` opens a demo at startup. |
 
-`Reactor.Core` targets `net10.0` so the WinUI renderer (`net10.0-windows`) can consume it later.
+`Reactor.Maui.Core` targets `net10.0` and references no UI framework. It is transitional: spec 067's
+`Microsoft.UI.Reactor.Core` (`src/Reactor.Core`), extracted from the WinUI engine, replaces it.
 The MAUI projects target `net11.0` because that is what the MAUI workload ships for SDK 11.
 They inherit the repo-root MSBuild settings; `Directory.Packages.props` pins
 `Microsoft.Maui.Controls` to the installed workload's `$(MauiVersion)`, and `samples/maui/`
@@ -39,7 +40,7 @@ chains straight to the root props to skip the WinUI-specific sample wiring.
 
 ```bash
 dotnet restore Reactor.Maui.slnx -p:Configuration=Release
-dotnet test tests/Reactor.Core.Tests --no-restore -c Release
+dotnet test tests/Reactor.Maui.Core.Tests --no-restore -c Release
 dotnet test tests/Reactor.Maui.Tests --no-restore -c Release
 dotnet build Reactor.Maui.slnx --no-restore -c Release
 
@@ -59,7 +60,7 @@ open --stderr /tmp/bench.log "tests/Reactor.Maui.Benchmark/bin/Release/net11.0-m
 
 ## 4. Two renderers: Controls and direct
 
-Both renderers consume the same element records and the same `Reactor.Core`; only the
+Both renderers consume the same element records and the same `Reactor.Maui.Core`; only the
 handler registry differs.
 
 - **Controls renderer** (`Handlers/MauiHandlers.cs`). Reactor handlers create and update
@@ -138,7 +139,7 @@ outstanding JNI global references, which is worth investigating separately.
 
 ```mermaid
 flowchart LR
-  subgraph Core["Reactor.Core (no UI framework)"]
+  subgraph Core["Reactor.Maui.Core (no UI framework)"]
     C[Component + hooks] --> R[ReactorRoot<br/>retained node tree,<br/>keyed diff, batching, effects]
     R --> H[IElementHandler contract]
     R --> S[IRenderScheduler]
@@ -172,7 +173,7 @@ Design choices that differ from today's WinUI Reactor, and why:
 
 ## 6. What has been proven
 
-**Core, headless** (`tests/Reactor.Core.Tests`, 44 tests). Mounting through components and
+**Core, headless** (`tests/Reactor.Maui.Core.Tests`, 44 tests). Mounting through components and
 groups. A keyed reorder keeps component state *and* the same native controls. Removal unmounts
 and runs effect cleanups. Duplicate keys fail loudly, and changing the root's key remounts it.
 Setters are batched into one posted flush, across components, and hosts are re-synced only after

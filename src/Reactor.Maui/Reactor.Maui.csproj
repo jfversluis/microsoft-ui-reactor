@@ -48,7 +48,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Reactor.Core\Reactor.Core.csproj" />
+    <ProjectReference Include="..\Reactor.Maui.Core\Reactor.Maui.Core.csproj" />
   </ItemGroup>
 
 </Project>

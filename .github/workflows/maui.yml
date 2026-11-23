@@ -6,10 +6,10 @@ name: MAUI
 on:
   pull_request:
     paths: &maui-paths
-      - 'src/Reactor.Core/**'
+      - 'src/Reactor.Maui.Core/**'
       - 'src/Reactor.Maui/**'
       - 'src/Reactor.Maui.Packaging.props'
-      - 'tests/Reactor.Core.Tests/**'
+      - 'tests/Reactor.Maui.Core.Tests/**'
       - 'tests/Reactor.Maui.Tests/**'
       - 'tests/Reactor.Maui.Benchmark/**'
       - 'tests/Reactor.Maui.DeviceTests/**'
@@ -77,7 +77,7 @@ jobs:
         run: dotnet restore Reactor.Maui.slnx -p:Configuration=Release
 
       - name: Core tests
-        run: dotnet test tests/Reactor.Core.Tests/Reactor.Core.Tests.csproj --no-restore -c Release
+        run: dotnet test tests/Reactor.Maui.Core.Tests/Reactor.Maui.Core.Tests.csproj --no-restore -c Release
 
       - name: Headless renderer tests
         run: dotnet test tests/Reactor.Maui.Tests/Reactor.Maui.Tests.csproj --no-restore -c Release
@@ -87,7 +87,7 @@ jobs:
 
       - name: Pack
         run: |
-          dotnet pack src/Reactor.Core/Reactor.Core.csproj --no-restore -c Release -o artifacts/packages
+          dotnet pack src/Reactor.Maui.Core/Reactor.Maui.Core.csproj --no-restore -c Release -o artifacts/packages
           dotnet pack src/Reactor.Maui/Reactor.Maui.csproj --no-restore -c Release -o artifacts/packages
 
       - name: Upload packages

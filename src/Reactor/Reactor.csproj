@@ -155,6 +155,10 @@
          Because PrivateAssets blocks transitive flow, the in-repo consumers that
          author/run the generator (AppTests.Host, WctControls, Reactor.Tests)
          reference this project directly. -->
+    <!-- The framework-neutral core (spec 067). Its types are part of this assembly's public API
+         (Element derives from ReactorElement), so it flows to consumers: in-repo through this
+         reference, and as a package dependency on Microsoft.UI.Reactor.Core. -->
+    <ProjectReference Include="..\Reactor.Core\Reactor.Core.csproj" />
     <ProjectReference Include="..\Reactor.Wrappers.Abstractions\Reactor.Wrappers.Abstractions.csproj"
                       PrivateAssets="all" />
     <ProjectReference Include="..\Reactor.Analyzers\Reactor.Analyzers.csproj"
@@ -191,6 +195,18 @@
     <ItemGroup>
       <BuildOutputInPackage Include="$(TargetDir)Reactor.Wrappers.Abstractions.dll"
                             Condition="Exists('$(TargetDir)Reactor.Wrappers.Abstractions.dll')" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Pin the Microsoft.UI.Reactor.Core dependency to this exact version ([V], not >= V).
+       Reactor.dll binds the core's internals (InternalsVisibleTo), which no version
+       promises to keep, so a newer core resolved beside an older framework would fail at
+       runtime (MissingMethod/TypeLoad) instead of at restore. -->
+  <Target Name="_PinReactorCoreDependency" AfterTargets="_GetProjectReferenceVersions">
+    <ItemGroup>
+      <_ProjectReferencesWithVersions Update="@(_ProjectReferencesWithVersions)"
+                                      Condition="'%(Filename)' == 'Reactor.Core'"
+                                      ProjectVersion="[%(ProjectVersion)]" />
     </ItemGroup>
   </Target>
 

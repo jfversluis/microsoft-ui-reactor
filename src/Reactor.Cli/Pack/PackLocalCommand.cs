@@ -48,6 +48,8 @@ public static class PackLocalCommand
         // when `mur pack-local` reports success but the consumer keeps resolving stale.
         foreach (var stale in Directory.EnumerateFiles(feed, $"Microsoft.UI.Reactor.{version}.*nupkg"))
             DeleteStaleNupkg(stale);
+        foreach (var stale in Directory.EnumerateFiles(feed, $"Microsoft.UI.Reactor.Core.{version}.*nupkg"))
+            DeleteStaleNupkg(stale);
         foreach (var stale in Directory.EnumerateFiles(feed, $"Microsoft.UI.Reactor.Advanced.{version}.*nupkg"))
             DeleteStaleNupkg(stale);
         foreach (var stale in Directory.EnumerateFiles(feed, $"Microsoft.UI.Reactor.Devtools.{version}.*nupkg"))
@@ -61,16 +63,26 @@ public static class PackLocalCommand
             _ => null,
         };
 
-        // 1. Framework — Microsoft.UI.Reactor.<version>.nupkg
+        // 1. Neutral core — Microsoft.UI.Reactor.Core.<version>.nupkg (spec 067). The framework
+        // package depends on it at the same version, so a feed without it fails restore.
+        Console.WriteLine($"Packing Microsoft.UI.Reactor.Core {version} → {feed}");
+        var rc = RunPack(repoRoot, Path.Join("src", "Reactor.Core", "Reactor.Core.csproj"), configuration, version, feed, arch);
+        if (rc != 0)
+        {
+            Console.Error.WriteLine("core pack failed.");
+            return rc;
+        }
+
+        // 2. Framework — Microsoft.UI.Reactor.<version>.nupkg
         Console.WriteLine($"Packing Microsoft.UI.Reactor {version} → {feed}");
-        var rc = RunPack(repoRoot, Path.Combine("src", "Reactor", "Reactor.csproj"), configuration, version, feed, arch);
+        rc = RunPack(repoRoot, Path.Combine("src", "Reactor", "Reactor.csproj"), configuration, version, feed, arch);
         if (rc != 0)
         {
             Console.Error.WriteLine("pack failed.");
             return rc;
         }
 
-        // 2. Advanced components — Microsoft.UI.Reactor.Advanced.<version>.nupkg
+        // 3. Advanced components — Microsoft.UI.Reactor.Advanced.<version>.nupkg
         Console.WriteLine($"Packing Microsoft.UI.Reactor.Advanced {version} → {feed}");
         rc = RunPack(repoRoot, Path.Join("src", "Reactor.Advanced", "Reactor.Advanced.csproj"), configuration, version, feed, arch);
         if (rc != 0)
@@ -79,7 +91,7 @@ public static class PackLocalCommand
             return rc;
         }
 
-        // 3. Devtools host — Microsoft.UI.Reactor.Devtools.<version>.nupkg.
+        // 4. Devtools host — Microsoft.UI.Reactor.Devtools.<version>.nupkg.
         // Referenced by the scaffolded `dotnet new reactorapp` csproj in a Debug-only
         // ItemGroup so the devtools menu (and the Reactor VS embedded-preview extension)
         // works against this feed without falling through to NuGet.org.
@@ -134,6 +146,7 @@ public static class PackLocalCommand
             foreach (var packageId in new[]
                 {
                     "microsoft.ui.reactor",
+                    "microsoft.ui.reactor.core",
                     "microsoft.ui.reactor.advanced",
                     "microsoft.ui.reactor.devtools",
                 })

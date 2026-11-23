@@ -110,14 +110,8 @@ The element record itself isn't pooled — only the realized WinUI
 control on the other side:
 
 ```csharp
-public abstract record Element
+public abstract record Element : ReactorElement
 {
-    /// <summary>
-    /// Optional key for stable identity across re-renders (like React's key prop).
-    /// When set, the reconciler uses it to match elements across list reorderings.
-    /// </summary>
-    public string? Key { get; init; }
-
     /// <summary>
     /// Layout modifiers (margin, padding, size, alignment, etc.) applied to this element.
     /// Set via fluent extension methods: TextBlock("hi").Margin(10).Width(200)

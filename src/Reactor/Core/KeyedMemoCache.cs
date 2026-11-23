@@ -80,7 +80,7 @@ internal sealed class KeyedMemoCache
     /// <param name="memo">The opt-in keyed memo wrapper to resolve.</param>
     /// <param name="identityKey">
     /// When non-null, the stable per-item key to stamp onto a freshly-built inner element whose
-    /// own <see cref="Element.Key"/> is still null — preserves the issue #326 recycle-on-reuse
+    /// own <see cref="ReactorElement.Key"/> is still null — preserves the issue #326 recycle-on-reuse
     /// remount semantics on the keyed <c>ReactorRow</c> path. Pass null on the legacy int-index
     /// path where stamping a key would force a control swap on every scroll.
     /// </param>

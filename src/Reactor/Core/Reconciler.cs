@@ -29,7 +29,7 @@ namespace Microsoft.UI.Reactor.Core;
 ///   - Reconciler.Mount.cs     — Mount() dispatch + per-control MountXxx methods
 ///   - Reconciler.Update.cs    — Update() dispatch + per-control UpdateXxx methods
 /// </summary>
-public sealed partial class Reconciler : IDisposable
+public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
 {
     private readonly Dictionary<UIElement, ComponentNode> _componentNodes = new();
     private readonly Dictionary<UIElement, ErrorBoundaryNode> _errorBoundaryNodes = new();
@@ -772,7 +772,7 @@ public sealed partial class Reconciler : IDisposable
     /// <c>GridView&lt;T&gt;</c>, <c>FlipView&lt;T&gt;</c>) and stamps the item's <c>KeySelector</c>
     /// key onto it, as <c>VirtualList</c> / <c>LazyVStack</c> rows already are (issue #326), so
     /// the realized row carries its key for diagnostics (<c>key=</c> in its published
-    /// <c>ReactorSource</c>, <see cref="Element.Key"/> on its element tag). A ListView / GridView
+    /// <c>ReactorSource</c>, <see cref="ReactorElement.Key"/> on its element tag). A ListView / GridView
     /// container follows its item through the keyed collection diff, so the stamped key matches
     /// across updates. An author's own <c>.WithKey(...)</c> on the row wins.
     /// </summary>
@@ -1421,6 +1421,8 @@ public sealed partial class Reconciler : IDisposable
     internal bool IsOnDirtyAncestorPath(UIElement? control) =>
         control is not null && _dirtyAncestorPath is { } set && set.Contains(control);
 
+    bool IDirtyPathProbe<UIElement>.IsOnDirtyAncestorPath(UIElement control) => IsOnDirtyAncestorPath(control);
+
     // For each control on the dirty-ancestor path, the child (a UIElement) or children (a
     // List<UIElement>, when two self-triggered nodes share an ancestor) the path continues
     // through. Built by the same walk as _dirtyAncestorPath and cleared with it. It lets
@@ -1437,12 +1439,12 @@ public sealed partial class Reconciler : IDisposable
     /// <remarks>
     /// Costs one field check when nothing in the pass self-triggered, and one hash lookup when
     /// something did but this container is not above it. Otherwise each dirty child is located
-    /// with a single <see cref="IChildCollection.IndexOf"/>. When a dirty child can't be located
+    /// with a single <see cref="IChildList{TNative}.IndexOf"/>. When a dirty child can't be located
     /// in <paramref name="children"/> (a descriptor whose collection is not the parent's own
     /// <c>Children</c>), or the parent is unknown, the result asks the caller to test each
     /// skip-eligible child's control instead: slower, but it never skips a pending component.
     /// </remarks>
-    internal DirtyChildIndices ResolveDirtyChildIndices(UIElement? parentControl, IChildCollection children)
+    internal DirtyChildIndices ResolveDirtyChildIndices(UIElement? parentControl, IChildList<UIElement> children)
     {
         if (_dirtyAncestorPath is not { Count: > 0 } path)
             return default;
@@ -2003,7 +2005,7 @@ public sealed partial class Reconciler : IDisposable
     ///     part of the gate.
     ///   </item>
     ///   <item>
-    ///     <b>Keyed child reconciliation</b> — <see cref="Element.Key"/>.
+    ///     <b>Keyed child reconciliation</b> — <see cref="ReactorElement.Key"/>.
     ///     <see cref="ChildReconciler"/> reads the child's tag to extract the
     ///     stable key during keyed reorders (see <c>ChildReconciler.cs:303</c>
     ///     and <c>:392</c>). A keyed callback-free element (e.g.
@@ -4950,7 +4952,7 @@ public sealed partial class Reconciler : IDisposable
     /// reading every child: each projected read is a WinRT call that allocates, and an exit
     /// playing in one panel would otherwise tax every keyed panel the reconciler visits.
     /// </summary>
-    internal bool HoldsExitingControlIn(IChildCollection children)
+    internal bool HoldsExitingControlIn(IChildList<UIElement> children)
     {
         if (_exitingControls is not { Count: > 0 } exiting) return false;
         if (exiting.Count <= ExitProbeLimit)
@@ -4982,7 +4984,7 @@ public sealed partial class Reconciler : IDisposable
     /// If the child has an ElementTransition with an exit side, the removal is deferred
     /// until the exit animation completes. Otherwise, immediate removal.
     /// </summary>
-    internal void RemoveChildWithExitTransition(IChildCollection children, int index)
+    internal void RemoveChildWithExitTransition(IChildList<UIElement> children, int index)
     {
         var control = children.Get(index);
         var transition = FindMountedElementValue(control, static element => element.ElementTransition);
@@ -5083,7 +5085,7 @@ public sealed partial class Reconciler : IDisposable
     /// and the old child animates out then gets removed. Otherwise, immediate replace.
     /// Returns true when the old child was re-inserted after the new one to play its exit.
     /// </summary>
-    internal bool ReplaceChildWithExitTransition(IChildCollection children, int index, UIElement newControl)
+    internal bool ReplaceChildWithExitTransition(IChildList<UIElement> children, int index, UIElement newControl)
     {
         var oldControl = children.Get(index);
         var transition = FindMountedElementValue(oldControl, static element => element.ElementTransition);

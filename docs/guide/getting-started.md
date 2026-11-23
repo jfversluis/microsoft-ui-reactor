@@ -314,6 +314,7 @@ your working tree instead of the published package.
 mur pack-local
 # Produces:
 #   local-nupkgs/Microsoft.UI.Reactor.0.0.0-local.nupkg
+#   local-nupkgs/Microsoft.UI.Reactor.Core.0.0.0-local.nupkg
 #   local-nupkgs/Microsoft.UI.Reactor.Advanced.0.0.0-local.nupkg
 #   local-nupkgs/Microsoft.UI.Reactor.Devtools.0.0.0-local.nupkg
 ```

@@ -60,6 +60,7 @@ $script:BuildMetricsNoiseFloorPct   = 0.05
 # their own — no per-DLL list is hard-coded here.
 $script:BuildMetricsPackageSpec = @(
     [pscustomobject]@{ PkgKey = 'Reactor';  PkgLabel = 'Microsoft.UI.Reactor.nupkg';          PackageGroup = 'Packages (compressed .nupkg)'; AssemblyGroup = 'Assemblies in Microsoft.UI.Reactor' }
+    [pscustomobject]@{ PkgKey = 'Core';     PkgLabel = 'Microsoft.UI.Reactor.Core.nupkg';     PackageGroup = 'Packages (compressed .nupkg)'; AssemblyGroup = 'Assemblies in Microsoft.UI.Reactor.Core' }
     [pscustomobject]@{ PkgKey = 'Advanced'; PkgLabel = 'Microsoft.UI.Reactor.Advanced.nupkg'; PackageGroup = 'Packages (compressed .nupkg)'; AssemblyGroup = 'Assemblies in Microsoft.UI.Reactor.Advanced' }
     [pscustomobject]@{ PkgKey = 'Devtools'; PkgLabel = 'Microsoft.UI.Reactor.Devtools.nupkg'; PackageGroup = 'Packages (compressed .nupkg)'; AssemblyGroup = 'Assemblies in Microsoft.UI.Reactor.Devtools' }
 )
