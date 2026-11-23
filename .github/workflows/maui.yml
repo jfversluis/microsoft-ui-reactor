@@ -35,7 +35,7 @@ permissions:
 jobs:
   build-and-test:
     name: Build and test (macOS)
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,15 +48,21 @@ jobs:
             10.0.x
             11.0.x
 
-      - name: Select the newest Xcode
-        # The iOS and Mac Catalyst workloads require a recent Xcode; the runner's default lags.
-        run: |
-          xcode=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
-          echo "Using $xcode"
-          sudo xcode-select -s "$xcode"
-
       - name: Install the maui workload
         run: dotnet workload install maui
+
+      - name: Select the Xcode the workload requires
+        # Each Apple workload pins an exact Xcode (Microsoft.MacCatalyst.Sdk.net11.0_27.2 needs
+        # Xcode 27.2); the newest installed one can be a newer beta, which the build rejects.
+        run: |
+          required=$(ls -d "$DOTNET_ROOT"/packs/Microsoft.MacCatalyst.Sdk.net11.0_* ~/.dotnet/packs/Microsoft.MacCatalyst.Sdk.net11.0_* 2>/dev/null \
+            | sed -E 's/.*_([0-9]+\.[0-9]+)$/\1/' | sort -V | tail -1)
+          xcode=$(ls -d /Applications/Xcode_"$required"*.app 2>/dev/null | grep -v -i beta | sort -V | tail -1)
+          if [ -z "$xcode" ]; then
+            echo "::error::The workload requires Xcode $required, which this runner image does not have:"; ls -d /Applications/Xcode_*.app; exit 1
+          fi
+          echo "Workload requires Xcode $required; using $xcode"
+          sudo xcode-select -s "$xcode"
 
       - name: Install Android dependencies
         run: >
@@ -95,7 +101,7 @@ jobs:
     # handlers and print TAP. Android runs locally (tests/Reactor.Maui.DeviceTests/run.sh android);
     # an emulator on a hosted macOS runner is too slow to be worth the minutes.
     name: Device tests (${{ matrix.platform }})
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -109,14 +115,21 @@ jobs:
         with:
           dotnet-version: 11.0.x
 
-      - name: Select the newest Xcode
-        run: |
-          xcode=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
-          echo "Using $xcode"
-          sudo xcode-select -s "$xcode"
-
       - name: Install the maui workload
         run: dotnet workload install maui
+
+      - name: Select the Xcode the workload requires
+        # Each Apple workload pins an exact Xcode (Microsoft.MacCatalyst.Sdk.net11.0_27.2 needs
+        # Xcode 27.2); the newest installed one can be a newer beta, which the build rejects.
+        run: |
+          required=$(ls -d "$DOTNET_ROOT"/packs/Microsoft.MacCatalyst.Sdk.net11.0_* ~/.dotnet/packs/Microsoft.MacCatalyst.Sdk.net11.0_* 2>/dev/null \
+            | sed -E 's/.*_([0-9]+\.[0-9]+)$/\1/' | sort -V | tail -1)
+          xcode=$(ls -d /Applications/Xcode_"$required"*.app 2>/dev/null | grep -v -i beta | sort -V | tail -1)
+          if [ -z "$xcode" ]; then
+            echo "::error::The workload requires Xcode $required, which this runner image does not have:"; ls -d /Applications/Xcode_*.app; exit 1
+          fi
+          echo "Workload requires Xcode $required; using $xcode"
+          sudo xcode-select -s "$xcode"
 
       - name: Boot an iPhone simulator
         if: matrix.platform == 'ios'
