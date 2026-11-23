@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 
 namespace Microsoft.UI.Reactor.Core;
 
@@ -30,6 +31,16 @@ internal static class ChildReconciler<TElement, TNative, THost>
     where TNative : class
     where THost : struct, IChildReconcileHost<TElement, TNative>
 {
+    // The host returns natives as object (IChildReconcileHost's remarks say why); a host only
+    // returns its own natives, so these convert back without a runtime type check.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static TNative? MountVia(in THost host, TElement element, Action requestRerender) =>
+        Unsafe.As<TNative>(host.Mount(element, requestRerender));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static TNative? UpdateVia(in THost host, TElement oldElement, TElement newElement, TNative control, Action requestRerender, out bool unmountedByUpdate) =>
+        Unsafe.As<TNative>(host.UpdateChildTracked(oldElement, newElement, control, requestRerender, out unmountedByUpdate));
+
     /// <summary>
     /// Reconciles old and new child element arrays against a container's live children.
     /// </summary>
@@ -46,14 +57,14 @@ internal static class ChildReconciler<TElement, TNative, THost>
         var oldFiltered = Filter(oldChildren, host, out var oldSlots);
         var newFiltered = Filter(newChildren, host, out var newSlots);
 
-        bool hasKeys = HasAnyKeys(oldFiltered) || HasAnyKeys(newFiltered);
+        bool hasKeys = ChildReconcilerShared.HasAnyKeys(oldFiltered) || ChildReconcilerShared.HasAnyKeys(newFiltered);
 
         // Duplicate sibling keys are matched to the wrong controls by the keyed path below;
         // report them (deduplicated per panel) rather than let that happen silently. Only when
         // the key sequence changed: an unchanged one was already checked when it first
         // appeared, here or at mount, so a stable keyed panel's re-render pays one compare
         // per child (the prefix walk below does the same) rather than a duplicate scan.
-        if (hasKeys && newFiltered.Length > 1 && !SameKeys(oldFiltered, newFiltered))
+        if (hasKeys && newFiltered.Length > 1 && !ChildReconcilerShared.SameKeys(oldFiltered, newFiltered))
             host.ReportDuplicateSiblingKeys(newFiltered, parentControl);
 
         // Children that lead to a component which updated its own state. Their elements can be
@@ -148,7 +159,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
                     resolved++;
                 }
                 var newEl = newChildren[ni];
-                var ctrl = host.Mount(newEl, requestRerender);
+                var ctrl = MountVia(in host, newEl, requestRerender);
                 if (ctrl is not null)
                 {
                     children.Insert(live, ctrl);
@@ -247,7 +258,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
         // Insert new children beyond old count
         for (int i = common; i < newChildren.Length; i++)
         {
-            var ctrl = host.Mount(newChildren[i], requestRerender);
+            var ctrl = MountVia(in host, newChildren[i], requestRerender);
             if (ctrl is not null)
             {
                 children.Insert(children.Count, ctrl);
@@ -296,7 +307,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
         TNative? existingControl = null;
         if (host.CanSkipUpdate(oldEl, newEl)
             && !host.ForceRenderThroughWrapper(newEl)
-            && !dirty.Contains(dirtyIndex, i, children, host, ref existingControl))
+            && (dirty.IsEmpty || !dirty.Contains(dirtyIndex, i, children, host, ref existingControl)))
         {
             if (!host.HasActiveContextValues
                 || !host.ShouldDeclineSkip(existingControl ??= children.Get(i)))
@@ -314,7 +325,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
         if (host.CanUpdate(oldEl, newEl))
         {
             existingControl ??= children.Get(i);
-            var replacement = host.UpdateChildTracked(oldEl, newEl, existingControl, requestRerender, out var unmountedByUpdate);
+            var replacement = UpdateVia(in host, oldEl, newEl, existingControl, requestRerender, out var unmountedByUpdate);
             if (replacement is not null)
             {
                 // Child type changed at runtime — replace in place
@@ -325,7 +336,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
         }
 
         // Type mismatch — mount new, replace old with exit transition support
-        var newControl = host.Mount(newEl, requestRerender);
+        var newControl = MountVia(in host, newEl, requestRerender);
         if (newControl is not null)
             return host.ReplaceChildWithExitTransition(children, i, newControl);
         host.UnmountChild(children.Get(i));
@@ -537,7 +548,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
         // Phase 1: Common prefix
         int prefixLen = 0;
         while (prefixLen < oldLen && prefixLen < newLen &&
-               KeyMatch(oldChildren[prefixLen], newChildren[prefixLen]) &&
+               ChildReconcilerShared.KeyMatch(oldChildren[prefixLen], newChildren[prefixLen]) &&
                host.CanUpdate(oldChildren[prefixLen], newChildren[prefixLen]))
         {
             var oldEl = oldChildren[prefixLen];
@@ -552,7 +563,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
             TNative? existingControl = null;
             if (host.CanSkipUpdate(oldEl, newEl)
                 && !host.ForceRenderThroughWrapper(newEl)
-                && !DirtyContains(dirty, ref map, prefixLen, children, host, ref existingControl)
+                && (dirty.IsEmpty || !DirtyContains(dirty, ref map, prefixLen, children, host, ref existingControl))
                 && (!host.HasActiveContextValues
                     || map.At(prefixLen) >= childCount
                     || !host.ShouldDeclineSkip(existingControl ??= map.ControlAt(prefixLen))))
@@ -569,7 +580,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
             if (panelIdx < childCount)
             {
                 existingControl ??= map.ControlAt(prefixLen);
-                var replacement = host.UpdateChildTracked(oldEl, newEl, existingControl, requestRerender, out var unmountedByUpdate);
+                var replacement = UpdateVia(in host, oldEl, newEl, existingControl, requestRerender, out var unmountedByUpdate);
                 if (replacement is not null)
                 {
                     if (!unmountedByUpdate) host.UnmountChild(existingControl);
@@ -582,7 +593,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
         // Phase 2: Common suffix
         int suffixLen = 0;
         while (suffixLen < (oldLen - prefixLen) && suffixLen < (newLen - prefixLen) &&
-               KeyMatch(oldChildren[oldLen - 1 - suffixLen], newChildren[newLen - 1 - suffixLen]) &&
+               ChildReconcilerShared.KeyMatch(oldChildren[oldLen - 1 - suffixLen], newChildren[newLen - 1 - suffixLen]) &&
                host.CanUpdate(oldChildren[oldLen - 1 - suffixLen], newChildren[newLen - 1 - suffixLen]))
         {
             // Update in place (from end)
@@ -595,7 +606,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
             TNative? existingControl = null;
             if (host.CanSkipUpdate(oldEl, newEl)
                 && !host.ForceRenderThroughWrapper(newEl)
-                && !DirtyContains(dirty, ref map, oldIdx, children, host, ref existingControl)
+                && (dirty.IsEmpty || !DirtyContains(dirty, ref map, oldIdx, children, host, ref existingControl))
                 && (!host.HasActiveContextValues
                     || map.At(oldIdx) < 0
                     || map.At(oldIdx) >= childCount
@@ -614,7 +625,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
             if (panelIdx >= 0 && panelIdx < childCount)
             {
                 existingControl ??= map.ControlAt(oldIdx);
-                var replacement = host.UpdateChildTracked(oldEl, newEl, existingControl, requestRerender, out var unmountedByUpdate);
+                var replacement = UpdateVia(in host, oldEl, newEl, existingControl, requestRerender, out var unmountedByUpdate);
                 if (replacement is not null)
                 {
                     if (!unmountedByUpdate) host.UnmountChild(existingControl);
@@ -645,7 +656,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
             int panelIndex = ChildReconcilerShared.InsertionPanelIndex(oldStart, oldLen, oldToPanel, childCount);
             for (int i = 0; i < newMidLen; i++)
             {
-                var ctrl = host.Mount(newChildren[newStart + i], requestRerender);
+                var ctrl = MountVia(in host, newChildren[newStart + i], requestRerender);
                 if (ctrl is not null)
                 {
                     children.Insert(panelIndex++, ctrl);
@@ -841,7 +852,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
 
         public bool MountInsert(int newIdx, int panelIdx)
         {
-            var ctrl = _host.Mount(_newChildren[_newStart + newIdx], _requestRerender);
+            var ctrl = MountVia(in _host, _newChildren[_newStart + newIdx], _requestRerender);
             if (ctrl is null) return false;
             _children.Insert(panelIdx, ctrl);
             if (_host.HasAmbientAnimation) _host.OnInsertedUnderAmbient(ctrl, _newChildren[_newStart + newIdx]);
@@ -867,7 +878,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
             // where a renderer re-resolves theme-dependent state. A future optimization that adds
             // a skip here must mirror that re-resolution.
             var existing = _children.Get(panelIdx);
-            var replacement = _host.UpdateChildTracked(
+            var replacement = UpdateVia(in _host, 
                 _oldChildren[_oldStart + oldRelIdx],
                 _newChildren[_newStart + newIdx],
                 existing,
@@ -915,33 +926,6 @@ internal static class ChildReconciler<TElement, TNative, THost>
         return result;
     }
 
-    internal static bool HasAnyKeys(TElement[] elements)
-    {
-        for (int i = 0; i < elements.Length; i++)
-        {
-            if (elements[i].Key is not null) return true;
-        }
-        return false;
-    }
-
-    private static bool SameKeys(TElement[] oldElements, TElement[] newElements)
-    {
-        if (ReferenceEquals(oldElements, newElements)) return true;
-        if (oldElements.Length != newElements.Length) return false;
-        for (int i = 0; i < newElements.Length; i++)
-        {
-            if (!string.Equals(oldElements[i].Key, newElements[i].Key, StringComparison.Ordinal)) return false;
-        }
-        return true;
-    }
-
-    internal static bool KeyMatch(TElement a, TElement b)
-    {
-        // Both must have the same key (or both null) AND same type
-        if (a.GetType() != b.GetType()) return false;
-        return a.Key == b.Key;
-    }
-
     internal static string GetKey(TElement element, int positionalIndex) =>
         ChildReconcilerShared.GetKey(element, positionalIndex);
 }
@@ -952,6 +936,35 @@ internal static class ChildReconciler<TElement, TNative, THost>
 /// </summary>
 internal static class ChildReconcilerShared
 {
+    // Key helpers take ReactorElement rather than the engine's TElement: the engine's body is shared
+    // code across reference-type instantiations, and a non-generic helper inlines into it freely.
+    internal static bool HasAnyKeys(ReactorElement[] elements)
+    {
+        for (int i = 0; i < elements.Length; i++)
+        {
+            if (elements[i].Key is not null) return true;
+        }
+        return false;
+    }
+
+    internal static bool SameKeys(ReactorElement[] oldElements, ReactorElement[] newElements)
+    {
+        if (ReferenceEquals(oldElements, newElements)) return true;
+        if (oldElements.Length != newElements.Length) return false;
+        for (int i = 0; i < newElements.Length; i++)
+        {
+            if (!string.Equals(oldElements[i].Key, newElements[i].Key, StringComparison.Ordinal)) return false;
+        }
+        return true;
+    }
+
+    internal static bool KeyMatch(ReactorElement a, ReactorElement b)
+    {
+        // Both must have the same key (or both null) AND same type
+        if (a.GetType() != b.GetType()) return false;
+        return a.Key == b.Key;
+    }
+
     internal static int OldPanelIndex(int oldIndex, int[]? oldToPanel) =>
         oldToPanel is null ? oldIndex : oldToPanel[oldIndex];
 

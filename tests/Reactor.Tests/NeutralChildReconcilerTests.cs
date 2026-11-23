@@ -47,29 +47,29 @@ public class NeutralChildReconcilerTests
 
     readonly struct Host(Log log) : IChildReconcileHost<ReactorElement, Native>
     {
-        public Native? Mount(ReactorElement element, global::System.Action requestRerender)
+        public object? Mount(ReactorElement element, global::System.Action requestRerender)
         {
             log.Mounts++;
             return new Native(element.Key, ((Item)element).Text);
         }
 
-        public Native? UpdateChildTracked(ReactorElement oldElement, ReactorElement newElement, Native control, global::System.Action requestRerender, out bool unmountedByUpdate)
+        public object? UpdateChildTracked(ReactorElement oldElement, ReactorElement newElement, object control, global::System.Action requestRerender, out bool unmountedByUpdate)
         {
             log.Updates++;
-            control.Text = ((Item)newElement).Text;
+            ((Native)control).Text = ((Item)newElement).Text;
             unmountedByUpdate = false;
             return null;
         }
 
-        public void UnmountChild(Native control) => log.Unmounts++;
+        public void UnmountChild(object control) => log.Unmounts++;
         public bool CanUpdate(ReactorElement oldElement, ReactorElement newElement) => oldElement.GetType() == newElement.GetType();
         public bool CanSkipUpdate(ReactorElement oldElement, ReactorElement newElement) => oldElement.Equals(newElement);
         public bool ForceFullRenderActive => false;
         public bool ForceRenderThroughWrapper(ReactorElement newElement) => false;
         public bool HasActiveContextValues => false;
-        public bool ShouldDeclineSkip(Native control) => false;
+        public bool ShouldDeclineSkip(object control) => false;
         public bool NeedsRefreshOnSkip(ReactorElement oldElement, ReactorElement newElement) => false;
-        public void RefreshSkippedChildState(Native control, ReactorElement oldElement, ReactorElement newElement) { }
+        public void RefreshSkippedChildState(object control, ReactorElement oldElement, ReactorElement newElement) { }
         public void CountSkipped(int count) => log.Skipped += count;
         public bool TryGetChangedIndices(ReactorElement[] oldChildren, ReactorElement[] newChildren, out int[] changedIndices)
         {
@@ -80,7 +80,7 @@ public class NeutralChildReconcilerTests
         public bool IsOnDirtyAncestorPath(Native control) => false;
         public bool HasExitingControls => false;
         public bool HoldsExitingControlIn(IChildList<Native> children) => false;
-        public bool IsExiting(Native control) => false;
+        public bool IsExiting(object control) => false;
         public void RemoveChildWithExitTransition(IChildList<Native> children, int index)
         {
             UnmountChild(children.Get(index));
@@ -92,16 +92,16 @@ public class NeutralChildReconcilerTests
             children.Replace(index, newControl);
             return false;
         }
-        public bool TryGetMountedKey(Native control, out string? key)
+        public bool TryGetMountedKey(object control, out string? key)
         {
-            key = control.Key;
+            key = ((Native)control).Key;
             return !log.KeylessNatives;
         }
         public void ReportDuplicateSiblingKeys(ReactorElement[] children, Native? parentControl) { }
         public bool IsEmpty(ReactorElement element) => element is Empty;
         public bool HasAmbientAnimation => false;
-        public void OnInsertedUnderAmbient(Native control, ReactorElement element) { }
-        public void OnMovedUnderAmbient(Native control) { }
+        public void OnInsertedUnderAmbient(object control, ReactorElement element) { }
+        public void OnMovedUnderAmbient(object control) { }
     }
 
     static ReactorElement[] Keyed(params string[] keys) => [.. keys.Select(k => new Item(k) { Key = k })];
