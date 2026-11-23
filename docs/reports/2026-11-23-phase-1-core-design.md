@@ -64,32 +64,38 @@ recorded as a timing flake to watch, not waived.
 Rule (phase 0): a timing regression only if flagged on two independent `/perf` runs, or mean
 > +5% with a CI excluding 0; allocations > 1% with a CI excluding 0.
 
-| Leg | `/perf` #1 (`d71a0c9e`) | `/perf` #2 (`8573853f`) | `/perf` #3 (`497b6b2b`, after the fix) |
-|---|---|---|---|
-| StocksGrid 50%: reconcile, alloc | +0.9%, +0.1% | within noise | +2.9% [−2.8, +8.5], +0.9% [−1.0, +2.8] |
-| Skip floor 0%: reconcile | −0.4% | −2.2% | −1.2% |
-| **KeyedList: reconcile** | +1.7% [−2.1, +5.5] | **+1.8% [+0.5, +3.0] flagged** | **+1.3% [−0.3, +2.8]** |
-| KeyedList: alloc | −0.1% | within noise | +0.1% |
-| **Keyed micro-benches KX1/KX3/KX4 (ns)** | +1.2 / +0.8 / +2.1% | +2.0 / +2.0 / +2.6% | **+0.8 / +0.9 / +0.9%** |
-| Flex, DataGrid | within noise | within noise | DataGrid working set +0.4% [+0.1, +0.7] flagged; its alloc −0.2% |
-| Micro-suite allocations | none flagged | none flagged | none flagged |
+| Leg | #1 (`d71a0c9e`) | #2 (`8573853f`) | #3 (`497b6b2b`) | Final head: two runs |
+|---|---|---|---|---|
+| StocksGrid 50%: reconcile, alloc | +0.9%, +0.1% | within noise | +2.9% [−2.8, +8.5], +0.9% | PERF_FINAL_STOCKS |
+| Skip floor 0%: reconcile | −0.4% | −2.2% | −1.2% | PERF_FINAL_FLOOR |
+| **KeyedList: reconcile** | +1.7% [−2.1, +5.5] | **+1.8% [+0.5, +3.0] flagged** | +1.3% [−0.3, +2.8] | PERF_FINAL_KEYED |
+| **Keyed micro-benches KX1/KX3/KX4 (ns)** | +1.2 / +0.8 / +2.1% | +2.0 / +2.0 / +2.6% | +0.8 / +0.9 / +0.9% | PERF_FINAL_KX |
+| Flex, DataGrid | within noise | within noise | DataGrid working set +0.4% flagged; alloc −0.2% | PERF_FINAL_OTHER |
+| Micro-suite allocations | none flagged | none flagged | none flagged | PERF_FINAL_ALLOC |
 
-**The keyed-path finding, and the fix.** Runs #1 and #2 agreed on about +1.7% on KeyedList, the
-leg that exercises the moved engine, and the keyed micro-benches were slower in all 8
-measurements. Under the rule that counts as noise (flagged once, mean under 5%), but the
-direction was consistent, so the cause was traced instead of waived. The JIT's output showed it:
-the engine compiles as one shared body, `ChildReconciler<__Canon, __Canon, WinUIChildHost>`, and
-calls through the host interface, which was generic over the element and native types, were
-runtime-resolved indirect calls that never inlined. The fix (`497b6b2b`) splits the host contract
-so per-child calls go through a non-generic interface that binds directly to the struct host.
-Measured on the oracle (spec 067 §4: the same engine source compiled non-generically, on a fake
-host), the generic build's overhead fell from +43% to +10–14% on a 500-child unchanged keyed pass.
-On WinUI, run #3 moved KeyedList and the keyed micro-benches back inside noise. A fourth run on
-the final head is the second independent measurement of the fix (see PR #2).
+**The keyed-path finding.** Runs #1 and #2 agreed on about +1.7% on KeyedList, the leg that
+exercises the moved engine, and the keyed micro-benches were slower in all 8 measurements. Under
+the rule that counts as noise (flagged once, mean under 5%), but the direction was consistent,
+so it was traced instead of waived, using an oracle (spec 067 §4). The same engine source is
+compiled non-generically and timed in the same process against the generic build, 500 unchanged
+keyed children on a fake host:
+
+| Engine | Generic over oracle |
+|---|--:|
+| First extraction (`8573853f`) | +14–16% |
+| Key helpers non-generic, empty-dirty check inline (**final**) | **+8–10%** |
+| Same, plus host per-child members typed `ReactorElement`/`object` (`497b6b2b`) | +12% |
+
+`497b6b2b` first shipped the third row. The cross-family review asked whether the untyped host
+was what helped, and the ablation above showed it wasn't, so the final head keeps the typed host
+contract (compile-time checked) and only the helper changes. An earlier unpaired figure of +43%
+in that commit's message was wrong and is superseded by this table. The remaining gap is
+generic-dictionary type lookups that shared code can't avoid; the fake host magnifies it, since
+WinUI does far more work per child. The last column is the gate: two `/perf` runs on the final head.
 
 **DataGrid working set.** The tool marks DataGrid working set as informational: the workload's
 re-render is dispatcher-debounced, and its allocations, the authoritative signal, are −0.2% and
-within noise. It doesn't touch the keyed engine. Recorded, not waived; run #4 re-measures it.
+within noise. It doesn't touch the keyed engine. Recorded, not waived; the final runs re-measure it.
 
 ## Coverage and size
 
@@ -103,7 +109,9 @@ within noise. It doesn't touch the keyed engine. Recorded, not waived; run #4 re
 (gpt-6.1-sol). It found 3 high, 8 medium and 11 low issues. All 3 highs were confirmed cross-family
 and fixed: the integration-test feed missing the core, and two stale docs snippets. Every medium
 was fixed, and all lows except two design suggestions, which are deferred to spec 067 step 4 and
-recorded there: index the core assembly instead of lifting, and a shared IVT props file.
+recorded there: index the core assembly instead of lifting, and a shared IVT props file. The
+keyed-path fix had its own review, on the default model and cross-family (gpt-6.1-sol). Both found
+it correct; the cross-family reviewer's challenge to the mechanism led to the ablation above.
 
 ## Decisions for the gate
 

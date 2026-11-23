@@ -1,6 +1,5 @@
 using System.Buffers;
 using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
 
 namespace Microsoft.UI.Reactor.Core;
 
@@ -31,16 +30,6 @@ internal static class ChildReconciler<TElement, TNative, THost>
     where TNative : class
     where THost : struct, IChildReconcileHost<TElement, TNative>
 {
-    // The host returns natives as object (IChildReconcileHost's remarks say why); a host only
-    // returns its own natives, so these convert back without a runtime type check.
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static TNative? MountVia(in THost host, TElement element, Action requestRerender) =>
-        Unsafe.As<TNative>(host.Mount(element, requestRerender));
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static TNative? UpdateVia(in THost host, TElement oldElement, TElement newElement, TNative control, Action requestRerender, out bool unmountedByUpdate) =>
-        Unsafe.As<TNative>(host.UpdateChildTracked(oldElement, newElement, control, requestRerender, out unmountedByUpdate));
-
     /// <summary>
     /// Reconciles old and new child element arrays against a container's live children.
     /// </summary>
@@ -159,7 +148,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
                     resolved++;
                 }
                 var newEl = newChildren[ni];
-                var ctrl = MountVia(in host, newEl, requestRerender);
+                var ctrl = host.Mount(newEl, requestRerender);
                 if (ctrl is not null)
                 {
                     children.Insert(live, ctrl);
@@ -258,7 +247,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
         // Insert new children beyond old count
         for (int i = common; i < newChildren.Length; i++)
         {
-            var ctrl = MountVia(in host, newChildren[i], requestRerender);
+            var ctrl = host.Mount(newChildren[i], requestRerender);
             if (ctrl is not null)
             {
                 children.Insert(children.Count, ctrl);
@@ -325,7 +314,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
         if (host.CanUpdate(oldEl, newEl))
         {
             existingControl ??= children.Get(i);
-            var replacement = UpdateVia(in host, oldEl, newEl, existingControl, requestRerender, out var unmountedByUpdate);
+            var replacement = host.UpdateChildTracked(oldEl, newEl, existingControl, requestRerender, out var unmountedByUpdate);
             if (replacement is not null)
             {
                 // Child type changed at runtime — replace in place
@@ -336,7 +325,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
         }
 
         // Type mismatch — mount new, replace old with exit transition support
-        var newControl = MountVia(in host, newEl, requestRerender);
+        var newControl = host.Mount(newEl, requestRerender);
         if (newControl is not null)
             return host.ReplaceChildWithExitTransition(children, i, newControl);
         host.UnmountChild(children.Get(i));
@@ -580,7 +569,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
             if (panelIdx < childCount)
             {
                 existingControl ??= map.ControlAt(prefixLen);
-                var replacement = UpdateVia(in host, oldEl, newEl, existingControl, requestRerender, out var unmountedByUpdate);
+                var replacement = host.UpdateChildTracked(oldEl, newEl, existingControl, requestRerender, out var unmountedByUpdate);
                 if (replacement is not null)
                 {
                     if (!unmountedByUpdate) host.UnmountChild(existingControl);
@@ -625,7 +614,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
             if (panelIdx >= 0 && panelIdx < childCount)
             {
                 existingControl ??= map.ControlAt(oldIdx);
-                var replacement = UpdateVia(in host, oldEl, newEl, existingControl, requestRerender, out var unmountedByUpdate);
+                var replacement = host.UpdateChildTracked(oldEl, newEl, existingControl, requestRerender, out var unmountedByUpdate);
                 if (replacement is not null)
                 {
                     if (!unmountedByUpdate) host.UnmountChild(existingControl);
@@ -656,7 +645,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
             int panelIndex = ChildReconcilerShared.InsertionPanelIndex(oldStart, oldLen, oldToPanel, childCount);
             for (int i = 0; i < newMidLen; i++)
             {
-                var ctrl = MountVia(in host, newChildren[newStart + i], requestRerender);
+                var ctrl = host.Mount(newChildren[newStart + i], requestRerender);
                 if (ctrl is not null)
                 {
                     children.Insert(panelIndex++, ctrl);
@@ -852,7 +841,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
 
         public bool MountInsert(int newIdx, int panelIdx)
         {
-            var ctrl = MountVia(in _host, _newChildren[_newStart + newIdx], _requestRerender);
+            var ctrl = _host.Mount(_newChildren[_newStart + newIdx], _requestRerender);
             if (ctrl is null) return false;
             _children.Insert(panelIdx, ctrl);
             if (_host.HasAmbientAnimation) _host.OnInsertedUnderAmbient(ctrl, _newChildren[_newStart + newIdx]);
@@ -878,7 +867,7 @@ internal static class ChildReconciler<TElement, TNative, THost>
             // where a renderer re-resolves theme-dependent state. A future optimization that adds
             // a skip here must mirror that re-resolution.
             var existing = _children.Get(panelIdx);
-            var replacement = UpdateVia(in _host, 
+            var replacement = _host.UpdateChildTracked(
                 _oldChildren[_oldStart + oldRelIdx],
                 _newChildren[_newStart + newIdx],
                 existing,
@@ -931,13 +920,14 @@ internal static class ChildReconciler<TElement, TNative, THost>
 }
 
 /// <summary>
-/// The parts of the child reconciler that depend on no type parameter: the LIS, the keyed-middle
-/// positioning walk and the pooled key maps.
+/// The parts of the child reconciler that depend on no type parameter: the key helpers, the LIS,
+/// the keyed-middle positioning walk and the pooled key maps.
 /// </summary>
 internal static class ChildReconcilerShared
 {
-    // Key helpers take ReactorElement rather than the engine's TElement: the engine's body is shared
-    // code across reference-type instantiations, and a non-generic helper inlines into it freely.
+    // The key helpers take ReactorElement rather than the engine's TElement on purpose. The engine's
+    // body is shared code for reference-type instantiations, where calling a sibling generic method
+    // costs a generic-context argument and inlines less readily; these run per child (spec 067 §4).
     internal static bool HasAnyKeys(ReactorElement[] elements)
     {
         for (int i = 0; i < elements.Length; i++)

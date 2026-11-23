@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Reactor.Core.Internal;
 
@@ -104,10 +103,8 @@ internal static class ChildReconciler
 
 /// <summary>
 /// WinUI's answers to the framework-neutral child reconciler. A <c>readonly struct</c> holding
-/// the reconciler and the ambient animation read for this reconcile, so the JIT binds the engine's
-/// per-child calls directly to it. Those calls are typed <see cref="ReactorElement"/> and
-/// <see cref="object"/> (see <see cref="IChildReconcileHost"/>); the engine only passes WinUI's own
-/// elements and controls, so they are reinterpreted with <c>Unsafe.As</c>, not type-checked.
+/// the reconciler and the ambient animation read for this reconcile, so the JIT specializes the
+/// engine for it and every call below is direct.
 /// </summary>
 internal readonly struct WinUIChildHost : IChildReconcileHost<Element, UIElement>
 {
@@ -120,48 +117,44 @@ internal readonly struct WinUIChildHost : IChildReconcileHost<Element, UIElement
         _ambientKind = ambientKind;
     }
 
-    public object? Mount(ReactorElement element, Action requestRerender) => _reconciler.Mount(Unsafe.As<Element>(element), requestRerender);
+    public UIElement? Mount(Element element, Action requestRerender) => _reconciler.Mount(element, requestRerender);
 
-    public object? UpdateChildTracked(ReactorElement oldElement, ReactorElement newElement, object control, Action requestRerender, out bool unmountedByUpdate) =>
-        _reconciler.UpdateChildTracked(Unsafe.As<Element>(oldElement), Unsafe.As<Element>(newElement), Unsafe.As<UIElement>(control), requestRerender, out unmountedByUpdate);
+    public UIElement? UpdateChildTracked(Element oldElement, Element newElement, UIElement control, Action requestRerender, out bool unmountedByUpdate) =>
+        _reconciler.UpdateChildTracked(oldElement, newElement, control, requestRerender, out unmountedByUpdate);
 
-    public void UnmountChild(object control) => _reconciler.UnmountChild(Unsafe.As<UIElement>(control));
+    public void UnmountChild(UIElement control) => _reconciler.UnmountChild(control);
 
-    public bool CanUpdate(ReactorElement oldElement, ReactorElement newElement) => _reconciler.CanUpdate(Unsafe.As<Element>(oldElement), Unsafe.As<Element>(newElement));
+    public bool CanUpdate(Element oldElement, Element newElement) => _reconciler.CanUpdate(oldElement, newElement);
 
     // Issue #675 — the skip contract lives entirely in Element.CanSkipUpdate (shared by the
     // positional + keyed prefix/suffix arms): it declines the skip for any element carrying
     // ThemeBindings OR ResourceOverrides.ThemeRefs, so a theme-sensitive child falls through to
     // UpdateChild → Update, whose element-level shallow-skip re-resolves the themed value.
-    public bool CanSkipUpdate(ReactorElement oldElement, ReactorElement newElement) => Element.CanSkipUpdate(Unsafe.As<Element>(oldElement), Unsafe.As<Element>(newElement));
+    public bool CanSkipUpdate(Element oldElement, Element newElement) => Element.CanSkipUpdate(oldElement, newElement);
 
     public bool ForceFullRenderActive => _reconciler.ForceFullRenderActive;
 
-    public bool ForceRenderThroughWrapper(ReactorElement newElement) => _reconciler.ForceRenderThroughWrapper(Unsafe.As<Element>(newElement));
+    public bool ForceRenderThroughWrapper(Element newElement) => _reconciler.ForceRenderThroughWrapper(newElement);
 
     public bool HasActiveContextValues => _reconciler.HasActiveContextValues;
 
-    public bool ShouldDeclineSkip(object control) => _reconciler.ShouldDeclineSkip(Unsafe.As<UIElement>(control));
+    public bool ShouldDeclineSkip(UIElement control) => _reconciler.ShouldDeclineSkip(control);
 
     // Refresh the Tag when the element carries callbacks: the skip short-circuits Update, so
     // without this the event trampoline keeps dispatching through the previous render's closure
     // (stale state). #721 — the gesture/drag slots are excluded from the skip predicate, so their
     // cached dispatch closures are refreshed here too.
-    public bool NeedsRefreshOnSkip(ReactorElement oldReactorElement, ReactorElement newReactorElement)
-    {
-        var oldElement = Unsafe.As<Element>(oldReactorElement);
-        var newElement = Unsafe.As<Element>(newReactorElement);
-        return newElement.HasCallbacks
-            || Reconciler.IsFlyoutDecorator(newElement)
-            || Reconciler.HasGestureOrDragSlots(newElement.Modifiers)
-            || Reconciler.HasGestureOrDragSlots(oldElement.Modifiers)
-            || Reconciler.CallSiteChangedOnSkip(oldElement, newElement);
-    }
+    public bool NeedsRefreshOnSkip(Element oldElement, Element newElement) =>
+        newElement.HasCallbacks
+        || Reconciler.IsFlyoutDecorator(newElement)
+        || Reconciler.HasGestureOrDragSlots(newElement.Modifiers)
+        || Reconciler.HasGestureOrDragSlots(oldElement.Modifiers)
+        || Reconciler.CallSiteChangedOnSkip(oldElement, newElement);
 
-    public void RefreshSkippedChildState(object control, ReactorElement oldElement, ReactorElement newElement)
+    public void RefreshSkippedChildState(UIElement control, Element oldElement, Element newElement)
     {
         if (control is FrameworkElement fe)
-            _reconciler.RefreshSkippedChildState(fe, Unsafe.As<Element>(oldElement), Unsafe.As<Element>(newElement));
+            _reconciler.RefreshSkippedChildState(fe, oldElement, newElement);
     }
 
     public void CountSkipped(int count) => _reconciler.DebugElementsSkipped += count;
@@ -194,7 +187,7 @@ internal readonly struct WinUIChildHost : IChildReconcileHost<Element, UIElement
 
     public bool HoldsExitingControlIn(IChildList<UIElement> children) => _reconciler.HoldsExitingControlIn(children);
 
-    public bool IsExiting(object control) => _reconciler.IsExiting(Unsafe.As<UIElement>(control));
+    public bool IsExiting(UIElement control) => _reconciler.IsExiting(control);
 
     public void RemoveChildWithExitTransition(IChildList<UIElement> children, int index) =>
         _reconciler.RemoveChildWithExitTransition(children, index);
@@ -202,7 +195,7 @@ internal readonly struct WinUIChildHost : IChildReconcileHost<Element, UIElement
     public bool ReplaceChildWithExitTransition(IChildList<UIElement> children, int index, UIElement newControl) =>
         _reconciler.ReplaceChildWithExitTransition(children, index, newControl);
 
-    public bool TryGetMountedKey(object control, out string? key)
+    public bool TryGetMountedKey(UIElement control, out string? key)
     {
         if (control is FrameworkElement fe)
         {
@@ -216,23 +209,23 @@ internal readonly struct WinUIChildHost : IChildReconcileHost<Element, UIElement
     public void ReportDuplicateSiblingKeys(Element[] children, UIElement? parentControl) =>
         KeyedListDiff.ReportDuplicateSiblingKeys(children, _reconciler, parentControl);
 
-    public bool IsEmpty(ReactorElement element) => element is EmptyElement;
+    public bool IsEmpty(Element element) => element is EmptyElement;
 
     public bool HasAmbientAnimation => _ambientKind is not null;
 
     // Spec 042 §6 — when an Animations.Animate transaction is active and the newly-mounted child
     // has no explicit .Transition(...) modifier, apply the default fade-up enter so the structural
     // change reads visually. Per-element transitions continue to win when set.
-    public void OnInsertedUnderAmbient(object control, ReactorElement element)
+    public void OnInsertedUnderAmbient(UIElement control, Element element)
     {
         if (_ambientKind is not { } kind) return;
-        if (Unsafe.As<Element>(element).ElementTransition is not null) return;
-        Reconciler.ApplyAmbientEnterAnimation(Unsafe.As<UIElement>(control), kind);
+        if (element.ElementTransition is not null) return;
+        Reconciler.ApplyAmbientEnterAnimation(control, kind);
     }
 
-    public void OnMovedUnderAmbient(object control)
+    public void OnMovedUnderAmbient(UIElement control)
     {
         if (_ambientKind is { } kind)
-            ChildReconciler.ApplyAmbientMove(Unsafe.As<UIElement>(control), kind);
+            ChildReconciler.ApplyAmbientMove(control, kind);
     }
 }

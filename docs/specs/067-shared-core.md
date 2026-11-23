@@ -97,36 +97,36 @@ supplies a host:
 **Performance rule.** The hot paths named in the reconciler map are the LIS scratch buffers, the
 per-leaf state allocation avoidance, pooled rents, cached render delegates and the update fast
 paths. They must not gain interface dispatch or allocations without a `perf-compare` run within
-noise. The engine takes the host as a struct type parameter (`where THost : struct, …`), but its
-element and native types are reference types, so the JIT still compiles **one shared body**
-(`ChildReconciler<__Canon, __Canon, WinUIChildHost>`). The spike measured what that means:
+noise. The engine takes the host as a struct type parameter (`where THost : struct, …`), so each
+renderer gets its own specialization and host calls bind to the struct. Its element and native
+types are reference types, though, so within that specialization the body is shared code
+(`ChildReconciler<__Canon, __Canon, WinUIChildHost>`), and the spike measured what that costs:
 
-- A call through an interface **generic over the element or native type** can't be bound to the
-  host struct's method in shared code. It becomes a runtime-resolved indirect call that is never
-  inlined. With the whole host contract generic, the keyed path measured +1.7% and +1.8% reconcile
-  on two `/perf` runs, and the four keyed micro-benches were slower in all 8 measurements.
-- **Rule:** per-child host members live on a non-generic interface typed `ReactorElement`/`object`
-  (`IChildReconcileHost`), which binds directly to the struct and inlines; hosts reinterpret with
-  `Unsafe.As`. Only per-pass members that take the child list or element arrays stay generic.
-  Small helpers that need only `ReactorElement` live in non-generic classes, so they inline too.
-- **Oracle:** the same engine source compiled non-generically (type parameters replaced by concrete
-  types, the shape of the pre-extraction WinUI code) and timed against the generic build on a fake
-  host. On a 500-child unchanged keyed pass, the generic build cost +43% before the rule and +10–14%
-  after. The remainder is generic-dictionary type lookups (`ArrayPool<TNative>`, `new TNative?[]`),
-  inherent to shared code. The fake host does almost no work per child, so WinUI sees a fraction of
-  it; `/perf` is the gate. Step 2 repeats this measurement for every engine part it moves.
+- **Oracle.** The same engine source is compiled non-generically (type parameters replaced by
+  concrete types, the shape of the pre-extraction WinUI code) and timed in the same process
+  against the generic build, on a fake host that does almost no work per child, for a 500-child
+  unchanged keyed pass. The first extraction ran +14–16% over the oracle. On WinUI that showed up
+  as KeyedList reconcile +1.7% and +1.8% on two `/perf` runs, with the keyed micro-benches slower
+  in all 8 measurements.
+- **Rule.** Per-child helpers that need only `ReactorElement` live in non-generic classes
+  (`ChildReconcilerShared.KeyMatch` and its siblings), and cheap per-child guards are checked
+  inline before calling a generic helper (`dirty.IsEmpty || …`). That brought the oracle gap to
+  +8–10%. The remainder is generic-dictionary type lookups (`ArrayPool<TNative>`,
+  `new TNative?[]`), inherent to shared code.
+- **Tried and rejected.** Typing the host's per-child members `ReactorElement`/`object` so their
+  interface isn't generic measured +12%, no better. The runtime already resolves a constrained
+  call on a struct host implementing a single instantiation of a generic interface, so the typed
+  host contract stays.
+- Step 2 repeats this measurement for every engine part it moves; `/perf` is the gate.
 
 **As built so far (§9).** The spike applies this to the child diff:
-`ChildReconciler<TElement, TNative, THost>`, with the host contract in four pieces:
-
-- `IChildReconcileHost`: per-child mount, update, skip policy, exit state, keys and ambient
-  animation, typed `ReactorElement`/`object`.
-- `IChildReconcileHost<TElement, TNative>`: per-pass calls taking the child list or element arrays.
-- `IChildList<TNative>`: today's `IChildCollection`, made generic.
-- `IDirtyPathProbe<TNative>`.
-
-`INativeHost<TNative>` above is the union these pieces grow into as step 2 moves the rest of the
-reconciler. It stays a set of narrow interfaces wherever that keeps each engine part's host small.
+`ChildReconciler<TElement, TNative, THost>`, with the host contract split into
+`IChildReconcileHost<TElement, TNative>` (mount, update, skip policy, exit transitions, keys,
+ambient animation), `IChildList<TNative>` (today's `IChildCollection`, made generic) and
+`IDirtyPathProbe<TNative>`. The element type is a parameter too, so the engine reads `Key` from
+`ReactorElement` and hands each renderer its own element type without casts. `INativeHost<TNative>`
+above is the union these pieces grow into as step 2 moves the rest of the reconciler. It stays a
+set of narrow interfaces wherever that keeps each engine part's host small.
 
 ## 5. The central decision: component anchors
 
