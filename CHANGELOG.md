@@ -28,10 +28,11 @@ Conventions for contributors:
 
 ### Added
 
-- **Reactor for .NET MAUI, in preview (spec 065).** Two new packages, `Microsoft.UI.Reactor.Core`
-  (a renderer-neutral core: components, hooks, keyed reconciliation, context, error boundaries) and
-  `Microsoft.UI.Reactor.Maui` (a renderer for Android, iOS and Mac Catalyst). The MAUI package has
-  the standard controls, layouts, `CollectionView`/`CarouselView`, pages, a navigation stack held in
+- **Reactor for .NET MAUI, in preview (spec 065).** Two new packages:
+  `Microsoft.UI.Reactor.Maui.Core`, a transitional renderer-neutral core (components, hooks, keyed
+  reconciliation, context, error boundaries) that spec 067 replaces with a core shared with WinUI; and
+  `Microsoft.UI.Reactor.Maui`, a renderer for Android, iOS and Mac Catalyst. The MAUI package has the
+  standard controls, layouts, `CollectionView`/`CarouselView`, pages, a navigation stack held in
   state, tabs, flyouts and `UseAppTheme`/`UseWindowSize`. It renders primitives and layouts as direct
   views that skip the Controls layer (27–58% faster on bulk work) and falls back to Controls per
   element. Built with `Reactor.Maui.slnx` and tested in `.github/workflows/maui.yml`, including a

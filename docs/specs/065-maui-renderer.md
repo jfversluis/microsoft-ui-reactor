@@ -15,17 +15,17 @@ model targets Android, iOS, Mac Catalyst and Windows through MAUI.
 |---|---|---|
 | Architecture | A renderer-neutral core plus one renderer per UI framework, as React splits `react-reconciler` from `react-dom` | The hooks, diffing and scheduling are the product; the target framework is a detail. |
 | Renderer strategy | **Hybrid.** Direct views (MAUI Core interfaces, no Controls layer) for primitives and layouts; Controls for `CollectionView`, Shell, navigation and third-party controls | §4: direct is 27–58% faster on bulk work, but Controls owns virtualization, Shell and the ecosystem. |
-| Location | This repo, as `src/Reactor.Core` and `src/Reactor.Maui` with their own solution (`Reactor.Maui.slnx`) and CI (`.github/workflows/maui.yml`, macOS) | Keeps the WinUI build and pipelines untouched while sharing the repo. |
+| Location | This repo, as `src/Reactor.Maui.Core` (transitional) and `src/Reactor.Maui` with their own solution (`Reactor.Maui.slnx`) and CI (`.github/workflows/maui.yml`, macOS) | Keeps the WinUI build and pipelines untouched while sharing the repo. |
 | WinUI convergence | **Later**, as a separate project, once both renderers have proven the core's seams | Moving the 9,000-line WinUI reconciler is the riskiest step; a core designed from one consumer gets its seams wrong. |
-| Names | `Microsoft.UI.Reactor.Core` and `Microsoft.UI.Reactor.Maui` (packages, assemblies and namespaces) | Component code stays source-compatible with WinUI Reactor. Renaming later is mechanical. |
+| Names | `Microsoft.UI.Reactor.Maui` plus a transitional core, `Microsoft.UI.Reactor.Maui.Core` (namespace `Microsoft.UI.Reactor.Core`) | Spec 067 extracts the shared `Microsoft.UI.Reactor.Core` from the WinUI engine; the transitional core is deleted once the MAUI renderer is re-hosted on it. |
 
 ## 3. Layout
 
 | Project | Target | Role |
 |---|---|---|
-| `src/Reactor.Core` | `net10.0` | Renderer-neutral core: `Element`, `Component`, hooks, keyed reconciler, batched scheduler, handler contract. No UI framework reference. |
+| `src/Reactor.Maui.Core` | `net10.0` | Transitional renderer-neutral core (spec 067 replaces it): `Element`, `Component`, hooks, keyed reconciler, batched scheduler, handler contract. No UI framework reference. |
 | `src/Reactor.Maui` | `net11.0` + `-android/-ios/-maccatalyst/-windows` | MAUI element records, both renderers (§4), `ReactorPage`. The plain `net11.0` target exists for headless tests. |
-| `tests/Reactor.Core.Tests` | `net10.0` | Headless core tests against an in-memory fake renderer. |
+| `tests/Reactor.Maui.Core.Tests` | `net10.0` | Headless core tests against an in-memory fake renderer. |
 | `tests/Reactor.Maui.Tests` | `net11.0` | Headless renderer tests: real Controls objects and direct views, no platform handlers. |
 | `tests/Reactor.Maui.DeviceTests` | MAUI app | Device tier: fixtures that mount trees through the real platform handlers, act like the platform (taps, typing, back button, modal dismissal, tab selection) and check what the native views show. Prints TAP; `run.sh maccatalyst\|ios\|android`. |
 | `tests/Reactor.Maui.Benchmark` | MAUI app | Renders the same tree through both renderers and reports timings and allocations. |
@@ -39,7 +39,7 @@ chains straight to the root props to skip the WinUI-specific sample wiring.
 
 ```bash
 dotnet restore Reactor.Maui.slnx -p:Configuration=Release
-dotnet test tests/Reactor.Core.Tests --no-restore -c Release
+dotnet test tests/Reactor.Maui.Core.Tests --no-restore -c Release
 dotnet test tests/Reactor.Maui.Tests --no-restore -c Release
 dotnet build Reactor.Maui.slnx --no-restore -c Release
 
@@ -172,7 +172,7 @@ Design choices that differ from today's WinUI Reactor, and why:
 
 ## 6. What has been proven
 
-**Core, headless** (`tests/Reactor.Core.Tests`, 44 tests). Mounting through components and
+**Core, headless** (`tests/Reactor.Maui.Core.Tests`, 44 tests). Mounting through components and
 groups. A keyed reorder keeps component state *and* the same native controls. Removal unmounts
 and runs effect cleanups. Duplicate keys fail loudly, and changing the root's key remounts it.
 Setters are batched into one posted flush, across components, and hosts are re-synced only after

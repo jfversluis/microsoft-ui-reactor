@@ -1,4 +1,7 @@
-# Microsoft.UI.Reactor.Core
+# Microsoft.UI.Reactor.Maui.Core
+
+> Transitional. Spec 067 replaces this package with `Microsoft.UI.Reactor.Core`, the engine extracted
+> from WinUI Reactor and shared by the WinUI and MAUI renderers.
 
 The renderer-neutral core of Reactor: immutable element records, components with React-style
 hooks (`UseState`, `UseReducer`, `UseEffect`, `UseMemo`, `UseCallback`, `UseRef`), keyed

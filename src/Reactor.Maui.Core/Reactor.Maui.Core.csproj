@@ -1,19 +1,19 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Renderer-neutral Reactor core (spec 065): elements, components, hooks, reconciliation and
-    scheduling. Plain net10.0 with no UI framework reference, so the MAUI renderer consumes it
-    today and the WinUI renderer can later. CoreBoundaryTests fails if a UI framework assembly
-    ever becomes a dependency.
+    The MAUI renderer's transitional core (spec 065): elements, components, hooks, reconciliation
+    and scheduling, with no UI framework reference. Spec 067 replaces it with the core extracted
+    from the WinUI engine (src/Reactor.Core); phase 3 moves the MAUI renderer onto that and deletes
+    this project. CoreBoundaryTests fails if a UI framework assembly ever becomes a dependency.
   -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <LangVersion>15</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>Microsoft.UI.Reactor.Core</AssemblyName>
+    <AssemblyName>Microsoft.UI.Reactor.Maui.Core</AssemblyName>
     <RootNamespace>Microsoft.UI.Reactor</RootNamespace>
-    <PackageId>Microsoft.UI.Reactor.Core</PackageId>
+    <PackageId>Microsoft.UI.Reactor.Maui.Core</PackageId>
     <Description>Renderer-neutral core of Reactor: components, hooks and keyed reconciliation.</Description>
     <PackageTags>Reactor;declarative;functional;reactive;components;hooks;MVU;UI</PackageTags>
   </PropertyGroup>
@@ -21,7 +21,7 @@
   <Import Project="..\Reactor.Maui.Packaging.props" />
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Reactor.Core.Tests" />
+    <InternalsVisibleTo Include="Reactor.Maui.Core.Tests" />
     <InternalsVisibleTo Include="Microsoft.UI.Reactor.Maui" />
     <InternalsVisibleTo Include="Reactor.Maui.Tests" />
     <InternalsVisibleTo Include="Reactor.Maui.DeviceTests" />

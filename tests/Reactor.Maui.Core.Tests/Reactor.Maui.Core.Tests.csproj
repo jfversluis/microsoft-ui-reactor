@@ -20,7 +20,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Reactor.Core\Reactor.Core.csproj" />
+    <ProjectReference Include="..\..\src\Reactor.Maui.Core\Reactor.Maui.Core.csproj" />
   </ItemGroup>
 
 </Project>
