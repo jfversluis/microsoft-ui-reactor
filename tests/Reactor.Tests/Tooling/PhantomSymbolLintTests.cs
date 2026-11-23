@@ -482,6 +482,13 @@ public sealed class PhantomSymbolLintTests
         Assert.Equal(names.Count, names.Distinct().Count());
     }
 
+    private static bool IsMauiRendererSource(string root, string file)
+    {
+        var rel = global::System.IO.Path.GetRelativePath(root, file).Replace('\\', '/');
+        return rel.StartsWith("src/Reactor.Core/", global::System.StringComparison.Ordinal)
+            || rel.StartsWith("src/Reactor.Maui/", global::System.StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// The durable gate: sweep every <c>///</c> doc comment in <c>src/</c> with
     /// the shipping matcher and hold the result against an explicit budget.
@@ -508,6 +515,10 @@ public sealed class PhantomSymbolLintTests
     /// unwritable spelling shipped in <c>Reactor.xml</c>. They are budgeted
     /// rather than fixed here because each file is owned by a concurrent
     /// branch; fixing them from this branch would collide.</para>
+    ///
+    /// <para>The MAUI renderer projects are excluded: the phantom table describes WinUI
+    /// Reactor's API, and names it rejects (<c>VStackElement</c>, a <c>ProgressBar</c>
+    /// factory) are real members of the MAUI renderer (spec 065).</para>
     /// </summary>
     [Fact]
     public void SrcDocComments_StayWithinTheKnownPhantomBudget()
@@ -520,6 +531,7 @@ public sealed class PhantomSymbolLintTests
         var actual = new SortedDictionary<string, int>(global::System.StringComparer.Ordinal);
         foreach (var file in global::System.IO.Directory.EnumerateFiles(src, "*.cs", global::System.IO.SearchOption.AllDirectories))
         {
+            if (IsMauiRendererSource(root!, file)) continue;
             var findings = PhantomSymbolLint.Lint(
                 file,
                 global::System.IO.File.ReadAllText(file),

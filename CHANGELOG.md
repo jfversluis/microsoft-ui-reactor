@@ -28,6 +28,15 @@ Conventions for contributors:
 
 ### Added
 
+- **Reactor for .NET MAUI, in preview (spec 065).** Two new packages, `Microsoft.UI.Reactor.Core`
+  (a renderer-neutral core: components, hooks, keyed reconciliation, context, error boundaries) and
+  `Microsoft.UI.Reactor.Maui` (a renderer for Android, iOS and Mac Catalyst). The MAUI package has
+  the standard controls, layouts, `CollectionView`/`CarouselView`, pages, a navigation stack held in
+  state, tabs, flyouts and `UseAppTheme`/`UseWindowSize`. It renders primitives and layouts as direct
+  views that skip the Controls layer (27–58% faster on bulk work) and falls back to Controls per
+  element. Built with `Reactor.Maui.slnx` and tested in `.github/workflows/maui.yml`, including a
+  device tier that runs on the real platform controls. It doesn't change the WinUI packages.
+
 - **The `Microsoft-UI-Reactor-Perf` trace now says whether a render was worth it (spec 023
   §10.3–10.4, issue #1538).** Schema revision 3 appends `memoMiss` to `ComponentRender` Start,
   `changes` and `ownStateSets` to `ComponentRender` Stop and `ownStateSets` to `Effects` Stop, and adds

@@ -1,0 +1,20 @@
+<Solution>
+  <!--
+    Reactor for .NET MAUI (spec 065). Deliberately separate from Reactor.slnx: these projects
+    need the maui workload and build for Android, iOS and Mac Catalyst, which the WinUI
+    pipelines neither install nor target. CI: .github/workflows/maui.yml.
+  -->
+  <Folder Name="/src/">
+    <Project Path="src/Reactor.Core/Reactor.Core.csproj" />
+    <Project Path="src/Reactor.Maui/Reactor.Maui.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/maui/Reactor.Maui.Sample/Reactor.Maui.Sample.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Reactor.Core.Tests/Reactor.Core.Tests.csproj" />
+    <Project Path="tests/Reactor.Maui.Tests/Reactor.Maui.Tests.csproj" />
+    <Project Path="tests/Reactor.Maui.Benchmark/Reactor.Maui.Benchmark.csproj" />
+    <Project Path="tests/Reactor.Maui.DeviceTests/Reactor.Maui.DeviceTests.csproj" />
+  </Folder>
+</Solution>

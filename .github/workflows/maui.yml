@@ -1,0 +1,156 @@
+name: MAUI
+
+# Reactor for .NET MAUI (spec 065). Separate from ci.yml because these projects need the maui
+# workload and build for Android, iOS and Mac Catalyst, which only macOS runners can do.
+
+on:
+  pull_request:
+    paths: &maui-paths
+      - 'src/Reactor.Core/**'
+      - 'src/Reactor.Maui/**'
+      - 'src/Reactor.Maui.Packaging.props'
+      - 'tests/Reactor.Core.Tests/**'
+      - 'tests/Reactor.Maui.Tests/**'
+      - 'tests/Reactor.Maui.Benchmark/**'
+      - 'tests/Reactor.Maui.DeviceTests/**'
+      - 'samples/maui/**'
+      - 'Reactor.Maui.slnx'
+      - 'Directory.Build.props'
+      - 'Directory.Build.targets'
+      - 'Directory.Packages.props'
+      - 'global.json'
+      - '.github/workflows/maui.yml'
+  push:
+    branches: [main]
+    paths: *maui-paths
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and test (macOS)
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          # .NET 11 SDK builds (global.json); .NET 10 runtime runs the net10.0 core tests.
+          dotnet-version: |
+            10.0.x
+            11.0.x
+
+      - name: Install the maui workload
+        run: dotnet workload install maui
+
+      - name: Select the Xcode the workload requires
+        # Each Apple workload pins an exact Xcode (Microsoft.MacCatalyst.Sdk.net11.0_27.2 needs
+        # Xcode 27.2); the newest installed one can be a newer beta, which the build rejects.
+        run: |
+          required=$(ls -d "$DOTNET_ROOT"/packs/Microsoft.MacCatalyst.Sdk.net11.0_* ~/.dotnet/packs/Microsoft.MacCatalyst.Sdk.net11.0_* 2>/dev/null \
+            | sed -E 's/.*_([0-9]+\.[0-9]+)$/\1/' | sort -V | tail -1)
+          xcode=$(ls -d /Applications/Xcode_"$required"*.app 2>/dev/null | grep -v -i beta | sort -V | tail -1)
+          if [ -z "$xcode" ]; then
+            echo "::error::The workload requires Xcode $required, which this runner image does not have:"; ls -d /Applications/Xcode_*.app; exit 1
+          fi
+          echo "Workload requires Xcode $required; using $xcode"
+          sudo xcode-select -s "$xcode"
+
+      - name: Install Android dependencies
+        run: >
+          dotnet build src/Reactor.Maui/Reactor.Maui.csproj -f net11.0-android
+          -t:InstallAndroidDependencies
+          -p:AndroidSdkDirectory="$ANDROID_HOME"
+          -p:AcceptAndroidSDKLicenses=True
+
+      # Restored as Release: Release Mac Catalyst apps build for both x64 and arm64, and the
+      # runtime identifiers are decided at restore time.
+      - name: Restore
+        run: dotnet restore Reactor.Maui.slnx -p:Configuration=Release
+
+      - name: Core tests
+        run: dotnet test tests/Reactor.Core.Tests/Reactor.Core.Tests.csproj --no-restore -c Release
+
+      - name: Headless renderer tests
+        run: dotnet test tests/Reactor.Maui.Tests/Reactor.Maui.Tests.csproj --no-restore -c Release
+
+      - name: Build (Release, all platforms)
+        run: dotnet build Reactor.Maui.slnx --no-restore -c Release
+
+      - name: Pack
+        run: |
+          dotnet pack src/Reactor.Core/Reactor.Core.csproj --no-restore -c Release -o artifacts/packages
+          dotnet pack src/Reactor.Maui/Reactor.Maui.csproj --no-restore -c Release -o artifacts/packages
+
+      - name: Upload packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: maui-packages
+          path: artifacts/packages
+
+  device-tests:
+    # The fixtures in tests/Reactor.Maui.DeviceTests mount trees through the real platform
+    # handlers and print TAP. Android runs locally (tests/Reactor.Maui.DeviceTests/run.sh android);
+    # an emulator on a hosted macOS runner is too slow to be worth the minutes.
+    name: Device tests (${{ matrix.platform }})
+    runs-on: xcode-27
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [maccatalyst, ios]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 11.0.x
+
+      - name: Install the maui workload
+        run: dotnet workload install maui
+
+      - name: Select the Xcode the workload requires
+        # Each Apple workload pins an exact Xcode (Microsoft.MacCatalyst.Sdk.net11.0_27.2 needs
+        # Xcode 27.2); the newest installed one can be a newer beta, which the build rejects.
+        run: |
+          required=$(ls -d "$DOTNET_ROOT"/packs/Microsoft.MacCatalyst.Sdk.net11.0_* ~/.dotnet/packs/Microsoft.MacCatalyst.Sdk.net11.0_* 2>/dev/null \
+            | sed -E 's/.*_([0-9]+\.[0-9]+)$/\1/' | sort -V | tail -1)
+          xcode=$(ls -d /Applications/Xcode_"$required"*.app 2>/dev/null | grep -v -i beta | sort -V | tail -1)
+          if [ -z "$xcode" ]; then
+            echo "::error::The workload requires Xcode $required, which this runner image does not have:"; ls -d /Applications/Xcode_*.app; exit 1
+          fi
+          echo "Workload requires Xcode $required; using $xcode"
+          sudo xcode-select -s "$xcode"
+
+      - name: Boot an iPhone simulator
+        if: matrix.platform == 'ios'
+        run: |
+          # The newest iOS runtime's first iPhone.
+          udid=$(xcrun simctl list devices available --json | python3 -c '
+          import json, re, sys
+          devices = json.load(sys.stdin)["devices"]
+          version = lambda runtime: [int(n) for n in re.findall(r"\d+", runtime.split("iOS-")[-1])]
+          runtimes = sorted((r for r in devices if ".iOS-" in r), key=version, reverse=True)
+          print(next(d["udid"] for r in runtimes for d in devices[r] if d["name"].startswith("iPhone")))')
+          echo "Booting $udid"
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+
+      - name: Run device tests
+        run: tests/Reactor.Maui.DeviceTests/run.sh ${{ matrix.platform }}
+
+      - name: Upload TAP report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: device-tests-${{ matrix.platform }}
+          path: artifacts/device-tests

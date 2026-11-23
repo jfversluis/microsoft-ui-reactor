@@ -33,6 +33,12 @@
     <PackageVersion Include="Microsoft.Graphics.Win2D" Version="$(Win2DVersion)" />
   </ItemGroup>
 
+  <ItemGroup Condition="'$(MauiVersion)' != ''">
+    <!-- .NET MAUI (spec 065). Tracks the installed maui workload, as the MAUI templates do;
+         $(MauiVersion) is only defined in projects that set UseMaui. -->
+    <PackageVersion Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
+  </ItemGroup>
+
   <ItemGroup>
     <!-- Framework runtime dependencies -->
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="11.0.0" />
