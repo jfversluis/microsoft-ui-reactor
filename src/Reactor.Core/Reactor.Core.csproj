@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The framework-neutral Reactor core (spec 067), shared by the WinUI renderer (src/Reactor) and
+    the MAUI renderer (src/Reactor.Maui). It must never reference a UI framework:
+    NeutralCoreBoundaryTests fails if it references anything outside System.*.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>15</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Microsoft.UI.Reactor.Core</AssemblyName>
+    <RootNamespace>Microsoft.UI.Reactor.Core</RootNamespace>
+    <PackageId>Microsoft.UI.Reactor.Core</PackageId>
+    <Description>The framework-neutral core of Reactor, shared by its WinUI and .NET MAUI renderers.</Description>
+    <PackageTags>Reactor;declarative;functional;reactive;components;hooks;UI</PackageTags>
+    <!-- Match Reactor's explicit platforms so its ProjectReference handshake resolves a matching
+         build under Release|x64 / Release|ARM64 (as Reactor.Wrappers.Abstractions does). -->
+    <Platforms>AnyCPU;x64;ARM64</Platforms>
+  </PropertyGroup>
+
+  <Import Project="..\Reactor.Maui.Packaging.props" />
+
+  <!-- The WinUI renderer uses the engine's internals, and so does every assembly that sees the
+       renderer's internals (its tests, hosts and companions), because engine internals used to live
+       in Reactor.dll itself. Mirrors src/Reactor/Reactor.csproj's list, plus Reactor;
+       NeutralCoreBoundaryTests keeps the two in step. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Reactor" />
+    <InternalsVisibleTo Include="Reactor.Tests" />
+    <InternalsVisibleTo Include="Reactor.AppTests.Host" />
+    <InternalsVisibleTo Include="Reactor.PackagedTests.Host" />
+    <InternalsVisibleTo Include="Reactor.Fuzz" />
+    <InternalsVisibleTo Include="Reactor.SourceMap.Tests" />
+    <InternalsVisibleTo Include="Reactor.Advanced" />
+    <InternalsVisibleTo Include="Microsoft.UI.Reactor.Devtools" />
+    <InternalsVisibleTo Include="PerfBench.ControlModel" />
+    <InternalsVisibleTo Include="PerfBench.RowMemo" />
+  </ItemGroup>
+
+</Project>

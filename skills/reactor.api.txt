@@ -2234,6 +2234,7 @@ Thickness? Padding { get; init; }
 string ConnectedAnimationKey { get; init; }
 string Key { get; init; }
 Equals(Element other) → bool
+Equals(ReactorElement other) → bool
 Equals(object obj) → bool
 GetHashCode() → int
 ToString() → string

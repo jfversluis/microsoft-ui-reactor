@@ -139,6 +139,16 @@ public sealed class ApiIndexGeneratorTests
         Assert.Contains("SetPosition(double x, double y)", block);
     }
 
+    // Spec 067 moved Key to ReactorElement in the neutral core, which is not indexed on its own.
+    // Element must keep listing it, and a type further down must not repeat it.
+    [Fact]
+    public void PublicTypes_ListNeutralCoreProperties_OnTheTypeThatInheritsThem()
+    {
+        var output = Generate();
+        Assert.Contains("string Key { get; init; }", TypeBlock(output, "Element").Split('\n').Select(l => l.TrimEnd('\r')));
+        Assert.DoesNotContain("string Key { get; init; }", TypeBlock(output, "TextBlockElement").Split('\n').Select(l => l.TrimEnd('\r')));
+    }
+
     [Fact]
     public void PublicTypes_Omits_EditorBrowsableNever_Infrastructure()
     {

@@ -5,7 +5,7 @@ using Xunit;
 namespace Microsoft.UI.Reactor.Tests;
 
 /// <summary>
-/// Issue #326 — unit coverage for the keySelector → row <see cref="Element.Key"/>
+/// Issue #326 — unit coverage for the keySelector → row <see cref="ReactorElement.Key"/>
 /// propagation logic used by <see cref="ElementFactory{T}"/>'s recycle path.
 /// The reused-container reconcile (GetElement) relies on a different key landing
 /// on the row's top-level element so <see cref="Reconciler.CanUpdate"/> flips to

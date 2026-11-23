@@ -9,29 +9,12 @@ namespace Microsoft.UI.Reactor.Core;
 /// Abstraction over a collection of UIElement children.
 /// Allows the reconciler to work with any container type (Panel, ItemsControl, etc.).
 /// </summary>
-internal interface IChildCollection
+internal interface IChildCollection : IChildList<UIElement>
 {
-    int Count { get; }
-    UIElement Get(int index);
-    void Insert(int index, UIElement element);
-    void RemoveAt(int index);
-    void Move(int oldIndex, int newIndex);
-    void Replace(int index, UIElement element);
-
-    /// <summary>
-    /// Index of <paramref name="element"/> in the collection, or -1. The reconciler calls this
-    /// once per dirty child of a container rather than reading every child, so implementations
-    /// over a live collection should answer in a single call.
-    /// </summary>
-    int IndexOf(UIElement element)
-    {
-        for (int i = 0; i < Count; i++)
-        {
-            if (ReferenceEquals(Get(i), element))
-                return i;
-        }
-        return -1;
-    }
+    // Count, Get, Insert, RemoveAt, Move, Replace and IndexOf come from the framework-neutral
+    // IChildList (spec 067). IndexOf: the reconciler calls it once per dirty child of a container
+    // rather than reading every child, so implementations over a live collection should answer in
+    // a single call.
 }
 
 /// <summary>

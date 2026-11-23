@@ -21,7 +21,7 @@ public class ChildReconcilerStructuralSkipTests
     private static readonly global::System.Action NoOp = () => { };
 
     /// <summary>
-    /// Records the indices passed to <see cref="IChildCollection.Get"/> (the
+    /// Records the indices passed to <see cref="IChildList{TNative}.Get"/> (the
     /// per-visit COM read) plus any structural mutation. Returns <c>null</c> from
     /// Get — the skip arm's <c>is FrameworkElement</c> guard tolerates it, so no
     /// live control is needed.

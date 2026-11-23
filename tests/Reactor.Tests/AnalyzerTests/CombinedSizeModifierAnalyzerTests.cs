@@ -204,7 +204,9 @@ public class CombinedSizeModifierAnalyzerTests
             class C { object Build() => Factories.Button("x").Width(20).Height(30); }
             """);
         if (compilation.GetTypeByMetadataName("Microsoft.UI.Reactor.ElementExtensions") is null)
-            compilation = compilation.AddReferences(MetadataReference.CreateFromFile(typeof(Factories).Assembly.Location));
+            compilation = compilation.AddReferences(
+                MetadataReference.CreateFromFile(typeof(Factories).Assembly.Location),
+                MetadataReference.CreateFromFile(typeof(global::Microsoft.UI.Reactor.Core.ReactorElement).Assembly.Location));
         Assert.Empty(compilation.GetDiagnostics(ct).Where(d => d.Severity == DiagnosticSeverity.Error));
         var tree = compilation.SyntaxTrees.Single();
         var body = tree.GetRoot(ct).DescendantNodes().OfType<ArrowExpressionClauseSyntax>().Single();

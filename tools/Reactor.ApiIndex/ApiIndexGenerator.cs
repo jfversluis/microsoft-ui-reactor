@@ -338,8 +338,12 @@ public static class ApiIndexGenerator
             // Constructors are already sorted above; emit via Section for header logic.
             Section(lines);
 
-            // Properties (instance + static), excluding indexers.
-            var props = t.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
+            // Properties (instance + static), excluding indexers. Properties a type inherits
+            // directly from the framework-neutral core (spec 067; e.g. Element.Key, declared on
+            // ReactorElement) are listed on it: that is where an author meets them, and the core
+            // assembly is not indexed on its own.
+            var props = DeclaringTypesForProperties(t)
+                .SelectMany(dt => dt.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
                 .Where(p => p.GetIndexParameters().Length == 0)
                 .Where(p => !IsThemeToken(t, p))
                 .Where(p => !IsObsolete(p))
@@ -376,6 +380,18 @@ public static class ApiIndexGenerator
 
     const string CoreFactoriesTypeFullName = "Microsoft.UI.Reactor.Factories";
     const string AdvancedFactoriesTypeFullName = "Microsoft.UI.Reactor.Advanced.Factories";
+    const string NeutralCoreAssemblyName = "Microsoft.UI.Reactor.Core";
+
+    // The type itself plus the unbroken run of base types directly above it that live in the
+    // neutral core. Stops at the first base outside the core, so a type further down the
+    // hierarchy (TextBlockElement : Element) does not repeat what its base already lists.
+    static IEnumerable<Type> DeclaringTypesForProperties(Type t)
+    {
+        yield return t;
+        if (t.Assembly.GetName().Name == NeutralCoreAssemblyName) yield break;
+        for (var b = t.BaseType; b is not null && b.Assembly.GetName().Name == NeutralCoreAssemblyName; b = b.BaseType)
+            yield return b;
+    }
 
     static bool IsIndexablePublicType(Type t)
     {

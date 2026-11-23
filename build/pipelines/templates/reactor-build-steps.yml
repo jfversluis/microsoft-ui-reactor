@@ -296,6 +296,16 @@ steps:
           -p:Platform=AnyCPU -p:CI=true
       displayName: 'Build Advanced (AnyCPU)'
 
+    # ── Build Reactor.Core (AnyCPU) for packing. ──
+    # The framework-neutral core (spec 067) is a direct slnx member, so the slnx build above
+    # produced it for the solution platform only. `dotnet pack` below needs the AnyCPU output.
+    # Same shape as the Advanced step above.
+    - pwsh: |
+        dotnet build src/Reactor.Core/Reactor.Core.csproj `
+          --no-restore --configuration ${{ parameters.configuration }} `
+          -p:Platform=AnyCPU -p:CI=true
+      displayName: 'Build Core (AnyCPU)'
+
     # ── Build Reactor.Devtools (AnyCPU) for packing. ──
     # Reactor.Devtools IS a direct slnx member, so the slnx build above produced it for the
     # solution platform (x64/ARM64 -- the slnx declares no AnyCPU configuration) and the slnx
@@ -324,6 +334,8 @@ steps:
     #     (packed outside analyzers/ so it is loaded only when ReactorSourceMap
     #      is true; the sign glob below is by project bin\, not package path,
     #      so it is unaffected by where the DLL lands in the nupkg)
+    # And inside Microsoft.UI.Reactor.Core.nupkg:
+    #   lib/<tfm>/Microsoft.UI.Reactor.Core.dll
     # And inside Microsoft.UI.Reactor.Advanced.nupkg:
     #   lib/<tfm>/Reactor.Advanced.dll
     # And inside Microsoft.UI.Reactor.Devtools.nupkg:
@@ -335,7 +347,7 @@ steps:
         inputs:
           command: 'sign'
           signing_profile: external_distribution
-          files_to_sign: 'Reactor\bin\**\Reactor.dll;Reactor\bin\**\Reactor.resources.dll;Reactor\bin\**\Reactor.Wrappers.Abstractions.dll;Reactor.Advanced\bin\**\Reactor.Advanced.dll;Reactor.Devtools\bin\**\Microsoft.UI.Reactor.Devtools.dll;Reactor.Analyzers\bin\**\Reactor.Analyzers.dll;Reactor.Localization.Generator\bin\**\Reactor.Localization.Generator.dll;Reactor.Wrappers.Generator\bin\**\Reactor.Wrappers.Generator.dll;Reactor.SourceMap.Generator\bin\**\Reactor.SourceMap.Generator.dll'
+          files_to_sign: 'Reactor\bin\**\Reactor.dll;Reactor\bin\**\Reactor.resources.dll;Reactor\bin\**\Reactor.Wrappers.Abstractions.dll;Reactor.Core\bin\**\Microsoft.UI.Reactor.Core.dll;Reactor.Advanced\bin\**\Reactor.Advanced.dll;Reactor.Devtools\bin\**\Microsoft.UI.Reactor.Devtools.dll;Reactor.Analyzers\bin\**\Reactor.Analyzers.dll;Reactor.Localization.Generator\bin\**\Reactor.Localization.Generator.dll;Reactor.Wrappers.Generator\bin\**\Reactor.Wrappers.Generator.dll;Reactor.SourceMap.Generator\bin\**\Reactor.SourceMap.Generator.dll'
           search_root: '$(Build.SourcesDirectory)\src'
 
     - pwsh: |
@@ -344,6 +356,16 @@ steps:
           -p:Version=$(PackageVersion) `
           -o "${{ parameters.outputDirectory }}\nupkg"
       displayName: 'Pack framework NuGet'
+
+    # Pack the neutral core NuGet, which the framework package depends on, from the AnyCPU
+    # output built above. Mirrors the 'Pack Core NuGet' step in .github/workflows/release.yml.
+    - pwsh: |
+        dotnet pack src/Reactor.Core/Reactor.Core.csproj `
+          --no-build --configuration ${{ parameters.configuration }} `
+          -p:Platform=AnyCPU `
+          -p:Version=$(PackageVersion) `
+          -o "${{ parameters.outputDirectory }}\nupkg"
+      displayName: 'Pack Core NuGet'
 
     # Pack the Advanced (Win2D/advanced controls) NuGet from the AnyCPU output built
     # above. Mirrors the 'Pack Advanced NuGet' step in .github/workflows/release.yml.

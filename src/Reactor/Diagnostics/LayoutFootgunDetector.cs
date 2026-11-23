@@ -194,8 +194,8 @@ internal static class LayoutFootgunDetector
     /// <summary>
     /// Builds the emit-once dedup key for an offending placement. The key always encodes the stack
     /// type plus its concrete grid placement (row/column); the author-supplied
-    /// <see cref="Element.Key"/> is appended as an extra discriminator when present. Because
-    /// <see cref="Element.Key"/> uniqueness is only guaranteed among siblings, keying on it alone
+    /// <see cref="ReactorElement.Key"/> is appended as an extra discriminator when present. Because
+    /// <see cref="ReactorElement.Key"/> uniqueness is only guaranteed among siblings, keying on it alone
     /// could wrongly collapse distinct offenders (the same key reused under different grids, or a
     /// keyed stack that moves to a new row/column). Including the placement keeps each distinct
     /// position warning once while staying stable across re-renders (records produce
@@ -204,7 +204,7 @@ internal static class LayoutFootgunDetector
     /// Known limitation: the dedup set is process-global and the element tree carries no parent
     /// pointer, so two <em>unkeyed</em> offenders that share the same stack type and row/column but
     /// live in <em>different</em> Grids hash to the same key — only the first warns. This is an
-    /// accepted tradeoff for a DEBUG-only diagnostic; assign distinct <see cref="Element.Key"/>s
+    /// accepted tradeoff for a DEBUG-only diagnostic; assign distinct <see cref="ReactorElement.Key"/>s
     /// (e.g. via <c>.WithKey(...)</c>) to the stacks to surface every offender.
     /// </para>
     /// </summary>

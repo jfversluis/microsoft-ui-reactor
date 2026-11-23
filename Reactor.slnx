@@ -525,6 +525,10 @@
   <Project Path="src/Reactor.SourceMap.Generator/Reactor.SourceMap.Generator.csproj" />
   <Project Path="src/Reactor.Devtools/Reactor.Devtools.csproj" />
   <Project Path="src/Reactor/Reactor.csproj" />
+  <Project Path="src/Reactor.Core/Reactor.Core.csproj">
+    <Platform Solution="*|ARM64" Project="ARM64" />
+    <Platform Solution="*|x64" Project="x64" />
+  </Project>
   <Project Path="src/Reactor.Wrappers.Abstractions/Reactor.Wrappers.Abstractions.csproj">
     <Platform Solution="*|ARM64" Project="ARM64" />
     <Platform Solution="*|x64" Project="x64" />

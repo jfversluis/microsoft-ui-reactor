@@ -39,6 +39,9 @@ internal static class TestCompilation
     static bool IsReactorOrWinUI(string asmName)
     {
         if (asmName.StartsWith("Reactor", StringComparison.OrdinalIgnoreCase)) return true;
+        // Microsoft.UI.Reactor.Core (spec 067), .Devtools, …: loaded or not depending on which
+        // tests ran first, so including them would make the reference set order-dependent.
+        if (asmName.StartsWith("Microsoft.UI.Reactor", StringComparison.OrdinalIgnoreCase)) return true;
         if (asmName.StartsWith("Microsoft.UI.Xaml", StringComparison.OrdinalIgnoreCase)) return true;
         if (asmName.StartsWith("Microsoft.WindowsAppRuntime", StringComparison.OrdinalIgnoreCase)) return true;
         if (asmName.StartsWith("WinRT", StringComparison.OrdinalIgnoreCase)) return true;

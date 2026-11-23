@@ -298,7 +298,7 @@ public sealed partial class Reconciler
 
     /// <summary>
     /// Gives the factory output of a transparent <see cref="KeyedMemoElement"/> the wrapper's
-    /// <see cref="Element.Key"/>.
+    /// <see cref="ReactorElement.Key"/>.
     /// </summary>
     /// <remarks>
     /// The wrapper mounts no control of its own, so the inner control stands for it in the

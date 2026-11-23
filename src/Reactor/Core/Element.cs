@@ -21,14 +21,8 @@ namespace Microsoft.UI.Reactor.Core;
 /// Elements are cheap to create and diff — they never touch real controls directly.
 /// </summary>
 // <snippet:element-record>
-public abstract record Element
+public abstract record Element : ReactorElement
 {
-    /// <summary>
-    /// Optional key for stable identity across re-renders (like React's key prop).
-    /// When set, the reconciler uses it to match elements across list reorderings.
-    /// </summary>
-    public string? Key { get; init; }
-
     /// <summary>
     /// Layout modifiers (margin, padding, size, alignment, etc.) applied to this element.
     /// Set via fluent extension methods: TextBlock("hi").Margin(10).Width(200)
@@ -1712,7 +1706,7 @@ public record MemoElement(Func<RenderContext, Element> RenderFunc, object?[]? De
 /// <see cref="ElementFactory{T}"/> recycle path.</para>
 ///
 /// <para>The positional parameter is named <c>MemoKey</c> (not <c>Key</c>) so it does not clash
-/// with the inherited <see cref="Element.Key"/> string used for keyed reconciliation.</para>
+/// with the inherited <see cref="ReactorElement.Key"/> string used for keyed reconciliation.</para>
 /// </summary>
 public sealed record KeyedMemoElement(object MemoKey, Func<Element> Factory) : Element;
 

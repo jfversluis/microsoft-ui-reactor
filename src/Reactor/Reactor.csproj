@@ -155,6 +155,10 @@
          Because PrivateAssets blocks transitive flow, the in-repo consumers that
          author/run the generator (AppTests.Host, WctControls, Reactor.Tests)
          reference this project directly. -->
+    <!-- The framework-neutral core (spec 067). Its types are part of this assembly's public API
+         (Element derives from ReactorElement), so it flows to consumers: in-repo through this
+         reference, and as a package dependency on Microsoft.UI.Reactor.Core. -->
+    <ProjectReference Include="..\Reactor.Core\Reactor.Core.csproj" />
     <ProjectReference Include="..\Reactor.Wrappers.Abstractions\Reactor.Wrappers.Abstractions.csproj"
                       PrivateAssets="all" />
     <ProjectReference Include="..\Reactor.Analyzers\Reactor.Analyzers.csproj"

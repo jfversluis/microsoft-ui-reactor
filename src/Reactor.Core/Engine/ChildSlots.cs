@@ -5,15 +5,15 @@ namespace Microsoft.UI.Reactor.Core;
 /// <summary>
 /// Slot identity for the unkeyed children of a container: which argument of the
 /// container factory each child came from. The DSL container factories drop
-/// <see langword="null"/> / <see cref="EmptyElement"/> arguments and flatten
-/// <see cref="GroupElement"/>, so a child's index in <c>Children</c> shifts when a
-/// conditional sibling before it toggles. <see cref="ChildReconciler"/> matches
+/// <see langword="null"/> / <c>EmptyElement</c> arguments and flatten
+/// <c>GroupElement</c>, so a child's index in <c>Children</c> shifts when a
+/// conditional sibling before it toggles. <c>ChildReconciler</c> matches
 /// unkeyed children by slot instead, so <c>cond ? X : Empty()</c> holds its place
 /// the way React's <c>null</c> does and the siblings after it keep their state.
 /// </summary>
 /// <remarks>
 /// A slot id is the path of argument indices that leads to the child: the container's
-/// argument, then — for a child flattened out of a <see cref="GroupElement"/> — the
+/// argument, then — for a child flattened out of a <c>GroupElement</c> — the
 /// group's argument, and so on. Each level takes 16 bits of a <see langword="long"/>,
 /// most significant first; levels below the first store the index plus one, so a
 /// shorter path sorts before the paths that extend it and ids increase with position.
@@ -39,7 +39,7 @@ internal static class ChildSlots
     private const int LevelBits = 16;
     private const int FirstLevelShift = 48;
 
-    private static readonly ConditionalWeakTable<Element[], long[]> s_slots = new();
+    private static readonly ConditionalWeakTable<ReactorElement[], long[]> s_slots = new();
     private static volatile bool s_any;
 
     internal static long ForIndex(int index) => (long)Math.Min(index, MaxIndex) << FirstLevelShift;
@@ -56,13 +56,13 @@ internal static class ChildSlots
         ((long)Math.Min(index, MaxIndex) << FirstLevelShift)
         | ((groupSlot >>> LevelBits) + (1L << (FirstLevelShift - LevelBits)));
 
-    internal static void Set(Element[] children, long[] slots)
+    internal static void Set(ReactorElement[] children, long[] slots)
     {
         s_slots.AddOrUpdate(children, slots);
         s_any = true;
     }
 
-    internal static long[]? Get(Element[] children) =>
+    internal static long[]? Get(ReactorElement[] children) =>
         s_any && s_slots.TryGetValue(children, out var slots) ? slots : null;
 
     internal static long At(long[]? slots, int index) => slots is null ? ForIndex(index) : slots[index];

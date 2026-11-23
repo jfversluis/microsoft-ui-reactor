@@ -1,6 +1,7 @@
 name: Package
 
-# Produces the framework NuGet (.nupkg + .snupkg) and the agent skill kit
+# Produces the framework NuGets (.nupkg + .snupkg; Microsoft.UI.Reactor and the
+# Microsoft.UI.Reactor.Core it depends on, plus the optional packages) and the agent skill kit
 # (reactor-skill-kit-<version>.zip with bin/x64 + bin/arm64).
 #
 # Versions come from MinVer (see "Resolve version" step). Both PR and main
@@ -176,6 +177,16 @@ jobs:
       - name: Pack framework NuGet
         run: >
           dotnet pack src/Reactor/Reactor.csproj
+          --no-build --configuration Release
+          -p:Version=${{ steps.version.outputs.version }}
+          -o artifacts/nupkg
+
+      - name: Pack Core NuGet
+        # Microsoft.UI.Reactor.Core is the framework-neutral engine (spec 067). The framework
+        # package depends on it at the same version, so it ships alongside. The framework build
+        # above already built it AnyCPU, through its ProjectReference.
+        run: >
+          dotnet pack src/Reactor.Core/Reactor.Core.csproj
           --no-build --configuration Release
           -p:Version=${{ steps.version.outputs.version }}
           -o artifacts/nupkg
@@ -479,7 +490,7 @@ jobs:
 
             `Reactor.VsExtension.vsix` — very rough, experimental live embedded preview for Visual Studio 2026. This is the roughest surface in the experimental Reactor repo; expect install friction, solution-load races, HWND/DPI edge cases, and breaking changes. Requires Windows 11 23H2+ and WinAppSDK 1.6+. See [VS extension guide](https://github.com/microsoft/microsoft-ui-reactor/blob/main/docs/guide/vs-extension.md) or [src/vs-reactor/README.md](https://github.com/microsoft/microsoft-ui-reactor/blob/main/src/vs-reactor/README.md). Phase 1 dev distribution may be unsigned.
 
-            ## Five assets
+            ## Six assets
 
             ### `Microsoft.UI.Reactor.${{ steps.version.outputs.version }}.nupkg` — the framework
 
@@ -500,6 +511,11 @@ jobs:
             <PackageReference Include="Microsoft.UI.Reactor" Version="${{ steps.version.outputs.version }}" />
             <PackageReference Include="Microsoft.UI.Reactor.Advanced" Version="${{ steps.version.outputs.version }}" />
             ```
+
+            ### `Microsoft.UI.Reactor.Core.${{ steps.version.outputs.version }}.nupkg` — the framework-neutral core
+
+            A dependency of the framework package: put it in the same folder. Versioned in
+            lock-step with the framework package.
 
             ### `Microsoft.UI.Reactor.Advanced.${{ steps.version.outputs.version }}.nupkg` — optional Win2D/advanced controls
 

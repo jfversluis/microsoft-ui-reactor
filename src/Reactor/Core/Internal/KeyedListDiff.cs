@@ -821,7 +821,7 @@ internal static class KeyedListDiff
     }
 
     /// <summary>
-    /// Reports duplicated <see cref="Element.Key"/>s among one panel's children (for example
+    /// Reports duplicated <see cref="ReactorElement.Key"/>s among one panel's children (for example
     /// two <c>.WithKey("same")</c> siblings in a <c>VStack</c>). The keyed child reconcile
     /// matches by key, so a duplicate silently pairs the wrong controls. Allocation-free for
     /// small panels; callers skip it when the sibling keys did not change.
