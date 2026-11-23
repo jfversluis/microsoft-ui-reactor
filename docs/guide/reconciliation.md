@@ -275,14 +275,14 @@ internal static void Reconcile(
     var oldFiltered = Filter(oldChildren, host, out var oldSlots);
     var newFiltered = Filter(newChildren, host, out var newSlots);
 
-    bool hasKeys = HasAnyKeys(oldFiltered) || HasAnyKeys(newFiltered);
+    bool hasKeys = ChildReconcilerShared.HasAnyKeys(oldFiltered) || ChildReconcilerShared.HasAnyKeys(newFiltered);
 
     // Duplicate sibling keys are matched to the wrong controls by the keyed path below;
     // report them (deduplicated per panel) rather than let that happen silently. Only when
     // the key sequence changed: an unchanged one was already checked when it first
     // appeared, here or at mount, so a stable keyed panel's re-render pays one compare
     // per child (the prefix walk below does the same) rather than a duplicate scan.
-    if (hasKeys && newFiltered.Length > 1 && !SameKeys(oldFiltered, newFiltered))
+    if (hasKeys && newFiltered.Length > 1 && !ChildReconcilerShared.SameKeys(oldFiltered, newFiltered))
         host.ReportDuplicateSiblingKeys(newFiltered, parentControl);
 
     // Children that lead to a component which updated its own state. Their elements can be
@@ -535,14 +535,14 @@ internal static void Reconcile(
     var oldFiltered = Filter(oldChildren, host, out var oldSlots);
     var newFiltered = Filter(newChildren, host, out var newSlots);
 
-    bool hasKeys = HasAnyKeys(oldFiltered) || HasAnyKeys(newFiltered);
+    bool hasKeys = ChildReconcilerShared.HasAnyKeys(oldFiltered) || ChildReconcilerShared.HasAnyKeys(newFiltered);
 
     // Duplicate sibling keys are matched to the wrong controls by the keyed path below;
     // report them (deduplicated per panel) rather than let that happen silently. Only when
     // the key sequence changed: an unchanged one was already checked when it first
     // appeared, here or at mount, so a stable keyed panel's re-render pays one compare
     // per child (the prefix walk below does the same) rather than a duplicate scan.
-    if (hasKeys && newFiltered.Length > 1 && !SameKeys(oldFiltered, newFiltered))
+    if (hasKeys && newFiltered.Length > 1 && !ChildReconcilerShared.SameKeys(oldFiltered, newFiltered))
         host.ReportDuplicateSiblingKeys(newFiltered, parentControl);
 
     // Children that lead to a component which updated its own state. Their elements can be

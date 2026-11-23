@@ -64,15 +64,32 @@ recorded as a timing flake to watch, not waived.
 Rule (phase 0): a timing regression only if flagged on two independent `/perf` runs, or mean
 > +5% with a CI excluding 0; allocations > 1% with a CI excluding 0.
 
-| Leg | `/perf` #1 (head `d71a0c9e`) | `/perf` #2 (head `8573853f`) |
-|---|---|---|
-| StocksGrid 50% | renders +0.9%, reconcile +0.9%, alloc +0.1%: within noise | PERF2_STOCKS |
-| Skip floor 0% | reconcile −0.4%: within noise | PERF2_FLOOR |
-| KeyedList (the moved keyed engine) | reconcile +1.7% [−2.1, +5.5], alloc −0.1%: within noise | PERF2_KEYED |
-| Flex, DataGrid | within noise | PERF2_OTHER |
-| Micro-suite, allocations | no bench flagged | PERF2_MICRO |
+| Leg | `/perf` #1 (`d71a0c9e`) | `/perf` #2 (`8573853f`) | `/perf` #3 (`497b6b2b`, after the fix) |
+|---|---|---|---|
+| StocksGrid 50%: reconcile, alloc | +0.9%, +0.1% | within noise | +2.9% [−2.8, +8.5], +0.9% [−1.0, +2.8] |
+| Skip floor 0%: reconcile | −0.4% | −2.2% | −1.2% |
+| **KeyedList: reconcile** | +1.7% [−2.1, +5.5] | **+1.8% [+0.5, +3.0] flagged** | **+1.3% [−0.3, +2.8]** |
+| KeyedList: alloc | −0.1% | within noise | +0.1% |
+| **Keyed micro-benches KX1/KX3/KX4 (ns)** | +1.2 / +0.8 / +2.1% | +2.0 / +2.0 / +2.6% | **+0.8 / +0.9 / +0.9%** |
+| Flex, DataGrid | within noise | within noise | DataGrid working set +0.4% [+0.1, +0.7] flagged; its alloc −0.2% |
+| Micro-suite allocations | none flagged | none flagged | none flagged |
 
-All 55 compared rows of run #1 are within noise, and none is flagged. Run #2: PERF2_SUMMARY.
+**The keyed-path finding, and the fix.** Runs #1 and #2 agreed on about +1.7% on KeyedList, the
+leg that exercises the moved engine, and the keyed micro-benches were slower in all 8
+measurements. Under the rule that counts as noise (flagged once, mean under 5%), but the
+direction was consistent, so the cause was traced instead of waived. The JIT's output showed it:
+the engine compiles as one shared body, `ChildReconciler<__Canon, __Canon, WinUIChildHost>`, and
+calls through the host interface, which was generic over the element and native types, were
+runtime-resolved indirect calls that never inlined. The fix (`497b6b2b`) splits the host contract
+so per-child calls go through a non-generic interface that binds directly to the struct host.
+Measured on the oracle (spec 067 §4: the same engine source compiled non-generically, on a fake
+host), the generic build's overhead fell from +43% to +10–14% on a 500-child unchanged keyed pass.
+On WinUI, run #3 moved KeyedList and the keyed micro-benches back inside noise. A fourth run on
+the final head is the second independent measurement of the fix (see PR #2).
+
+**DataGrid working set.** The tool marks DataGrid working set as informational: the workload's
+re-render is dispatcher-debounced, and its allocations, the authoritative signal, are −0.2% and
+within noise. It doesn't touch the keyed engine. Recorded, not waived; run #4 re-measures it.
 
 ## Coverage and size
 
