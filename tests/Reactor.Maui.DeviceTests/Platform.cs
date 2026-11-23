@@ -106,6 +106,22 @@ public static class Platform
         return null;
     }
 
+    /// <summary>The window's left and right safe-area insets on phones and tablets (0 elsewhere).</summary>
+    public static (double Left, double Right) SafeAreaHorizontal(IView view)
+    {
+#if IOS && !MACCATALYST
+        if (View(view) is UIKit.UIView { Window: { } window }) return (window.SafeAreaInsets.Left, window.SafeAreaInsets.Right);
+#elif ANDROID
+        if (OperatingSystem.IsAndroidVersionAtLeast(30) && View(view) is Android.Views.View { RootWindowInsets: { } insets } native)
+        {
+            var bars = insets.GetInsets(Android.Views.WindowInsets.Type.SystemBars() | Android.Views.WindowInsets.Type.DisplayCutout());
+            var density = native.Context?.Resources?.DisplayMetrics?.Density ?? 1;
+            return (bars.Left / density, bars.Right / density);
+        }
+#endif
+        return (0, 0);
+    }
+
     /// <summary>Clicks a button through its virtual view, the path the platform's tap handler takes.</summary>
     public static void Tap(IView view)
     {

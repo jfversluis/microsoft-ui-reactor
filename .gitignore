@@ -259,3 +259,4 @@ tests/stress_perf_rn/**/Generated Files/
 
 # Reactor MAUI device-test reports (tests/Reactor.Maui.DeviceTests/run.sh).
 artifacts/device-tests/
+artifacts/maui-bench/

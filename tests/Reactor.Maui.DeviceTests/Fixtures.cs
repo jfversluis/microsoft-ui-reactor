@@ -106,11 +106,20 @@ public static class Fixtures
         await c.WaitFor(() => Platform.Size(cell11).Height > 0, "the grid to be laid out");
 
         var page = c.Window.Page!;
+        var grid = Platform.WindowFrame(c.Find<IGridLayout>());
         var origin = Platform.WindowFrame(cell00);
         var bottomRight = Platform.WindowFrame(cell11);
+        // MAUI keeps content inside the safe area by insetting it within the layout's frame.
+        var (insetLeft, insetRight) = Platform.SafeAreaHorizontal(cell00);
+        var contentLeft = grid.X + insetLeft;
+        var contentWidth = grid.Width - insetLeft - insetRight;
+        Console.WriteLine($"#   grid frame ({grid.X:0.#}, {grid.Y:0.#}, {grid.Width:0.#} x {grid.Height:0.#}), safe-area left/right {insetLeft:0.#}/{insetRight:0.#}, page {page.Width:0.#} x {page.Height:0.#}");
+        Close(contentLeft, origin.X, "column 0 starts at the content's left edge");
         Close(100, origin.Width, "column 0 width");
         Close(60, origin.Height, "row 0 height");
-        Close(page.Width - 100, Platform.Size(cell01).Width, "column 1 width", 2);
+        // The star column takes the rest of the content width.
+        Close(contentWidth - 100, Platform.Size(cell01).Width, "column 1 width", 2);
+        Close(page.Width, grid.Width, "the grid spans the page", 2);
         Close(100, bottomRight.X - origin.X, "column 1 starts after column 0");
         Close(60, bottomRight.Y - origin.Y, "row 1 starts after row 0");
         Check(bottomRight.Height > 100, $"row 1 fills the rest of the page, got {bottomRight.Height:0.#}");

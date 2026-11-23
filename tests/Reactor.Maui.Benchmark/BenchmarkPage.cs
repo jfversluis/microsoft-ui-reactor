@@ -56,7 +56,26 @@ public sealed class BenchmarkPage : ContentPage
         };
     }
 
-    private sealed record Renderer(string Name, ReactorRoot Root);
+    private sealed record Renderer(string Name, ReactorRoot Root, Shape Shape);
+
+    /// <summary>How rows are built. Default compares the two renderers; anchor mode compares component shapes.</summary>
+    private enum Shape { PlainRows, ComponentRows, AnchoredComponentRows }
+
+    // REACTOR_BENCH_MODE=anchor measures what a native anchor per component (spec 067 §5) would
+    // cost: both legs use the direct renderer and render each row as a component; the anchored leg
+    // wraps each component's output in a single-child pass-through layout, as an anchor would.
+    private static readonly bool AnchorMode = Environment.GetEnvironmentVariable("REACTOR_BENCH_MODE") == "anchor";
+
+    private sealed record RowProps(int Index, string Value, bool Anchored);
+
+    private sealed class RowComponent : Component<RowProps>
+    {
+        public override Element Render()
+        {
+            var row = HStack(8, Label($"Row {Props.Index}").Width(80), Label(Props.Value), Button("Edit"));
+            return Props.Anchored ? VStack(row) : row;
+        }
+    }
 
     /// <summary>Layout facts that must be identical across renderers; they prove both did the same work.</summary>
     private sealed record Check(double LabelWidth, double LabelFrameWidth, double LastRowY, double TotalHeight);
@@ -76,11 +95,17 @@ public sealed class BenchmarkPage : ContentPage
         // native measure caches, adding a full re-measure to whichever one runs next.
         var bounds = new Size(_host.Width > 0 ? _host.Width : 400, _host.Height > 0 ? _host.Height : 800);
         var scheduler = new ImmediateScheduler();
-        var renderers = new[]
-        {
-            new Renderer("controls", new ReactorRoot(MauiHandlers.CreateRegistry(), scheduler, SetRoot)),
-            new Renderer("direct", new ReactorRoot(DirectHandlers.CreateRegistry(), scheduler, SetRoot)),
-        };
+        var renderers = AnchorMode
+            ? new[]
+            {
+                new Renderer("components", new ReactorRoot(DirectHandlers.CreateRegistry(), scheduler, SetRoot), Shape.ComponentRows),
+                new Renderer("anchored", new ReactorRoot(DirectHandlers.CreateRegistry(), scheduler, SetRoot), Shape.AnchoredComponentRows),
+            }
+            : new[]
+            {
+                new Renderer("controls", new ReactorRoot(MauiHandlers.CreateRegistry(), scheduler, SetRoot), Shape.PlainRows),
+                new Renderer("direct", new ReactorRoot(DirectHandlers.CreateRegistry(), scheduler, SetRoot), Shape.PlainRows),
+            };
 
         var results = new Dictionary<(string, Scenario), List<Sample>>();
         var scenarios = Enum.GetValues<Scenario>();
@@ -93,7 +118,7 @@ public sealed class BenchmarkPage : ContentPage
                 foreach (var renderer in order)
                 {
                     _status.Text = $"Iteration {iteration + 1}/{Warmup + Measured}: {scenario} ({renderer.Name})";
-                    var sample = await RunScenarioAsync(renderer.Name, renderer.Root, scenario, bounds);
+                    var sample = await RunScenarioAsync(renderer, scenario, bounds);
                     if (iteration >= Warmup)
                     {
                         if (!results.TryGetValue((renderer.Name, scenario), out var list))
@@ -104,16 +129,17 @@ public sealed class BenchmarkPage : ContentPage
             }
         }
 
-        Report(results, bounds);
+        Report(results, bounds, renderers[0].Name, renderers[1].Name);
     }
 
-    private async Task<Sample> RunScenarioAsync(string name, ReactorRoot root, Scenario scenario, Size bounds)
+    private async Task<Sample> RunScenarioAsync(Renderer renderer, Scenario scenario, Size bounds)
     {
+        var (name, root, shape) = (renderer.Name, renderer.Root, renderer.Shape);
         // Untimed setup: every scenario except Mount starts from a mounted, laid-out tree.
         IView? lastRowBefore = null;
         if (scenario != Scenario.Mount)
         {
-            root.Render(Tree(version: 0, changedRowVersion: 0, reversed: false));
+            root.Render(Tree(shape, version: 0, changedRowVersion: 0, reversed: false));
             Layout(bounds);
             lastRowBefore = RowView(Rows - 1);
             await Task.Delay(SettleMs);
@@ -121,10 +147,10 @@ public sealed class BenchmarkPage : ContentPage
 
         var next = scenario switch
         {
-            Scenario.Mount => Tree(0, 0, false),
-            Scenario.UpdateAll => Tree(1, 1, false),
-            Scenario.UpdateOne => Tree(0, 1, false),
-            _ => Tree(0, 0, true),
+            Scenario.Mount => Tree(shape, 0, 0, false),
+            Scenario.UpdateAll => Tree(shape, 1, 1, false),
+            Scenario.UpdateOne => Tree(shape, 0, 1, false),
+            _ => Tree(shape, 0, 0, true),
         };
 
         GC.Collect();
@@ -153,7 +179,7 @@ public sealed class BenchmarkPage : ContentPage
             Stopwatch.GetElapsedTime(rendered, laidOut).TotalMilliseconds,
             allocated,
             GC.CollectionCount(0) - collectionsBefore,
-            Validate(scenario, size, lastRowBefore));
+            Validate(scenario, shape, size, lastRowBefore));
 
         // Untimed teardown, and a pause so the platform can process removals and draw.
         root.Unmount();
@@ -163,15 +189,22 @@ public sealed class BenchmarkPage : ContentPage
 
     private IView RowView(int index) => ((IList<IView>)_host[0])[index];
 
+    // The row's own HStack, inside the anchor when there is one.
+    private IList<IView> RowContent(int index, Shape shape)
+    {
+        var row = RowView(index);
+        return (IList<IView>)(shape == Shape.AnchoredComponentRows ? ((IList<IView>)row)[0] : row);
+    }
+
     /// <summary>
     /// Checks, outside the timer, that the operation really completed: the changed label shows the
     /// expected text, it and the last row were arranged, and a reorder moved the existing native rows.
     /// Any failure aborts the run. The returned facts are compared across renderers in the report.
     /// </summary>
-    private Check Validate(Scenario scenario, Size size, IView? lastRowBefore)
+    private Check Validate(Scenario scenario, Shape shape, Size size, IView? lastRowBefore)
     {
         var rowIndex = scenario == Scenario.UpdateOne ? ChangedRow : 0;
-        var row = (IList<IView>)RowView(rowIndex);
+        var row = RowContent(rowIndex, shape);
         var label = row[1];
         var expectedRow = scenario == Scenario.Reverse ? Rows - 1 - rowIndex : rowIndex;
         var expectedText = scenario is Scenario.UpdateAll or Scenario.UpdateOne
@@ -212,20 +245,21 @@ public sealed class BenchmarkPage : ContentPage
     }
 
     // Each row's value text differs in length between versions, so an update changes its measured size.
-    private static Element Tree(int version, int changedRowVersion, bool reversed)
+    private static Element Tree(Shape shape, int version, int changedRowVersion, bool reversed)
     {
         var rows = new Element[Rows];
         for (var i = 0; i < Rows; i++)
         {
             var rowVersion = i == ChangedRow ? changedRowVersion : version;
             var value = rowVersion == 0 ? $"v{i}" : $"value {i}, revision {rowVersion}";
-            rows[reversed ? Rows - 1 - i : i] =
-                HStack(8, Label($"Row {i}").Width(80), Label(value), Button("Edit")).WithKey(i.ToString());
+            rows[reversed ? Rows - 1 - i : i] = shape == Shape.PlainRows
+                ? HStack(8, Label($"Row {i}").Width(80), Label(value), Button("Edit")).WithKey(i.ToString())
+                : Component<RowComponent, RowProps>(new(i, value, shape == Shape.AnchoredComponentRows)).WithKey(i.ToString());
         }
         return VStack(2, rows);
     }
 
-    private void Report(Dictionary<(string Renderer, Scenario Scenario), List<Sample>> results, Size bounds)
+    private void Report(Dictionary<(string Renderer, Scenario Scenario), List<Sample>> results, Size bounds, string baseline, string variant)
     {
         var platform = DeviceInfo.Current;
         var environment = new
@@ -236,6 +270,9 @@ public sealed class BenchmarkPage : ContentPage
             os = platform.VersionString,
             runtime = RuntimeInformation.FrameworkDescription,
             dynamicCode = RuntimeFeature.IsDynamicCodeCompiled,
+            mode = AnchorMode ? "anchor" : "renderers",
+            baseline,
+            variant,
             rows = Rows,
             measured = Measured,
             width = bounds.Width,
@@ -247,19 +284,19 @@ public sealed class BenchmarkPage : ContentPage
         table.AppendLine($"{environment.device} · {environment.platform} {environment.os} · {Rows} rows · median of {Measured}");
         foreach (var scenario in Enum.GetValues<Scenario>())
         {
-            var controls = Summarize(results[("controls", scenario)]);
-            var direct = Summarize(results[("direct", scenario)]);
-            var line = new
+            var a = Summarize(results[(baseline, scenario)]);
+            var b = Summarize(results[(variant, scenario)]);
+            var line = new Dictionary<string, object>
             {
-                scenario = scenario.ToString(),
-                controls,
-                direct,
-                totalDelta = Delta(controls.TotalMs, direct.TotalMs),
-                allocDelta = Delta(controls.AllocatedKB, direct.AllocatedKB),
-                layoutMatches = controls.Checks.Count == 1 && controls.Checks.SetEquals(direct.Checks),
+                ["scenario"] = scenario.ToString(),
+                [baseline] = a,
+                [variant] = b,
+                ["totalDelta"] = Delta(a.TotalMs, b.TotalMs),
+                ["allocDelta"] = Delta(a.AllocatedKB, b.AllocatedKB),
+                ["layoutMatches"] = a.Checks.Count == 1 && a.Checks.SetEquals(b.Checks),
             };
             Emit($"REACTOR_BENCH_RESULT {JsonSerializer.Serialize(line)}");
-            table.AppendLine($"{scenario}: controls {controls.TotalMs:F1} ms / {controls.AllocatedKB:F0} KB, direct {direct.TotalMs:F1} ms / {direct.AllocatedKB:F0} KB ({line.totalDelta}, alloc {line.allocDelta}){(line.layoutMatches ? "" : " LAYOUT MISMATCH")}");
+            table.AppendLine($"{scenario}: {baseline} {a.TotalMs:F1} ms / {a.AllocatedKB:F0} KB, {variant} {b.TotalMs:F1} ms / {b.AllocatedKB:F0} KB ({line["totalDelta"]}, alloc {line["allocDelta"]}){((bool)line["layoutMatches"] ? "" : " LAYOUT MISMATCH")}");
         }
         Emit("REACTOR_BENCH_DONE");
         _status.Text = table.ToString();
