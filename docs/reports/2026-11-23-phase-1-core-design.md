@@ -64,14 +64,14 @@ recorded as a timing flake to watch, not waived.
 Rule (phase 0): a timing regression only if flagged on two independent `/perf` runs, or mean
 > +5% with a CI excluding 0; allocations > 1% with a CI excluding 0.
 
-| Leg | #1 (`d71a0c9e`) | #2 (`8573853f`) | #3 (`497b6b2b`) | Final head: two runs |
+| Leg | #1 (`d71a0c9e`) | #2 (`8573853f`) | #3 (`497b6b2b`) | Final head `46acb9c7`: runs A, B |
 |---|---|---|---|---|
-| StocksGrid 50%: reconcile, alloc | +0.9%, +0.1% | within noise | +2.9% [−2.8, +8.5], +0.9% | PERF_FINAL_STOCKS |
-| Skip floor 0%: reconcile | −0.4% | −2.2% | −1.2% | PERF_FINAL_FLOOR |
-| **KeyedList: reconcile** | +1.7% [−2.1, +5.5] | **+1.8% [+0.5, +3.0] flagged** | +1.3% [−0.3, +2.8] | PERF_FINAL_KEYED |
-| **Keyed micro-benches KX1/KX3/KX4 (ns)** | +1.2 / +0.8 / +2.1% | +2.0 / +2.0 / +2.6% | +0.8 / +0.9 / +0.9% | PERF_FINAL_KX |
-| Flex, DataGrid | within noise | within noise | DataGrid working set +0.4% flagged; alloc −0.2% | PERF_FINAL_OTHER |
-| Micro-suite allocations | none flagged | none flagged | none flagged | PERF_FINAL_ALLOC |
+| StocksGrid 50%: reconcile, alloc | +0.9%, +0.1% | within noise | +2.9% [−2.8, +8.5], +0.9% | A: within noise · B: −1.7% [−3.6, +0.2], alloc +0.3% |
+| Skip floor 0%: reconcile | −0.4% | −2.2% | −1.2% | A: within noise · B: +1.3% [−5.3, +7.9] |
+| **KeyedList: reconcile** | +1.7% [−2.1, +5.5] | **+1.8% [+0.5, +3.0] flagged** | +1.3% [−0.3, +2.8] | A: +1.0% [−0.3, +2.3] · B: **+0.1% [−1.5, +1.6]** |
+| **Keyed micro-benches KX1/KX3/KX4 (ns)** | +1.2 / +0.8 / +2.1% | +2.0 / +2.0 / +2.6% | +0.8 / +0.9 / +0.9% | A: +3.3 / +2.0 / +2.1% · B: +1.0 / +1.6 / +2.2% (all within noise) |
+| Flex, DataGrid | within noise | within noise | DataGrid working set +0.4% flagged; alloc −0.2% | A: **DataGrid reconcile +3.8% [+0.9, +6.7] flagged**, Flex alloc −1.0% · B: DataGrid +0.5% [−3.3, +4.3] |
+| Micro-suite allocations | none flagged | none flagged | none flagged | none flagged in either |
 
 **The keyed-path finding.** Runs #1 and #2 agreed on about +1.7% on KeyedList, the leg that
 exercises the moved engine, and the keyed micro-benches were slower in all 8 measurements. Under
@@ -91,7 +91,16 @@ was what helped, and the ablation above showed it wasn't, so the final head keep
 contract (compile-time checked) and only the helper changes. An earlier unpaired figure of +43%
 in that commit's message was wrong and is superseded by this table. The remaining gap is
 generic-dictionary type lookups that shared code can't avoid; the fake host magnifies it, since
-WinUI does far more work per child. The last column is the gate: two `/perf` runs on the final head.
+WinUI does far more work per child.
+
+**Gate verdict on the final head (`46acb9c7`, runs A and B).** No leg is flagged on both runs, and
+no mean exceeds +5%, so by the phase 0 rule there is no regression: run B has 55 of 55 rows within
+noise. Run A flagged DataGrid reconcile (+3.8%), which run B didn't repeat (+0.5%). That leg's
+earlier results were +0.2%, +1.8% and +0.7%, and its baseline varied from 58 to 120 ms between
+runners. Candidly, though, the keyed micro-benches sit **+1% to +3% (ns) in nearly every run**,
+each within noise but consistently positive. That is the residual cost of shared generic code
+the oracle shows; a CPU difference this small can't be resolved per run. Decision 4 below
+covers it.
 
 **DataGrid working set.** The tool marks DataGrid working set as informational: the workload's
 re-render is dispatcher-debounced, and its allocations, the authoritative signal, are −0.2% and
@@ -121,3 +130,9 @@ it correct; the cross-family reviewer's challenge to the mechanism led to the ab
    duplicates `Key` in record `ToString()`).
 3. **Separate `Microsoft.UI.Reactor.Core` package** pinned at `[V]` (versus bundling into the
    framework's `lib/`; spec 067 §9 records why).
+4. **The residual generic-engine cost.** Either accept it: macro legs within noise, keyed
+   micro-benches about +1–3% ns, measured again at every step 2 move. Or remove it entirely by
+   compiling the engine per renderer from one source (concrete types, as the oracle does), at the
+   cost of shipping engine code in each renderer assembly rather than in the core package.
+   Recommendation: accept for now, and decide at step 2, when the full reconciler (not just the
+   child diff) shows whether the gap grows.
