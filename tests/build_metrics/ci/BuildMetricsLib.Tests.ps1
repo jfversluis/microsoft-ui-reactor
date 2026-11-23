@@ -191,7 +191,7 @@ Assert-NotMatch $baseGoneComment 'No size change beyond'      'baseline-unavaila
 
 # ── Get-BuildMetricsPackageSpec / ConvertTo-SafeMeasurements (security boundary) ─
 $spec = Get-BuildMetricsPackageSpec
-Assert-Equal 3 $spec.Count 'package spec has all three tracked packages'
+Assert-Equal 4 $spec.Count 'package spec has all four tracked packages'
 Assert-Equal 'Microsoft.UI.Reactor.nupkg' ($spec | Where-Object { $_.PkgKey -eq 'Reactor' }).PkgLabel 'spec maps the framework nupkg label'
 Assert-Equal 'Assemblies in Microsoft.UI.Reactor' ($spec | Where-Object { $_.PkgKey -eq 'Reactor' }).AssemblyGroup 'spec maps the framework assembly group'
 
@@ -203,19 +203,23 @@ $raw = @(
     [pscustomobject]@{ Key = 'asm|Reactor|Reactor.dll';             Label = 'IGNORED'; Group = 'IGNORED'; Bytes = 3384320 }
     [pscustomobject]@{ Key = 'asm|Reactor|Reactor.Analyzers.dll';   Label = 'IGNORED'; Group = 'IGNORED'; Bytes = 303104 }
     [pscustomobject]@{ Key = 'asm|Reactor|Reactor.Wrappers.Abstractions.dll'; Label = 'IGNORED'; Group = 'IGNORED'; Bytes = 10240 }
+    [pscustomobject]@{ Key = 'nupkg.Core';                          Label = 'IGNORED'; Group = 'IGNORED'; Bytes = 21926 }
+    [pscustomobject]@{ Key = 'asm|Core|Microsoft.UI.Reactor.Core.dll'; Label = 'IGNORED'; Group = 'IGNORED'; Bytes = 40960 }
     [pscustomobject]@{ Key = 'nupkg.Advanced';                      Label = 'IGNORED'; Group = 'IGNORED'; Bytes = 33792 }
     [pscustomobject]@{ Key = 'asm|Advanced|Reactor.Advanced.dll';   Label = 'IGNORED'; Group = 'IGNORED'; Bytes = 33792 }
     [pscustomobject]@{ Key = 'nupkg.Devtools';                      Label = 'IGNORED'; Group = 'IGNORED'; Bytes = 442368 }
     [pscustomobject]@{ Key = 'asm|Devtools|Microsoft.UI.Reactor.Devtools.dll'; Label = 'IGNORED'; Group = 'IGNORED'; Bytes = 442368 }
 )
 $safe = ConvertTo-SafeMeasurements -RawMeasurements $raw
-# 3 nupkg rows + 3 valid Reactor DLLs + 1 Advanced DLL + 1 Devtools DLL.
-Assert-Equal 8 $safe.Count 'safe measurements: 3 nupkg rows + all validated DLL rows'
+# 4 nupkg rows + 3 valid Reactor DLLs + 1 Core DLL + 1 Advanced DLL + 1 Devtools DLL.
+Assert-Equal 10 $safe.Count 'safe measurements: 4 nupkg rows + all validated DLL rows'
 Assert-Equal 'nupkg.Reactor' $safe[0].Key 'safe output starts with the nupkg rows in spec order'
 Assert-Equal 'Microsoft.UI.Reactor.nupkg' $safe[0].Label 'safe output uses the TRUSTED package label, not the artifact label'
-Assert-Equal 'nupkg.Advanced' $safe[1].Key 'second nupkg row is Advanced (spec order)'
-Assert-Equal 'nupkg.Devtools' $safe[2].Key 'third nupkg row is Devtools (spec order)'
-Assert-Equal 442368 $safe[2].Bytes 'Devtools nupkg bytes preserved'
+Assert-Equal 'nupkg.Core' $safe[1].Key 'second nupkg row is Core (spec order)'
+Assert-Equal 'Microsoft.UI.Reactor.Core.nupkg' $safe[1].Label 'Core nupkg uses its trusted label'
+Assert-Equal 'nupkg.Advanced' $safe[2].Key 'third nupkg row is Advanced (spec order)'
+Assert-Equal 'nupkg.Devtools' $safe[3].Key 'fourth nupkg row is Devtools (spec order)'
+Assert-Equal 442368 $safe[3].Bytes 'Devtools nupkg bytes preserved'
 Assert-Equal 2034863 $safe[0].Bytes 'valid integer nupkg bytes preserved'
 
 # Per-DLL rows: validated filename is the label, package assembly group is the group.
@@ -225,6 +229,9 @@ Assert-Equal 'Reactor.Analyzers.dll' $reactorDlls[0].Label 'DLL rows sorted dete
 Assert-Equal 'Reactor.Wrappers.Abstractions.dll' $reactorDlls[2].Label 'DLL rows sorted deterministically by filename (Wrappers last)'
 Assert-Equal 3384320 ($reactorDlls | Where-Object { $_.Label -eq 'Reactor.dll' }).Bytes 'per-DLL bytes preserved'
 Assert-Equal 'Reactor.Analyzers.dll' ($reactorDlls[0].Label) 'analyzer DLL displayed with its own filename'
+$coreDlls = @($safe | Where-Object { $_.Group -eq 'Assemblies in Microsoft.UI.Reactor.Core' })
+Assert-Equal 1 $coreDlls.Count 'Core package contributes its single DLL'
+Assert-Equal 'Microsoft.UI.Reactor.Core.dll' $coreDlls[0].Label 'Core DLL uses its filename'
 $advancedDlls = @($safe | Where-Object { $_.Group -eq 'Assemblies in Microsoft.UI.Reactor.Advanced' })
 Assert-Equal 1 $advancedDlls.Count 'Advanced package contributes its single DLL'
 Assert-Equal 'Reactor.Advanced.dll' $advancedDlls[0].Label 'Advanced DLL uses its filename'
@@ -306,7 +313,7 @@ Assert-True (-not ($safeFlood | Where-Object { $_.Label -eq 'Flood0032.dll' })) 
 
 # Null input -> just the three nupkg rows with all-null bytes (renders as a "failed" set).
 $safeNull = ConvertTo-SafeMeasurements -RawMeasurements $null
-Assert-Equal 3 $safeNull.Count 'null raw -> the three package nupkg rows only'
+Assert-Equal 4 $safeNull.Count 'null raw -> the four package nupkg rows only'
 Assert-Equal 0 (@($safeNull | Where-Object { $null -ne $_.Bytes }).Count) 'null raw -> all bytes null'
 
 # End-to-end: a sanitized set renders a normal comment with trusted labels only,
