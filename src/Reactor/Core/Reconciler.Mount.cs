@@ -948,56 +948,17 @@ public sealed partial class Reconciler
         bool traceRendered = Diagnostics.ComponentRenderTrace.IsEnabled;
         long renderedStart = traceRendered ? global::System.Diagnostics.Stopwatch.GetTimestamp() : 0;
 
-        bool renderReported = false;
-        Element childElement;
-        bool inEffects = false;
-        try
+        // Render, effects and failure handling: the core's component kernel (spec 067 §11.2).
+        var renderHost = new WinUIComponentRenderHost
         {
-            component.Context.BeginRender(componentRerender, _contextScope, Owner);
-            using (ValidationRenderScope.Begin(ReadContext(ValidationContexts.Current)))
-            {
-                childElement = ValidationRenderScope.ApplyProvide(component.Render());
-            }
-            inEffects = true;
-            component.Context.FlushEffects();
-        }
-        // Inside an ErrorBoundary — or a fatal exception the fallback arm below won't take:
-        // name the failing component, then rethrow unchanged (see ReconcileComponent). An
-        // exception the app declined via RenderError.Propagate() was already reported where
-        // it was thrown, so it passes through unreported (issue #1291).
-        catch (Exception ex) when ((_errorBoundaryDepth > 0 || ex is OutOfMemoryException or StackOverflowException)
-            && !RenderErrorDispatch.IsPropagating(ex))
-        {
-            // The render still happened: report it, as the trailing arm does for the rest.
-            if (traceRendered)
-                EmitComponentRendered(node, null, compElement, Diagnostics.ComponentRenderTrace.Reasons.Mount, renderedStart);
-            EmitRenderError(Diagnostics.ComponentNames.For(component, compElement), ex);
-            throw;
-        }
-        catch (Exception ex) when (_errorBoundaryDepth == 0 && ex is not OutOfMemoryException and not StackOverflowException && !RenderErrorDispatch.IsPropagating(ex))
-        {
-            // Report before building the fallback: its time is not this render's, and a
-            // fallback that throws must not swallow the event.
-            if (traceRendered)
-            {
-                EmitComponentRendered(node, null, compElement, Diagnostics.ComponentRenderTrace.Reasons.Mount, renderedStart);
-                renderReported = true;
-            }
-            var failedName = Diagnostics.ComponentNames.For(component, compElement);
-            _logger?.LogError(ex, "Component Render() threw during mount: {ComponentName}", failedName);
-            // Before the fallback: the app's handler may call Propagate(), which throws.
-            EmitRenderError(failedName, ex);
-            childElement = BuildInTreeFallback(ex, inEffects, component.GetType().Name);
-        }
-        // Every other exception propagates (to an enclosing ErrorBoundary, or a fatal one
-        // to the host); the render still happened, so report it (the wrapper is
-        // discarded, so no registry entry) and rethrow.
-        catch (Exception) when (traceRendered)
-        {
-            EmitComponentRendered(node, null, compElement, Diagnostics.ComponentRenderTrace.Reasons.Mount, renderedStart);
-            throw;
-        }
-        if (traceRendered && !renderReported)
+            Reconciler = this, Node = node, Element = compElement, Site = ComponentRenderSite.MountClass,
+            TraceRendered = traceRendered, RenderedStart = renderedStart,
+            RenderedReason = Diagnostics.ComponentRenderTrace.Reasons.Mount,
+        };
+        ComponentRenderKernel.TryRender(ref renderHost, node, compElement, ComponentRenderMode.Mount,
+            componentRerender, _contextScope, Owner, out var rendered);
+        var childElement = (Element)rendered!;
+        if (traceRendered && !renderHost.RenderReported)
             EmitComponentRendered(node, null, compElement, Diagnostics.ComponentRenderTrace.Reasons.Mount, renderedStart);
         UIElement? childControl = global::Microsoft.UI.Reactor.Hosting.ReactorFeatures.DevtoolsSupported && Diagnostics.ReactorSourcePublisher.IsEnabled
             ? MountUnderOwner(childElement, componentRerender, Diagnostics.ReactorSourceFormat.ComponentName(component, compElement))
@@ -1035,54 +996,16 @@ public sealed partial class Reconciler
         bool traceRendered = Diagnostics.ComponentRenderTrace.IsEnabled;
         long renderedStart = traceRendered ? global::System.Diagnostics.Stopwatch.GetTimestamp() : 0;
 
-        bool renderReported = false;
-        Element childElement;
-        bool inEffects = false;
-        try
+        var renderHost = new WinUIComponentRenderHost
         {
-            ctx.BeginRender(componentRerender, _contextScope, Owner);
-            using (ValidationRenderScope.Begin(ReadContext(ValidationContexts.Current)))
-            {
-                childElement = ValidationRenderScope.ApplyProvide(funcElement.RenderFunc(ctx));
-            }
-            inEffects = true;
-            ctx.FlushEffects();
-        }
-        // Inside an ErrorBoundary — or a fatal exception the fallback arm below won't take:
-        // name the failing component, then rethrow unchanged (see ReconcileComponent). An
-        // exception the app declined via RenderError.Propagate() was already reported where
-        // it was thrown, so it passes through unreported (issue #1291).
-        catch (Exception ex) when ((_errorBoundaryDepth > 0 || ex is OutOfMemoryException or StackOverflowException)
-            && !RenderErrorDispatch.IsPropagating(ex))
-        {
-            if (traceRendered)
-                EmitComponentRendered(node, null, funcElement, Diagnostics.ComponentRenderTrace.Reasons.Mount, renderedStart);
-            EmitRenderError(Diagnostics.ComponentNames.For(null, funcElement), ex);
-            throw;
-        }
-        catch (Exception ex) when (_errorBoundaryDepth == 0 && ex is not OutOfMemoryException and not StackOverflowException && !RenderErrorDispatch.IsPropagating(ex))
-        {
-            // Report before building the fallback: its time is not this render's, and a
-            // fallback that throws must not swallow the event.
-            if (traceRendered)
-            {
-                EmitComponentRendered(node, null, funcElement, Diagnostics.ComponentRenderTrace.Reasons.Mount, renderedStart);
-                renderReported = true;
-            }
-            _logger?.LogError(ex, "FuncComponent Render() threw during mount");
-            // Before the fallback: the app's handler may call Propagate(), which throws.
-            EmitRenderError(Diagnostics.ComponentNames.For(null, funcElement), ex);
-            childElement = BuildInTreeFallback(ex, inEffects, componentName: null);
-        }
-        // Every other exception propagates (to an enclosing ErrorBoundary, or a fatal one
-        // to the host); the render still happened, so report it (the wrapper is
-        // discarded, so no registry entry) and rethrow.
-        catch (Exception) when (traceRendered)
-        {
-            EmitComponentRendered(node, null, funcElement, Diagnostics.ComponentRenderTrace.Reasons.Mount, renderedStart);
-            throw;
-        }
-        if (traceRendered && !renderReported)
+            Reconciler = this, Node = node, Element = funcElement, Site = ComponentRenderSite.MountFunction,
+            TraceRendered = traceRendered, RenderedStart = renderedStart,
+            RenderedReason = Diagnostics.ComponentRenderTrace.Reasons.Mount,
+        };
+        ComponentRenderKernel.TryRender(ref renderHost, node, funcElement, ComponentRenderMode.Mount,
+            componentRerender, _contextScope, Owner, out var rendered);
+        var childElement = (Element)rendered!;
+        if (traceRendered && !renderHost.RenderReported)
             EmitComponentRendered(node, null, funcElement, Diagnostics.ComponentRenderTrace.Reasons.Mount, renderedStart);
         UIElement? childControl = global::Microsoft.UI.Reactor.Hosting.ReactorFeatures.DevtoolsSupported && Diagnostics.ReactorSourcePublisher.IsEnabled
             ? MountUnderOwner(childElement, componentRerender, nameof(FuncElement))
@@ -1121,54 +1044,16 @@ public sealed partial class Reconciler
         bool traceRendered = Diagnostics.ComponentRenderTrace.IsEnabled;
         long renderedStart = traceRendered ? global::System.Diagnostics.Stopwatch.GetTimestamp() : 0;
 
-        bool renderReported = false;
-        Element childElement;
-        bool inEffects = false;
-        try
+        var renderHost = new WinUIComponentRenderHost
         {
-            ctx.BeginRender(componentRerender, _contextScope, Owner);
-            using (ValidationRenderScope.Begin(ReadContext(ValidationContexts.Current)))
-            {
-                childElement = ValidationRenderScope.ApplyProvide(memoElement.RenderFunc(ctx));
-            }
-            inEffects = true;
-            ctx.FlushEffects();
-        }
-        // Inside an ErrorBoundary — or a fatal exception the fallback arm below won't take:
-        // name the failing component, then rethrow unchanged (see ReconcileComponent). An
-        // exception the app declined via RenderError.Propagate() was already reported where
-        // it was thrown, so it passes through unreported (issue #1291).
-        catch (Exception ex) when ((_errorBoundaryDepth > 0 || ex is OutOfMemoryException or StackOverflowException)
-            && !RenderErrorDispatch.IsPropagating(ex))
-        {
-            if (traceRendered)
-                EmitComponentRendered(node, null, memoElement, Diagnostics.ComponentRenderTrace.Reasons.Mount, renderedStart);
-            EmitRenderError(Diagnostics.ComponentNames.For(null, memoElement), ex);
-            throw;
-        }
-        catch (Exception ex) when (_errorBoundaryDepth == 0 && ex is not OutOfMemoryException and not StackOverflowException && !RenderErrorDispatch.IsPropagating(ex))
-        {
-            // Report before building the fallback: its time is not this render's, and a
-            // fallback that throws must not swallow the event.
-            if (traceRendered)
-            {
-                EmitComponentRendered(node, null, memoElement, Diagnostics.ComponentRenderTrace.Reasons.Mount, renderedStart);
-                renderReported = true;
-            }
-            _logger?.LogError(ex, "MemoComponent Render() threw during mount");
-            // Before the fallback: the app's handler may call Propagate(), which throws.
-            EmitRenderError(Diagnostics.ComponentNames.For(null, memoElement), ex);
-            childElement = BuildInTreeFallback(ex, inEffects, componentName: null);
-        }
-        // Every other exception propagates (to an enclosing ErrorBoundary, or a fatal one
-        // to the host); the render still happened, so report it (the wrapper is
-        // discarded, so no registry entry) and rethrow.
-        catch (Exception) when (traceRendered)
-        {
-            EmitComponentRendered(node, null, memoElement, Diagnostics.ComponentRenderTrace.Reasons.Mount, renderedStart);
-            throw;
-        }
-        if (traceRendered && !renderReported)
+            Reconciler = this, Node = node, Element = memoElement, Site = ComponentRenderSite.MountMemo,
+            TraceRendered = traceRendered, RenderedStart = renderedStart,
+            RenderedReason = Diagnostics.ComponentRenderTrace.Reasons.Mount,
+        };
+        ComponentRenderKernel.TryRender(ref renderHost, node, memoElement, ComponentRenderMode.Mount,
+            componentRerender, _contextScope, Owner, out var rendered);
+        var childElement = (Element)rendered!;
+        if (traceRendered && !renderHost.RenderReported)
             EmitComponentRendered(node, null, memoElement, Diagnostics.ComponentRenderTrace.Reasons.Mount, renderedStart);
         UIElement? childControl = global::Microsoft.UI.Reactor.Hosting.ReactorFeatures.DevtoolsSupported && Diagnostics.ReactorSourcePublisher.IsEnabled
             ? MountUnderOwner(childElement, componentRerender, nameof(MemoElement))

@@ -1624,7 +1624,7 @@ public record ComponentElement(
     [param: DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)]
     [property: DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)]
     Type ComponentType,
-    object? Props = null) : Element
+    object? Props = null) : Element, IComponentElement
 {
     // Factory creates the component instance without reflection. Stored as a field
     // so it does not participate in record equality (two ComponentElements for the
@@ -1666,13 +1666,19 @@ public record ComponentElement<TProps> : ComponentElement
 /// <summary>
 /// A component defined inline via a render function (like a React function component).
 /// </summary>
-public record FuncElement(Func<RenderContext, Element> RenderFunc) : Element;
+public record FuncElement(Func<RenderContext, Element> RenderFunc) : Element, IRenderFunctionElement
+{
+    ReactorElement? IRenderFunctionElement.Render(RenderContext context) => RenderFunc(context);
+}
 
 /// <summary>
 /// A memoized function component. Skips re-render when Dependencies haven't changed.
 /// null Dependencies = render once on mount + self-triggered state changes only.
 /// </summary>
-public record MemoElement(Func<RenderContext, Element> RenderFunc, object?[]? Dependencies = null) : Element;
+public record MemoElement(Func<RenderContext, Element> RenderFunc, object?[]? Dependencies = null) : Element, IMemoElement
+{
+    ReactorElement? IRenderFunctionElement.Render(RenderContext context) => RenderFunc(context);
+}
 
 /// <summary>
 /// Issue #327 — an opt-in, typed keyed memo wrapper produced by the

@@ -468,6 +468,12 @@ internal static class SelfTestFixtureRegistry
         ("PerfTrace_RemountedRootNamesItself", static harness => new PerfTrace_RemountedRootNamesItself(harness)),
         // ReactorEventSource.ComponentRendered reasons + componentId resolution
         ("ComponentRendered_ReasonsAndIdsFollowTheReconciler", static harness => new ComponentRendered_ReasonsAndIdsFollowTheReconciler(harness)),
+        // Spec 067 phase 2b step 0: component lifecycle characterization (goldens from the unchanged reconciler)
+        ("Lifecycle_Kinds", static harness => new ComponentLifecycleCharacterization.Kinds(harness)),
+        ("Lifecycle_Errors", static harness => new ComponentLifecycleCharacterization.Errors(harness)),
+        ("Lifecycle_HotReload", static harness => new ComponentLifecycleCharacterization.HotReloadRetry(harness)),
+        ("Lifecycle_Rerender", static harness => new ComponentLifecycleCharacterization.Rerender(harness)),
+        ("Lifecycle_RerenderDepthCap", static harness => new ComponentLifecycleCharacterization.RerenderDepthCap(harness)),
         ("ComponentRendered_HostControlRootAndThrowingRoot", static harness => new ComponentRendered_HostControlRootAndThrowingRoot(harness)),
         ("ComponentRendered_ErrorBoundaryCaughtRendersAreReported", static harness => new ComponentRendered_ErrorBoundaryCaughtRendersAreReported(harness)),
         ("ComponentRendered_RootHookOrderRetryIsHotReload", static harness => new ComponentRendered_RootHookOrderRetryIsHotReload(harness)),

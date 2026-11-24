@@ -576,18 +576,6 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
             new RenderError(ex, inEffects ? RenderErrorSource.Effects : RenderErrorSource.ComponentRender,
                 componentName, isHostLevel: false),
             _logger);
-    /// <summary>
-    /// Active rerender-callback depth. Throws past
-    /// <see cref="MaxRerenderReentrancy"/> so a component that synchronously
-    /// invokes its own <c>requestRerender</c> from inside <c>Render()</c> or
-    /// effect cleanup fails fast instead of recursing to a stack overflow.
-    /// TASK-059.
-    /// </summary>
-    [ThreadStatic]
-    private static int t_rerenderDepth;
-    /// <summary>Hard depth cap — see <see cref="t_rerenderDepth"/>.</summary>
-    private const int MaxRerenderReentrancy = 50;
-
     // ── Style cache: avoids redundant XamlReader.Load() for identical theme binding sets ──
     private static readonly global::System.Collections.Concurrent.ConcurrentDictionary<string, Style> _styleCache = new();
 
@@ -3956,54 +3944,18 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
 
         if (!selfTriggered)
         {
-            bool skipRender = false;
-
-            if (node.Component is not null && newEl is ComponentElement newCompEl)
+            // Class (ShouldUpdate) and memo (dependencies) gates, in the core (spec 067 §11.2).
+            var gate = ComponentGate.Evaluate(node, newEl, _contextScope);
+            bool skipRender = gate.Skip;
+            if (gate.Gated)
             {
-                // Class component memo check
-                var oldProps = node.PreviousProps;
-                var newProps = newCompEl.Props;
-
-                bool propsChanged;
-                if (node.Component is IPropsReceiver)
-                {
-                    // Component<TProps>: delegate to ShouldUpdate(oldProps, newProps)
-                    propsChanged = ShouldUpdateWithProps(node.Component, oldProps, newProps);
-                }
-                else
-                {
-                    // Propless Component: delegate to ShouldUpdate()
-                    propsChanged = node.Component.ShouldUpdate();
-                }
-
-                bool contextChanged = HasConsumedContextChanged(node);
-                skipRender = !propsChanged && !contextChanged;
                 memoGated = true;
-                // Props components: a props change wins, else it was the context.
-                // Propless components (ShouldUpdate() true or a context change): the
-                // context wins, else nothing could skip it.
-                memoReason = node.Component is IPropsReceiver
-                    ? propsChanged
-                        ? Diagnostics.ComponentRenderTrace.Reasons.Props
-                        : Diagnostics.ComponentRenderTrace.Reasons.Context
-                    : contextChanged
-                        ? Diagnostics.ComponentRenderTrace.Reasons.Context
-                        : Diagnostics.ComponentRenderTrace.Reasons.Parent;
-            }
-            else if (node.Context is not null && newEl is MemoElement newMemo)
-            {
-                // MemoElement memo check
-                var oldDeps = node.MemoDependencies;
-                var newDeps = newMemo.Dependencies;
-                bool depsChanged = oldDeps is null && newDeps is null
-                    ? false // both null = render once, never re-render from parent
-                    : oldDeps is null || newDeps is null || !RenderContext.DepsEqual(oldDeps, newDeps);
-                bool contextChanged = HasConsumedContextChanged(node);
-                skipRender = !depsChanged && !contextChanged;
-                memoGated = true;
-                memoReason = depsChanged
-                    ? Diagnostics.ComponentRenderTrace.Reasons.Props
-                    : Diagnostics.ComponentRenderTrace.Reasons.Context;
+                memoReason = gate.Reason switch
+                {
+                    ComponentGateReason.Props => Diagnostics.ComponentRenderTrace.Reasons.Props,
+                    ComponentGateReason.Context => Diagnostics.ComponentRenderTrace.Reasons.Context,
+                    _ => Diagnostics.ComponentRenderTrace.Reasons.Parent,
+                };
             }
             else if (newEl is FuncElement
                 && ((traceEnabled = Diagnostics.ComponentRenderTrace.IsEnabled).Value
@@ -4024,22 +3976,10 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
                 // Still update the element reference (modifiers may have changed on the ComponentElement itself)
                 node.Element = newEl;
 
-                // Stale-delegate guard (issue #151): even though we skip re-rendering,
-                // refresh the live Props on the instance so any handler that reads
-                // Props.X at *dispatch* time invokes the CURRENT delegate rather than the
-                // one captured when the child last rendered. This is what makes an
-                // always-equal callbacks slot (Callbacks<T>) safe: data fields drive the
-                // memo decision, but the latest callbacks are still reachable off Props.
-                // Mirrors the leaf-level Tag-trampoline refresh (Element.cs HasCallbacks).
-                // The skipped data fields are equal by construction, so refreshing them is
-                // a no-op for the rendered subtree; only the excluded slots (callbacks)
-                // actually change. PreviousProps is kept in sync as the next baseline.
-                if (node.Component is IPropsReceiver skipReceiver
-                    && newEl is ComponentElement skipCompEl && skipCompEl.Props is not null)
-                {
-                    skipReceiver.SetProps(skipCompEl.Props);
-                    node.PreviousProps = skipCompEl.Props;
-                }
+                // Stale-delegate guard (issue #151): refresh the live props so a handler reading
+                // Props.X at dispatch time gets the current delegate. Mirrors the leaf-level
+                // Tag-trampoline refresh (Element.cs HasCallbacks).
+                ComponentGate.RefreshSkippedProps(node, newEl);
                 return;
             }
         }
@@ -4078,132 +4018,24 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
             ? Diagnostics.ComponentRenderTrace.ClassifyUpdate(
                 forcedRender, HotReloadService.WithinUpdatePass || _hotReloadRetryActive, selfTriggered, memoReason)
             : null;
-        bool renderReported = false;
-
-        Element newChildElement;
-        // The RenderContext backing whichever branch we render (component or
-        // func/memo). Used to recover an in-flight hook-order change during a
-        // hot-reload pass: reset this context's hook state and re-render once.
-        RenderContext? renderCtx = node.Component?.Context ?? node.Context;
-        bool hotReloadRetried = false;
-        bool inEffects = false;
-        while (true)
+        // Render, effects, the hot-reload hook-order retry and failure handling: the core's
+        // component kernel (spec 067 §11.2).
+        var renderHost = new WinUIComponentRenderHost
         {
-            inEffects = false;
-            try
-            {
-                if (node.Component is not null)
-                {
-                    // Update props before re-rendering so the component sees fresh data
-                    if (newEl is ComponentElement compEl && compEl.Props is not null
-                        && node.Component is IPropsReceiver receiver)
-                    {
-                        receiver.SetProps(compEl.Props);
-                    }
-
-                    node.Component.Context.BeginRender(componentRerender, _contextScope, Owner);
-                    using (ValidationRenderScope.Begin(ReadContext(ValidationContexts.Current)))
-                    {
-                        newChildElement = ValidationRenderScope.ApplyProvide(node.Component.Render());
-                    }
-                    inEffects = true;
-                    FlushEffectsTraced(node.Component.Context, componentName);
-                }
-                else if (node.Context is not null && newEl is FuncElement func)
-                {
-                    node.Context.BeginRender(componentRerender, _contextScope, Owner);
-                    using (ValidationRenderScope.Begin(ReadContext(ValidationContexts.Current)))
-                    {
-                        newChildElement = ValidationRenderScope.ApplyProvide(func.RenderFunc(node.Context));
-                    }
-                    inEffects = true;
-                    FlushEffectsTraced(node.Context, componentName);
-                }
-                else if (node.Context is not null && newEl is MemoElement memo)
-                {
-                    node.Context.BeginRender(componentRerender, _contextScope, Owner);
-                    using (ValidationRenderScope.Begin(ReadContext(ValidationContexts.Current)))
-                    {
-                        newChildElement = ValidationRenderScope.ApplyProvide(memo.RenderFunc(node.Context));
-                    }
-                    inEffects = true;
-                    FlushEffectsTraced(node.Context, componentName);
-                }
-                else
-                {
-                    if (traceRender)
-                        Diagnostics.ReactorEventSource.Log.ComponentRenderStop(componentName!, 0);
-                    return;
-                }
-            }
-            // Tree-wide hot-reload hook-order recovery: when an edit reorders or
-            // retypes hooks in a *non-root* child, its Render() throws here.
-            // Inside a hot-reload pass we reset that child's hook state and
-            // re-render once (matching the root recovery in the host), so the
-            // edit applies and the subtree's descendant state is preserved,
-            // instead of falling through to the error-fallback path below.
-            catch (HookOrderException ex) when (!hotReloadRetried
-                && renderCtx is not null
-                && HotReloadService.WithinUpdatePass)
-            {
-                // The aborted attempt still ran Render(); report it before logging, so a
-                // slow logger is not charged to it.
-                if (traceRendered)
-                    EmitComponentRendered(node, null, newEl, Diagnostics.ComponentRenderTrace.Reasons.HotReload, renderedStart);
-                _logger?.LogWarning(ex,
-                    "Hot reload: hook order/type changed in child component — " +
-                    "resetting state and re-rendering: {ComponentName}",
-                    componentName ?? Diagnostics.ComponentNames.For(node.Component, newEl));
-                hotReloadRetried = true;
-                renderCtx.ResetForHotReload();
-                // Time the retry on its own (it reports itself after the loop), starting
-                // after the reset ran the effect cleanups.
-                if (traceRendered)
-                    renderedStart = global::System.Diagnostics.Stopwatch.GetTimestamp();
-                continue;
-            }
-            // Inside an ErrorBoundary the exception propagates to the boundary, which
-            // renders its fallback. Name the failing component here, at the throw site —
-            // the boundary itself cannot know which descendant threw — so a listener sees
-            // the error even though the app recovered. Rethrown unchanged. No OOM/SO carve-out:
-            // the boundary catches every exception, so every one it recovers from is reported.
-            // Outside a boundary, OOM/SO skip the fallback arm below and propagate to the
-            // host, which also recovers — so they are reported here too. An exception the app
-            // declined via RenderError.Propagate() was already reported where it was thrown,
-            // so it passes through unreported (issue #1291).
-            catch (Exception ex) when ((_errorBoundaryDepth > 0 || ex is OutOfMemoryException or StackOverflowException)
-                && !RenderErrorDispatch.IsPropagating(ex))
-            {
-                // The render still happened: report it, as the trailing arm does for the rest.
-                if (traceRendered)
-                    EmitComponentRendered(node, null, newEl, renderedReason!, renderedStart);
-                EmitRenderError(componentName ?? Diagnostics.ComponentNames.For(node.Component, newEl), ex);
-                throw;
-            }
-            catch (Exception ex) when (_errorBoundaryDepth == 0 && ex is not OutOfMemoryException and not StackOverflowException && !RenderErrorDispatch.IsPropagating(ex))
-            {
-                // Report before building the fallback: its time is not this render's, and
-                // a fallback that throws must not swallow the event.
-                if (traceRendered)
-                {
-                    EmitComponentRendered(node, control, newEl, renderedReason!, renderedStart);
-                    renderReported = true;
-                }
-                var failedName = componentName ?? Diagnostics.ComponentNames.For(node.Component, newEl);
-                _logger?.LogError(ex, "Component Render() threw: {ComponentName}", failedName);
-                // Before the fallback: the app's handler may call Propagate(), which throws.
-                EmitRenderError(failedName, ex);
-                newChildElement = BuildInTreeFallback(ex, inEffects, node.Component?.GetType().Name);
-            }
-            // Every other exception propagates (to an enclosing ErrorBoundary, or a fatal
-            // one to the host); the render still happened, so report it and rethrow.
-            catch (Exception) when (traceRendered)
-            {
-                EmitComponentRendered(node, null, newEl, renderedReason!, renderedStart);
-                throw;
-            }
-            break;
+            Reconciler = this, Node = node, Element = newEl, Site = ComponentRenderSite.Update,
+            Control = control, TraceRendered = traceRendered, RenderedStart = renderedStart,
+            RenderedReason = renderedReason, ComponentName = componentName,
+        };
+        if (!ComponentRenderKernel.TryRender(ref renderHost, node, newEl, ComponentRenderMode.Update,
+                componentRerender, _contextScope, Owner, out var rendered))
+        {
+            if (traceRender)
+                Diagnostics.ReactorEventSource.Log.ComponentRenderStop(componentName!, 0);
+            return;
         }
+        var newChildElement = (Element)rendered!;
+        renderedStart = renderHost.RenderedStart;
+        bool renderReported = renderHost.RenderReported;
 
         if (traceRender)
         {
@@ -4249,11 +4081,7 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
             // SECURITY (TASK-059): bound rerender re-entrancy. A component
             // that calls its own requestRerender synchronously from Render()
             // or an effect's cleanup would otherwise blow the stack.
-            if (t_rerenderDepth >= MaxRerenderReentrancy)
-                throw new InvalidOperationException(
-                    "Render loop detected: requestRerender re-entered more than " +
-                    $"{MaxRerenderReentrancy} times. Likely cause: setState called " +
-                    "synchronously inside Render() or effect cleanup.");
+            RerenderReentrancy.ThrowIfTooDeep();
 
             // SECURITY (TASK-063): if invoked off the UI thread (e.g.,
             // setState(threadSafe:true) firing from a worker, or a worker
@@ -4291,29 +4119,18 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
 
     private static void InvokeRerenderTracked(Action requestRerender, ComponentNode requester)
     {
-        t_rerenderDepth++;
+        RerenderReentrancy.Enter();
         // The perf RenderPass names the component that asked: the innermost wrapper claims the
         // thread before the request climbs through its ancestors' wrappers to the host.
         try { Diagnostics.RenderPassRequests.InvokeAs(requester, requestRerender); }
-        finally { t_rerenderDepth--; }
+        finally { RerenderReentrancy.Exit(); }
     }
 
     /// <summary>
     /// Checks whether any context consumed by a component has changed since the last render.
     /// </summary>
     private bool HasConsumedContextChanged(ComponentNode node)
-    {
-        var renderCtx = node.Component?.Context ?? node.Context;
-        if (renderCtx is null) return false;
-
-        foreach (var ctxHook in renderCtx.ContextHooks)
-        {
-            var currentValue = _contextScope.Read(ctxHook.Context);
-            if (!Equals(currentValue, ctxHook.LastValue))
-                return true;
-        }
-        return false;
-    }
+        => ComponentGate.HasConsumedContextChanged(node, _contextScope);
 
     internal bool HasConsumedContextChangedInSubtree(UIElement control)
     {
@@ -4345,18 +4162,6 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
 
     internal bool ShouldDeclineSkip(UIElement control)
         => HasActiveContextValues && HasConsumedContextChangedInSubtree(control);
-
-    /// <summary>
-    /// Calls ShouldUpdate(oldProps, newProps) on a Component&lt;TProps&gt; via interface dispatch.
-    /// </summary>
-    private static bool ShouldUpdateWithProps(Component component, object? oldProps, object? newProps)
-    {
-        if (component is IPropsComparable comparable)
-            return comparable.CompareProps(oldProps, newProps);
-
-        // Fallback: always re-render
-        return true;
-    }
 
     // ════════════════════════════════════════════════════════════════════
     //  Children reconciliation (keyed LIS + positional)
@@ -9207,43 +9012,19 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
     // ── Enum conversions removed — Reactor now uses WinUI types directly ──
 
     /// <summary>
-    /// Tracks the state of a mounted component in the tree.
+    /// The core's <see cref="Core.ComponentNode"/> (spec 067) seen through WinUI's types: the
+    /// component, its element and its rendered output are WinUI's <see cref="Core.Component"/> and
+    /// <see cref="Core.Element"/>, which the reconciler mounts. Found through the component's anchor
+    /// (<c>_componentNodes</c>).
     /// </summary>
-    internal class ComponentNode
+    internal class ComponentNode : Core.ComponentNode
     {
         /// <summary>The class-based Component instance (null for function components).</summary>
-        public Component? Component { get; set; }
-        /// <summary>The RenderContext for function components (null for class components).</summary>
-        public RenderContext? Context { get; set; }
+        public new Component? Component { get => (Component?)base.Component; set => base.Component = value; }
         /// <summary>The element tree output from the last Render() call.</summary>
-        public Element? RenderedElement { get; set; }
+        public new Element? RenderedElement { get => (Element?)base.RenderedElement; set => base.RenderedElement = value; }
         /// <summary>The ComponentElement or FuncElement that created this node.</summary>
-        public Element? Element { get; set; }
-        /// <summary>Previous props for memo comparison (class components only).</summary>
-        public object? PreviousProps { get; set; }
-        /// <summary>Dependencies from the last MemoElement render (null = render once).</summary>
-        public object?[]? MemoDependencies { get; set; }
-        /// <summary>Set to true when a self-triggered re-render is queued (UseState setter).
-        /// Accessed from background threads (UseState callbacks) — use volatile field.</summary>
-        private volatile bool _selfTriggered;
-        public bool SelfTriggered { get => _selfTriggered; set => _selfTriggered = value; }
-        /// <summary>
-        /// <c>componentId</c> of this node in <c>ReactorEventSource.ComponentRendered</c> and the
-        /// <c>Microsoft-UI-Reactor-Perf</c> events; 0 until first assigned
-        /// (<see cref="EnsureDiagnosticId"/>). Lives on the node's <see cref="RenderContext"/>,
-        /// so a state change the component makes reports the same id.
-        /// </summary>
-        public long DiagnosticId => (Component?.Context ?? Context)?.DiagnosticId ?? 0;
-
-        /// <summary><see cref="DiagnosticId"/>, assigning it on first use.</summary>
-        public long EnsureDiagnosticId()
-            => (Component?.Context ?? Context)?.EnsureDiagnosticId() ?? 0;
-
-        /// <summary>
-        /// A function or memo component's name on the perf spans, resolved on its first traced
-        /// render (see <see cref="PerfComponentName"/>); null until then and for class components.
-        /// </summary>
-        public string? PerfName { get; set; }
+        public new Element? Element { get => (Element?)base.Element; set => base.Element = value; }
     }
 
     /// <summary>
@@ -9427,7 +9208,7 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
     /// <summary>
     /// Hot Reload (spec 049 §6 step 3). Invokes <paramref name="action"/> once for
     /// every live <see cref="RenderContext"/> tracked by this reconciler — both
-    /// function-component contexts (<see cref="ComponentNode.Context"/>) and
+    /// function-component contexts (<see cref="Core.ComponentNode.Context"/>) and
     /// class-component contexts (<see cref="ReactorComponent.Context"/>). The host calls
     /// this at the start of a hot-reload pass to migrate hook state tree-wide
     /// before any component re-renders. The root component's context is NOT in

@@ -224,28 +224,6 @@ public abstract class Component : ReactorComponent
 }
 
 /// <summary>
-/// Interface for setting props without reflection.
-/// </summary>
-internal interface IPropsReceiver
-{
-    void SetProps(object props);
-
-    /// <summary>Boxed current props, for diagnostics (no reflection).</summary>
-    object? PropsBoxed { get; }
-
-    /// <summary>The declared props type (<c>TProps</c>), for diagnostics.</summary>
-    Type PropsType { get; }
-}
-
-/// <summary>
-/// Interface for comparing props without reflection (avoids per-reconcile GetMethod/Invoke overhead).
-/// </summary>
-internal interface IPropsComparable
-{
-    bool CompareProps(object? oldProps, object? newProps);
-}
-
-/// <summary>
 /// Base class for components that receive typed props (e.g., navigation parameters).
 /// Props are set by the host before rendering.
 /// </summary>
