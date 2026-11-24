@@ -16,11 +16,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: main-vs-phase1
-            base: 14172dce0af5887c13493a0e345d76e09241cd33
-            head: 4c6d22744087f82e6df0d2c1fdaa42f66e4e1f32
-          - name: main-vs-phase2a
-            base: 14172dce0af5887c13493a0e345d76e09241cd33
+          - name: micro-phase1-vs-phase2a
+            base: 4c6d22744087f82e6df0d2c1fdaa42f66e4e1f32
+            head: 5cf7f166
+          - name: micro-aa-phase2a
+            base: 5cf7f166
             head: 5cf7f166
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,7 +48,7 @@ jobs:
           "head_sha=$h" | Out-File $env:GITHUB_OUTPUT -Append
           "base_tree=$bt" | Out-File $env:GITHUB_OUTPUT -Append
           "head_tree=$ht" | Out-File $env:GITHUB_OUTPUT -Append
-      - name: Run (StocksGrid at 0%, 30 paired reps)
+      - name: Run (micro-suite, 30 paired reps; macro leg minimal)
         shell: pwsh
         env:
           BT: ${{ steps.wt.outputs.base_tree }}
@@ -59,8 +59,9 @@ jobs:
         run: |
           ./tests/stress_perf/ci/Run-PerfBenchmark.ps1 `
             -Root $env:HT -BaselineRoot $env:BT `
-            -Percent 0 -Duration 10 -Reps 30 -Warmup 2 -PinAffinity `
-            -IncludeMicro $false -IncludeSkipFloor $false -IncludeKeyedList $false `
+            -Percent 0 -Duration 5 -Reps 2 -Warmup 1 -PinAffinity `
+            -IncludeMicro $true -MicroReps 30 -MicroWarmup 2 `
+            -IncludeSkipFloor $false -IncludeKeyedList $false `
             -IncludeFlex $false -IncludeDataGrid $false -IncludeRowMemo $false `
             -Apps ReactorOptimized -DefenderExclude `
             -HeadSha $env:HS -BaseSha $env:BS -OutDir $env:OUT_DIR
