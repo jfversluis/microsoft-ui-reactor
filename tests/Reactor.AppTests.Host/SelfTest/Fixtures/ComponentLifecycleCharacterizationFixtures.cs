@@ -142,15 +142,34 @@ internal static class ComponentLifecycleCharacterization
         h.Check(check, true);
     }
 
-    /// <summary>The rendered texts under the host, in tree order (first line of each), so the output is part of the log.</summary>
-    private static void LogOutput(Microsoft.UI.Xaml.DependencyObject root)
+    /// <summary>
+    /// The rendered texts under the host, in tree order (first line of each), so the output is part
+    /// of the log. Walks the logical tree (a control's content and children), not the visual one: a
+    /// templated control's parts exist only after layout, which would make the log timing-dependent.
+    /// </summary>
+    private static void LogOutput(Microsoft.UI.Xaml.UIElement root)
     {
         var texts = new List<string>();
-        void Walk(Microsoft.UI.Xaml.DependencyObject node)
+        void Walk(object? node)
         {
-            if (node is Microsoft.UI.Xaml.Controls.TextBlock tb) texts.Add(tb.Text.Split('\n')[0].Trim());
-            var count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(node);
-            for (var i = 0; i < count; i++) Walk(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(node, i));
+            switch (node)
+            {
+                case Microsoft.UI.Xaml.Controls.TextBlock tb:
+                    texts.Add(tb.Text.Split('\n')[0].Trim());
+                    break;
+                case Microsoft.UI.Xaml.Controls.Border b:
+                    Walk(b.Child);
+                    break;
+                case Microsoft.UI.Xaml.Controls.Panel p:
+                    foreach (var child in p.Children) Walk(child);
+                    break;
+                case Microsoft.UI.Xaml.Controls.ContentControl cc:
+                    Walk(cc.Content);
+                    break;
+                case Microsoft.UI.Xaml.Controls.UserControl uc:
+                    Walk(uc.Content);
+                    break;
+            }
         }
         Walk(root);
         Log("out:" + string.Join(";", texts));
@@ -271,7 +290,7 @@ internal static class ComponentLifecycleCharacterization
                 Log($"E:Thrower({Props})");
                 if (Volatile.Read(ref s_failMode) == 1 && Props.StartsWith("effect", StringComparison.Ordinal))
                     throw new InvalidOperationException($"effect failed {Props}");
-            });
+            }, Props);
             return TextBlock($"thrower {Props}");
         }
     }
@@ -287,9 +306,10 @@ internal static class ComponentLifecycleCharacterization
                 var (n, sn) = ctx.UseState(0);
                 setN = sn;
                 Log($"R:Root({n})");
+                // Props carry n, so the class throwers re-render (and re-run their effect) on each update.
                 return VStack(
-                    Component<LcThrower, string>("render-loose"),
-                    Component<LcThrower, string>("effect-loose"),
+                    Component<LcThrower, string>($"render-loose {n}"),
+                    Component<LcThrower, string>($"effect-loose {n}"),
                     RenderEachTime(c =>
                     {
                         Log("R:FuncThrower");
@@ -303,10 +323,10 @@ internal static class ComponentLifecycleCharacterization
                         return TextBlock("memo ok");
                     }, n),
                     ErrorBoundary(
-                        VStack(TextBlock($"bounded {n}"), Component<LcThrower, string>("render-bounded")),
+                        VStack(TextBlock($"bounded {n}"), Component<LcThrower, string>($"render-bounded {n}")),
                         ex => TextBlock($"fallback {ex.Message}")),
                     ErrorBoundary(
-                        Component<LcThrower, string>("effect-bounded"),
+                        Component<LcThrower, string>($"effect-bounded {n}"),
                         ex => TextBlock($"fallback {ex.Message}")));
             });
             await step("mount");
@@ -323,11 +343,15 @@ internal static class ComponentLifecycleCharacterization
             LogOutput(host.ContentTarget!);
             await step("recover-output");
 
-            // Mount-time failures: a fresh tree whose components throw on their first render.
+            // Mount-time failures: keyed, so nothing from the previous tree is reused and each
+            // component throws on its first render.
             Volatile.Write(ref s_failMode, 1);
             host.Mount(_ => VStack(
-                Component<LcThrower, string>("render-mount"),
-                ErrorBoundary(Component<LcThrower, string>("render-mount-bounded"), ex => TextBlock($"fallback {ex.Message}")),
+                Component<LcThrower, string>("render-mount") with { Key = "m1" },
+                Component<LcThrower, string>("effect-mount") with { Key = "m2" },
+                RenderEachTime(_ => throw new InvalidOperationException("func mount failed")) with { Key = "m3" },
+                Memo(_ => throw new InvalidOperationException("memo mount failed"), 1) with { Key = "m4" },
+                ErrorBoundary(Component<LcThrower, string>("render-mount-bounded"), ex => TextBlock($"fallback {ex.Message}")) with { Key = "m5" },
                 ErrorBoundary(VStack(TextBlock("sibling"), RenderEachTime(_ => throw new InvalidOperationException("descendant failed"))),
                     ex => TextBlock($"fallback {ex.Message}"))));
             await step("mount-fails");
