@@ -455,12 +455,13 @@ internal static class ComponentLifecycleCharacterization
     }
 
     // ── Scenario 5: the re-render re-entrancy cap (TASK-059) through the real wrapper ──
-    // A state change climbs from the component through its ancestors' wrappers to the host. The
-    // climb is one request: a chain far deeper than the cap must render. A request that really
-    // re-enters (here the host's request sets the state again, synchronously) must still hit the
-    // cap, after exactly Max requests however deep the component sits: counting the climb would
-    // stop it after Max / depth. The deep chain runs after the loop, so a counter or forward mark
-    // the throw failed to release would fail it too.
+    // A state change climbs from the component through its ancestors to the host. The climb is one
+    // request: a chain far deeper than the cap must render. A request that really re-enters (here
+    // the host's request sets the state again, synchronously) must still hit the cap, after exactly
+    // Max requests, and 200 components deep: counting the climb stops it before the first request
+    // reaches the host, and climbing by recursion holds Max x 200 callback frames, enough to
+    // overflow the stack. The deep chain runs after the loop, so a counter the throw failed to
+    // release would fail it too.
 
     private sealed class LcNest : Component<int>
     {
@@ -489,11 +490,11 @@ internal static class ComponentLifecycleCharacterization
                     catch (InvalidOperationException ex) { return ex.Message; }
                 }
 
-                // A loop four components deep, behind a host whose request re-enters at once.
+                // A loop 200 components deep, behind a host whose request re-enters at once.
                 using (var reconciler = new Reconciler())
                 {
                     var requests = 0;
-                    reconciler.Mount(Component<LcNest, int>(3), () => LcNest.SetLeaf!(1000 + ++requests));
+                    reconciler.Mount(Component<LcNest, int>(200), () => LcNest.SetLeaf!(1000 + ++requests));
                     var loop = Change(1);
                     H.Check("Lifecycle_DepthCap_LoopHitsTheCap",
                         loop?.StartsWith("Render loop detected", StringComparison.Ordinal) == true, $"observed: {loop ?? "no exception"}");
