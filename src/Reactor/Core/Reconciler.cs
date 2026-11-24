@@ -4076,12 +4076,17 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
     /// </summary>
     private Action CreateComponentRerender(ComponentNode node, Action requestRerender)
     {
-        return () =>
+        Action self = null!;
+        self = () =>
         {
+            // A descendant's request climbing through this wrapper was counted where it started.
+            bool forwarded = RerenderReentrancy.IsForwardedTo(self);
+
             // SECURITY (TASK-059): bound rerender re-entrancy. A component
             // that calls its own requestRerender synchronously from Render()
             // or an effect's cleanup would otherwise blow the stack.
-            RerenderReentrancy.ThrowIfTooDeep();
+            if (!forwarded)
+                RerenderReentrancy.ThrowIfTooDeep();
 
             // SECURITY (TASK-063): if invoked off the UI thread (e.g.,
             // setState(threadSafe:true) firing from a worker, or a worker
@@ -4102,10 +4107,11 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
 
             if (!onUiThread && uiDq is not null)
             {
+                // After the hop the request starts on a fresh stack, so it counts there.
                 uiDq.TryEnqueue(() =>
                 {
                     node.SelfTriggered = true;
-                    InvokeRerenderTracked(requestRerender, node);
+                    InvokeRerenderTracked(requestRerender, node, counted: true);
                 });
                 return;
             }
@@ -4113,17 +4119,25 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
             // Either we're on the UI thread, or no UI DQ has been captured
             // (test/headless host) — run inline.
             node.SelfTriggered = true;
-            InvokeRerenderTracked(requestRerender, node);
+            InvokeRerenderTracked(requestRerender, node, counted: !forwarded);
         };
+        return self;
     }
 
-    private static void InvokeRerenderTracked(Action requestRerender, ComponentNode requester)
+    private static void InvokeRerenderTracked(Action requestRerender, ComponentNode requester, bool counted)
     {
-        RerenderReentrancy.Enter();
+        if (counted) RerenderReentrancy.Enter();
+        // Hands the request up as the same request: if requestRerender is the parent's wrapper,
+        // it recognises the hand-off and doesn't count it again.
+        var previousForward = RerenderReentrancy.BeginForward(requestRerender);
         // The perf RenderPass names the component that asked: the innermost wrapper claims the
         // thread before the request climbs through its ancestors' wrappers to the host.
         try { Diagnostics.RenderPassRequests.InvokeAs(requester, requestRerender); }
-        finally { RerenderReentrancy.Exit(); }
+        finally
+        {
+            RerenderReentrancy.EndForward(previousForward);
+            if (counted) RerenderReentrancy.Exit();
+        }
     }
 
     /// <summary>
