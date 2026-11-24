@@ -473,6 +473,7 @@ internal static class SelfTestFixtureRegistry
         ("Lifecycle_Errors", static harness => new ComponentLifecycleCharacterization.Errors(harness)),
         ("Lifecycle_HotReload", static harness => new ComponentLifecycleCharacterization.HotReloadRetry(harness)),
         ("Lifecycle_Rerender", static harness => new ComponentLifecycleCharacterization.Rerender(harness)),
+        ("Lifecycle_RerenderDepthCap", static harness => new ComponentLifecycleCharacterization.RerenderDepthCap(harness)),
         ("ComponentRendered_HostControlRootAndThrowingRoot", static harness => new ComponentRendered_HostControlRootAndThrowingRoot(harness)),
         ("ComponentRendered_ErrorBoundaryCaughtRendersAreReported", static harness => new ComponentRendered_ErrorBoundaryCaughtRendersAreReported(harness)),
         ("ComponentRendered_RootHookOrderRetryIsHotReload", static harness => new ComponentRendered_RootHookOrderRetryIsHotReload(harness)),

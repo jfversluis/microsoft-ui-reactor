@@ -454,6 +454,68 @@ internal static class ComponentLifecycleCharacterization
         });
     }
 
+    // ── Scenario 5: the re-render re-entrancy cap (TASK-059) through the real wrapper ──
+    // Each component's re-render request runs through its ancestors' wrappers, and every wrapper
+    // counts toward the cap, so a state change deep enough in a component chain reaches it. This
+    // pins the wiring: deleting the check or the counting fails the deep case, and a counter that
+    // isn't released fails the shallow case that follows it.
+
+    private sealed class LcNest : Component<int>
+    {
+        internal static Action<int>? SetLeaf;
+        public override Element Render()
+        {
+            if (Props > 0) return Component<LcNest, int>(Props - 1);
+            var (v, set) = UseState(0);
+            SetLeaf = set;
+            return TextBlock($"leaf {v}");
+        }
+    }
+
+    internal sealed class RerenderDepthCap(Harness h) : SelfTestFixtureBase(h)
+    {
+        public override async Task RunAsync()
+        {
+            var target = new Microsoft.UI.Xaml.Controls.Border();
+            H.SetContent(target);
+            using var host = new ReactorHost(H.Window) { ContentTarget = target };
+            try
+            {
+                string? Change(int depth)
+                {
+                    try { LcNest.SetLeaf!(depth); return null; }
+                    catch (InvalidOperationException ex) { return ex.Message; }
+                }
+
+                host.Mount(_ => Component<LcNest, int>(60));
+                await host.WaitForIdleAsync();
+                var deep = Change(1);
+                H.Check("Lifecycle_DepthCap_DeepChainHitsTheCap",
+                    deep?.StartsWith("Render loop detected", StringComparison.Ordinal) == true, $"observed: {deep ?? "no exception"}");
+
+                host.Mount(_ => Component<LcNest, int>(10));
+                await host.WaitForIdleAsync();
+                var shallow = Change(2);
+                await host.WaitForIdleAsync();
+                H.Check("Lifecycle_DepthCap_ShallowChainIsFine", shallow is null, $"observed: {shallow}");
+                H.Check("Lifecycle_DepthCap_ShallowChainRenders", ContainsText(target, "leaf 2"));
+            }
+            finally
+            {
+                H.SetContent(null);
+            }
+        }
+
+        private static bool ContainsText(Microsoft.UI.Xaml.UIElement root, string text)
+        {
+            lock (Gate) s_log = [];
+            LogOutput(root);
+            string output;
+            lock (Gate) { output = s_log![0]; s_log = null; }
+            return output.Split(';').Contains(text) || output == "out:" + text;
+        }
+    }
+
     // ── Goldens, captured on the unchanged reconciler (spec 067 phase 2b, step 0) ──
 
     private static readonly Dictionary<string, string[]> KindsGoldens = new()

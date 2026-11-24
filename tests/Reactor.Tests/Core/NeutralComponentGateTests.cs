@@ -116,6 +116,25 @@ public class NeutralComponentGateTests
     }
 
     [Fact]
+    public void ShouldUpdate_RunsEvenWhenAContextChangeAlreadyDeclinesTheSkip()
+    {
+        // ShouldUpdate is app code: it is always asked, before the context check.
+        var component = new WithProps();
+        var ctx = component.Context;
+        var scope = new ContextScope();
+        scope.Push(new Dictionary<ContextBase, object?> { [Theme] = 1 });
+        ctx.BeginRender(() => { }, scope);
+        ctx.UseContext(Theme);
+        var node = new ComponentNode { Component = component, PreviousProps = "same" };
+
+        var result = ComponentGate.Evaluate(node, new ComponentEl("same"), ScopeWith(2));
+
+        Assert.Equal([("same", "same")], component.Compared);
+        Assert.False(result.Skip);
+        Assert.Equal(ComponentGateReason.Context, result.Reason);
+    }
+
+    [Fact]
     public void Memo_SkipsOnEqualDependencies_RendersOnChangedOnes_AndNullMeansOnce()
     {
         var node = new ComponentNode { Context = ContextThatRead(0), MemoDependencies = [1, "x"] };

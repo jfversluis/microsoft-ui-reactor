@@ -9,7 +9,10 @@ namespace Microsoft.UI.Reactor.Core;
 /// </summary>
 internal interface IComponentRenderHost
 {
-    /// <summary>Renders the component (or the function element) and applies the renderer's output transformation.</summary>
+    /// <summary>
+    /// Renders and applies the renderer's output transformation. Exactly one of <paramref name="component"/>
+    /// (a class component) and <paramref name="function"/> (a function or memo element) is non-null.
+    /// </summary>
     ReactorElement? Render(ReactorComponent? component, IRenderFunctionElement? function, RenderContext context);
 
     /// <summary>Runs the effects the render scheduled (WinUI: inline, before the subtree mounts).</summary>

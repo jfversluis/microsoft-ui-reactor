@@ -204,6 +204,22 @@ public class NeutralComponentRenderKernelTests
     }
 
     [Fact]
+    public void AHotReloadRetryThatFailsAgain_FallsBackInsteadOfLooping()
+    {
+        var host = NewHost();
+        var node = new ComponentNode { Context = new RenderContext() };
+        HotReloadState.WithinUpdatePass = true;
+        try
+        {
+            Render(ref host, node, new FuncEl(_ => throw new HookOrderException("always")), ComponentRenderMode.Update,
+                out var rendered);
+            Assert.Equal(new Leaf("fallback"), rendered);
+        }
+        finally { HotReloadState.WithinUpdatePass = false; }
+        Assert.Equal(["render:function", "retry", "reset", "render:function", "fallback:always:render"], host.Log);
+    }
+
+    [Fact]
     public void ANodeWithNothingToRender_RendersNothing()
     {
         var host = NewHost();

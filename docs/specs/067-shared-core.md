@@ -163,7 +163,8 @@ behind the host (WinUI's attached DP) and only the component structure is retain
    (`DispatcherQueue` behind `IRenderScheduler`); context, errors and hot reload.
 2. **Engine:** the generic `Reconciler<TNative>`; diff hints generic (the child diff and
    `ChildSlots` moved in the phase 1 spike, §9); WinUI orchestration split from WinUI control
-   behavior. Starts with the WinUI node-tree prototype that confirms §5's choice.
+   behavior. Starts with the WinUI node-tree prototype that confirms §5's choice. *Superseded for 2b
+   by §11.1: the component runtime is shared and each renderer keeps its own tree walk.*
 3. **Protocol:** `TControl : class`; generic strategies; registry and latches; descriptor core
    versus WinUI DP features.
 4. **Tooling:** analyzers, the wrapper generator, the API index, docs and AOT proofs.
@@ -384,24 +385,32 @@ WinUI's timing, or WinUI to React's, is a decision for the phase 3 gate.
 
 ### 11.2 What moves to the core
 
-All in `Microsoft.UI.Reactor.Core.Engine`, internal unless noted, visible to the renderers through
-the existing `InternalsVisibleTo` list. The design review (gpt-6.1-sol) confirmed the split and
-shaped each item's limits below.
+As built: all in `src/Reactor.Core/Engine/`, namespace `Microsoft.UI.Reactor.Core`, and all
+internal; WinUI reaches them through the core's `InternalsVisibleTo` list. The design review
+(gpt-6.1-sol) confirmed the split and shaped each item's limits below.
 
-1. **Element contracts** (public interfaces): `IComponentElement` (component type, props, creates
-   the instance), `IRenderFunctionElement` (renders against a `RenderContext`) and `IMemoElement`
-   (adds dependencies), plus the props contracts components implement (`IPropsReceiver`,
-   `IPropsComparable`, today WinUI-internal). WinUI's records implement them explicitly, forwarding
-   to their existing factories and delegates, so no public member and no trimming annotation
-   changes.
+**Access for MAUI.** The contracts stay internal while their shape is provisional (§11.3). Phase 3
+adds the MAUI renderer's assemblies to the core's `InternalsVisibleTo` list and relaxes
+`NeutralCoreBoundaryTests`, which today pins that list to Reactor's grants. This matters: a MAUI
+`Component<TProps>` that can't implement `IPropsReceiver` would be gated through the parameterless
+`ShouldUpdate()` and would never get the issue #151 props refresh, silently. Making them public is
+the alternative once the shape settles.
+
+1. **Element contracts**: `IComponentElement` (its props; constructing the instance stays with the
+   renderer), `IRenderFunctionElement` (renders against a `RenderContext`) and `IMemoElement` (adds
+   dependencies), plus the props contracts components implement (`IPropsReceiver`,
+   `IPropsComparable`, moved from WinUI unchanged). `ComponentElement` satisfies `IComponentElement`
+   through its existing `Props`; `FuncElement` and `MemoElement` implement `Render` explicitly. No
+   public member and no trimming annotation changes.
 2. **`ComponentNode`**, today `Reconciler.ComponentNode`, typed to `ReactorComponent`/`ReactorElement`,
    keeping the volatile self-triggered flag and the lazily assigned ids. WinUI still finds nodes
    through its anchors; topology stays with the renderer.
-3. **The skip gate**: class props (`ShouldUpdate(old, new)` or `ShouldUpdate()`), memo dependencies,
-   the hot-reload force and the self-triggered bypass, returning the decision and the trace reason,
-   plus the skip path's props refresh (issue #151). Consumed-context change detection takes a
-   context reader from the renderer: WinUI passes its traversal scope; MAUI will install the
-   effective ancestor values for each node it renders. The function-component context probe stays
+3. **The skip gate**: class props (`ShouldUpdate(old, new)` or `ShouldUpdate()`, always asked, before
+   the context check), memo dependencies and consumed context, returning the decision and the trace
+   reason, plus the skip path's props refresh (issue #151). The renderer applies the bypasses before
+   asking (the component's own state change, a forced render). Context detection reads the core's
+   `ContextScope`: WinUI passes its traversal scope; MAUI will fill one with the effective ancestor
+   values for each node it renders (phase 3). The function-component context probe stays in WinUI,
    conditional on tracing, as now.
 4. **A render kernel with explicit mount and update modes**, not one transaction. The four paths
    differ on purpose and keep doing so: mount constructs the instance and installs props outside the
@@ -411,7 +420,9 @@ shaped each item's limits below.
    `ApplyProvide` returns a different element, so the kernel retains what the host returns) and the
    effect flush, and classifies a failure from inputs the renderer supplies (boundary depth,
    propagation identity). Construction, the subtree commit, registration and the perf span's
-   lifetime (which covers the subtree) stay in the renderer.
+   lifetime (which covers the subtree) stay in the renderer. `IComponentRenderHost`'s failure and
+   effect members encode WinUI's policy (an in-tree fallback, inline effects); they are provisional
+   until phase 3 settles recovery and deferred effects (§11.3), which will reshape them.
 5. **The re-render wrapper.** Only the re-entrancy bound (`RerenderReentrancy`) moves. The rest of
    the wrapper is WinUI's invalidation rule, which MAUI doesn't share (§11.3): marking every
    ancestor self-triggered, WinUI's dispatcher choice (`OwningDispatcher ?? ReactorApp.UIDispatcher`,
@@ -419,17 +430,12 @@ shaped each item's limits below.
    around the synchronous ancestor chain all stay put. Routing hook *writes* through a per-root
    scheduler is a separate contract (the shared setters marshal through the process-wide one); it
    lands with MAUI in phase 3, and the 2a follow-up on a per-owner dispatcher moves there too.
-6. **The render-loop gate**: the flag mechanics both WinUI hosts implement (one pending pass,
-   request-before-check ordering, deferral during a pass, reset on exception, idle). The loops stay
-   per host: `ReactorHost` renders its first mount synchronously and `ReactorHostControl` doesn't.
-7. **Diff hints and memo-cell caches**: the changed-index protocol and the cache bookkeeping
-   generic internally, with WinUI's signatures still returning `Element[]` and theme sensitivity a
-   renderer policy that governs both the hints and whole-array reuse. Exact-array identity, weak
-   previous-array retention, snapshot isolation and duplicate-key handling are unchanged.
+6. ~~**The render-loop gate**~~: dropped (§11.4, step 3).
+7. ~~**Diff hints and memo-cell caches**~~: deferred (§11.4, step 4).
 
 Stays in WinUI: anchors and the tree walk, error-boundary nodes (walk structure), element equality
-(`ShallowEquals`, `SettersEqual`: a catalog of WinUI records), modifiers, pooling and the element
-factory.
+(`ShallowEquals`, `SettersEqual`: a catalog of WinUI records), modifiers, pooling, the element
+factory, the render-loop flags and, for now, the diff hints and memo-cell hooks.
 
 ### 11.3 What phase 3 inherits
 
@@ -457,13 +463,24 @@ phase 3, recorded now so they are designed rather than discovered:
 
 ### 11.4 Steps, each with WinUI tiers green
 
-0. **Characterization first.** Selftests pinning today's component lifecycle event sequence: mount
-   and update for class, function and memo components; the hot-reload retry; throwing render,
-   throwing effects and the fallback; propagation; a descendant failing to mount under a boundary;
-   and the re-render wrapper (owner and dispatcher presence, inline runs, re-entrancy, requester
-   attribution). They land and pass on the unchanged code before anything moves.
+0. **Characterization first.** `ComponentLifecycleCharacterization` selftests record one ordered log
+   per step (renders, effects, cleanups, rendered output, host warnings and errors, component
+   events), untraced and traced, and compare it with goldens captured on the unchanged reconciler:
+   - mount and update for class, function and memo components, with the skip gate's decisions;
+   - render and effect failures on mount and update, outside a boundary (the in-tree fallback, each
+     path's log message) and under one (class and function components);
+   - the hot-reload hook-order retry, and re-renders requested from another thread and batched on
+     the UI thread;
+   - the re-entrancy cap through the real wrapper: a state change 60 components deep reaches it, one
+     10 deep doesn't (`Lifecycle_RerenderDepthCap`).
+
+   The goldens were identical across the unpackaged, packaged and NativeAOT tiers and passed on the
+   unchanged code in a separate run. Existing fixtures cover the rest: `RenderError.Propagate()` and
+   app handlers (`RenderErrorHandlerFixtures`), fatal errors in and out of boundaries
+   (`RenderErrorNamesFixture`), the context reason (`ComponentRendered_ReasonsAndIdsFollowTheReconciler`),
+   requester attribution (`PerfTraceFixtures`) and the props refresh (`CallbacksMemoSkipFixtures`).
 1. Contracts, `ComponentNode` and the skip gate.
-2. The render kernel and the re-render wrapper.
+2. The render kernel and the re-render guard.
 3. ~~The render-loop gate.~~ Dropped: measured against the code, the shared part is a volatile flag
    and a compare-exchange per host, interleaved with host-only work (the perf request note, the
    animation ambients, a test hook between the two checks, the synchronous first render, the
