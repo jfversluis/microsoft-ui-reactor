@@ -1,8 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    The .NET MAUI renderer for Reactor (spec 065). The plain net11.0 target has no platform
-    handlers; it exists so Reactor.Maui.Tests can mount element trees headlessly.
+    The .NET MAUI renderer for Reactor (spec 065): its elements, components and node engine over the
+    shared core (src/Reactor.Core, spec 067 §13), and its handlers. The plain net11.0 target has no
+    platform handlers; it exists so the headless suites can mount element trees.
   -->
   <PropertyGroup>
     <TargetFrameworks>net11.0;net11.0-android</TargetFrameworks>
@@ -44,11 +45,12 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Reactor.Maui.Tests" />
+    <InternalsVisibleTo Include="Reactor.Maui.Engine.Tests" />
     <InternalsVisibleTo Include="Reactor.Maui.DeviceTests" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Reactor.Maui.Core\Reactor.Maui.Core.csproj" />
+    <ProjectReference Include="..\Reactor.Core\Reactor.Core.csproj" />
   </ItemGroup>
 
 </Project>

@@ -28,10 +28,11 @@ Conventions for contributors:
 
 ### Added
 
-- **Reactor for .NET MAUI, in preview (spec 065).** Two new packages:
-  `Microsoft.UI.Reactor.Maui.Core`, a transitional renderer-neutral core (components, hooks, keyed
-  reconciliation, context, error boundaries) that spec 067 replaces with a core shared with WinUI; and
-  `Microsoft.UI.Reactor.Maui`, a renderer for Android, iOS and Mac Catalyst. The MAUI package has the
+- **Reactor for .NET MAUI, in preview (spec 065).** A new package, `Microsoft.UI.Reactor.Maui`, a
+  renderer for Android, iOS and Mac Catalyst. Its components, hooks and context run on
+  `Microsoft.UI.Reactor.Core`, the core shared with WinUI (spec 067 §13): the same `RenderContext`,
+  skip gate and render kernel, so a custom hook or view-model component compiles for either
+  renderer. The MAUI package has the
   standard controls, layouts, `CollectionView`/`CarouselView`, pages, a navigation stack held in
   state, tabs, flyouts and `UseAppTheme`/`UseWindowSize`. It renders primitives and layouts as direct
   views that skip the Controls layer (27–58% faster on bulk work) and falls back to Controls per
@@ -195,6 +196,11 @@ Conventions for contributors:
   package targets now follows the restored package instead of a hardcoded version.
 
 ### Fixed
+
+- An effect cleanup that throws while effects are flushed now runs only once: it is cleared before
+  it runs, so unmounting the component no longer runs it again. An effect scheduled a second time
+  before the flush (a render that failed and was retried) now keeps the cleanup it staged instead
+  of dropping it (spec 067 §13).
 
 - A state change in a component nested more than 50 components deep no longer throws "Render loop
   detected". The re-render loop guard (TASK-059) counted every ancestor component the request

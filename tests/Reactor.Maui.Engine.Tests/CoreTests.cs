@@ -336,11 +336,19 @@ public class EchoTests
 
 public class CoreBoundaryTests
 {
+    // Spec 067 §13: MAUI components, elements and hooks are the shared core's, and that core stays
+    // free of UI frameworks. (Reactor.Tests checks the same core on Windows; this runs on macOS.)
     [Fact]
-    public void Core_ReferencesNoUiFramework()
+    public void MauiComponentsAndElements_RunOnTheSharedCore_WhichReferencesNoUiFramework()
     {
-        var references = typeof(ReactorRoot).Assembly.GetReferencedAssemblies().Select(a => a.Name!).ToList();
+        var core = typeof(ReactorComponent).Assembly;
+        Assert.Equal("Microsoft.UI.Reactor.Core", core.GetName().Name);
+        Assert.Same(typeof(ReactorComponent), typeof(Component).BaseType);
+        Assert.Same(typeof(ReactorElement), typeof(Element).BaseType);
+        Assert.Same(core, typeof(RenderContext).Assembly);
+        Assert.Same(core, typeof(Context<int>).Assembly);
 
+        var references = core.GetReferencedAssemblies().Select(a => a.Name!).ToList();
         Assert.NotEmpty(references);
         Assert.All(references, name => Assert.StartsWith("System.", name));
     }

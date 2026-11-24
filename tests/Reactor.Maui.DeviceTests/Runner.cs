@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Maui.Dispatching;
+using Microsoft.UI.Reactor.Core;
 using Microsoft.UI.Reactor.Hosting;
 using Microsoft.UI.Reactor.Maui.Handlers;
 using Microsoft.UI.Reactor.Maui.Hosting;

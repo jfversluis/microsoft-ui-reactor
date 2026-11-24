@@ -485,8 +485,7 @@ public sealed class PhantomSymbolLintTests
     private static bool IsMauiRendererSource(string root, string file)
     {
         var rel = global::System.IO.Path.GetRelativePath(root, file).Replace('\\', '/');
-        return rel.StartsWith("src/Reactor.Maui.Core/", global::System.StringComparison.Ordinal)
-            || rel.StartsWith("src/Reactor.Maui/", global::System.StringComparison.Ordinal);
+        return rel.StartsWith("src/Reactor.Maui/", global::System.StringComparison.Ordinal);
     }
 
     /// <summary>

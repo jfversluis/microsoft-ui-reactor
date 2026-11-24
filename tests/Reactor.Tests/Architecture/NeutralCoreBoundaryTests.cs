@@ -84,7 +84,8 @@ public class NeutralCoreBoundaryTests
     /// <summary>
     /// Engine internals used to live in Reactor.dll, so every assembly with access to Reactor's
     /// internals (tests, hosts, companions) relied on them. The core must grant each of those
-    /// access too, or moving an internal type into it breaks them, and grant nobody else.
+    /// access too, or moving an internal type into it breaks them. Its only other grants are the
+    /// MAUI renderer and the assemblies that see its internals (spec 067 §11.2, §13).
     /// </summary>
     [Fact]
     public void NeutralCore_GrantsInternalsToEveryAssemblyReactorDoes()
@@ -99,8 +100,9 @@ public class NeutralCoreBoundaryTests
         var core = Grants("src/Reactor.Core/Reactor.Core.csproj");
 
         Assert.NotEmpty(reactor);
-        // Exactly Reactor's grants plus Reactor itself: a missing one breaks an assembly that
-        // used engine internals, and an extra one widens the core's internals unreviewed.
-        Assert.Equal(reactor.Append("Reactor").Order(global::System.StringComparer.Ordinal), core.Order(global::System.StringComparer.Ordinal));
+        // Exactly Reactor's grants plus Reactor itself and the MAUI renderer's: a missing one breaks
+        // an assembly that used engine internals, and an extra one widens the core's internals unreviewed.
+        string[] maui = ["Microsoft.UI.Reactor.Maui", "Reactor.Maui.Tests", "Reactor.Maui.Engine.Tests", "Reactor.Maui.DeviceTests"];
+        Assert.Equal(reactor.Append("Reactor").Concat(maui).Order(global::System.StringComparer.Ordinal), core.Order(global::System.StringComparer.Ordinal));
     }
 }

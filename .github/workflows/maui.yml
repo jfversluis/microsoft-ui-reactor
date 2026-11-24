@@ -6,10 +6,10 @@ name: MAUI
 on:
   pull_request:
     paths: &maui-paths
-      - 'src/Reactor.Maui.Core/**'
+      - 'src/Reactor.Core/**'
       - 'src/Reactor.Maui/**'
       - 'src/Reactor.Maui.Packaging.props'
-      - 'tests/Reactor.Maui.Core.Tests/**'
+      - 'tests/Reactor.Maui.Engine.Tests/**'
       - 'tests/Reactor.Maui.Tests/**'
       - 'tests/Reactor.Maui.Benchmark/**'
       - 'tests/Reactor.Maui.DeviceTests/**'
@@ -43,7 +43,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
-          # .NET 11 SDK builds (global.json); .NET 10 runtime runs the net10.0 core tests.
+          # .NET 11 SDK builds (global.json); the shared core targets net10.0.
           dotnet-version: |
             10.0.x
             11.0.x
@@ -76,8 +76,8 @@ jobs:
       - name: Restore
         run: dotnet restore Reactor.Maui.slnx -p:Configuration=Release
 
-      - name: Core tests
-        run: dotnet test tests/Reactor.Maui.Core.Tests/Reactor.Maui.Core.Tests.csproj --no-restore -c Release
+      - name: Engine tests
+        run: dotnet test tests/Reactor.Maui.Engine.Tests/Reactor.Maui.Engine.Tests.csproj --no-restore -c Release
 
       - name: Headless renderer tests
         run: dotnet test tests/Reactor.Maui.Tests/Reactor.Maui.Tests.csproj --no-restore -c Release
@@ -87,7 +87,7 @@ jobs:
 
       - name: Pack
         run: |
-          dotnet pack src/Reactor.Maui.Core/Reactor.Maui.Core.csproj --no-restore -c Release -o artifacts/packages
+          dotnet pack src/Reactor.Core/Reactor.Core.csproj --no-restore -c Release -o artifacts/packages
           dotnet pack src/Reactor.Maui/Reactor.Maui.csproj --no-restore -c Release -o artifacts/packages
 
       - name: Upload packages

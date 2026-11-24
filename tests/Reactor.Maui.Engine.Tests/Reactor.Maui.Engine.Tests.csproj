@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <LangVersion>15</LangVersion>
     <Nullable>enable</Nullable>
     <!-- Test code reflects by design and is never trimmed (see Directory.Build.targets). -->
@@ -17,10 +17,15 @@
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <Using Include="Xunit" />
+    <Using Include="Microsoft.UI.Reactor.Core.Element" Alias="Element" />
+    <!-- These tests drive the engine through a fake renderer; MAUI's implicit usings would make
+         its own IElementHandler ambiguous with the engine's. -->
+    <Using Remove="Microsoft.Maui" />
+    <Using Remove="Microsoft.Maui.Controls" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Reactor.Maui.Core\Reactor.Maui.Core.csproj" />
+    <ProjectReference Include="..\..\src\Reactor.Maui\Reactor.Maui.csproj" />
   </ItemGroup>
 
 </Project>

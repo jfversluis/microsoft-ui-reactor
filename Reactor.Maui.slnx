@@ -5,14 +5,14 @@
     pipelines neither install nor target. CI: .github/workflows/maui.yml.
   -->
   <Folder Name="/src/">
-    <Project Path="src/Reactor.Maui.Core/Reactor.Maui.Core.csproj" />
+    <Project Path="src/Reactor.Core/Reactor.Core.csproj" />
     <Project Path="src/Reactor.Maui/Reactor.Maui.csproj" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/maui/Reactor.Maui.Sample/Reactor.Maui.Sample.csproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="tests/Reactor.Maui.Core.Tests/Reactor.Maui.Core.Tests.csproj" />
+    <Project Path="tests/Reactor.Maui.Engine.Tests/Reactor.Maui.Engine.Tests.csproj" />
     <Project Path="tests/Reactor.Maui.Tests/Reactor.Maui.Tests.csproj" />
     <Project Path="tests/Reactor.Maui.Benchmark/Reactor.Maui.Benchmark.csproj" />
     <Project Path="tests/Reactor.Maui.DeviceTests/Reactor.Maui.DeviceTests.csproj" />

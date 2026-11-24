@@ -12,6 +12,17 @@ public sealed class RenderContext
     internal readonly List<HookState> _hooks = new(8);
     internal int _hookIndex;
     internal Action? _requestRerender;
+
+    // The hook count of the last render that passed ValidateHookCount; -1 before the first one.
+    private int _validatedHookCount = -1;
+
+    /// <summary>
+    /// Queues work on the thread that renders this context, for a renderer whose render thread
+    /// is per root rather than process-wide (MAUI, spec 067 §13). A setter called off that thread
+    /// marshals through it; when null (WinUI), through <see cref="RenderScheduler.TryEnqueueOnUIThread"/>.
+    /// Read only off the render thread, so the render path never touches it.
+    /// </summary>
+    internal Func<Action, bool>? RenderThreadEnqueue { get; set; }
     private ContextScope? _contextScope;
     private int _uiThreadId;
 
@@ -118,7 +129,7 @@ public sealed class RenderContext
         // The exact diagnostic wording — including the "threadSafe: true" remedy — is
         // preserved here because callers/tests depend on it.
         return UIThreadMarshal.EnqueueOrThrow(
-            RenderScheduler.TryEnqueueOnUIThread,
+            RenderThreadEnqueue ?? RenderScheduler.TryEnqueueOnUIThread,
             work,
             () =>
                 // Test/headless context with no captured UI dispatcher AND off-thread.
@@ -769,8 +780,14 @@ public sealed class RenderContext
     // alias and wrongly short-circuit DepsEqual.
     private static void ScheduleEffect(EffectHookState hook, Action? effect, Func<Action>? withCleanup, object[] dependencies)
     {
-        hook.PendingCleanup = hook.Cleanup;
-        hook.Cleanup = null;
+        // Scheduled again before the flush (a renderer that renders a component more than once
+        // per commit, or a render that failed and is retried): the cleanup staged by the first
+        // schedule is still the one to run, and only the latest effect runs.
+        if (!hook.Pending)
+        {
+            hook.PendingCleanup = hook.Cleanup;
+            hook.Cleanup = null;
+        }
         hook.Dependencies = dependencies;
         hook.Effect = effect;
         hook.EffectWithCleanup = withCleanup;
@@ -1235,15 +1252,42 @@ public sealed class RenderContext
         public IEqualityComparer<TSnapshot> Comparer { get; set; }
     }
 
+    /// <summary>Whether the last render scheduled an effect that <see cref="FlushEffects"/> hasn't run.</summary>
+    internal bool HasPendingEffects
+    {
+        get
+        {
+            for (int i = 0; i < _hooks.Count; i++)
+                if (_hooks[i] is EffectHookState { Pending: true }) return true;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Ends a render for a renderer that requires the same number of hooks on every render (MAUI,
+    /// spec 067 §13): throws <see cref="HookOrderException"/> when this render called a different
+    /// number of hooks than the last one that passed. A hook whose kind changes already throws
+    /// where it is called. WinUI doesn't call it.
+    /// </summary>
+    internal void ValidateHookCount()
+    {
+        if (_validatedHookCount >= 0 && _hookIndex != _validatedHookCount)
+            throw new HookOrderException(
+                $"This render called {_hookIndex} hooks but the previous render called {_validatedHookCount}. " +
+                "Hooks must be called unconditionally and in the same order on every render.");
+        _validatedHookCount = _hookIndex;
+    }
+
     internal void FlushEffects()
     {
         // Phase 1: Run all pending cleanups from previous effects
         for (int i = 0; i < _hooks.Count; i++)
         {
-            if (_hooks[i] is EffectHookState hook && hook.PendingCleanup is not null)
+            if (_hooks[i] is EffectHookState hook && hook.PendingCleanup is { } cleanup)
             {
-                hook.PendingCleanup();
+                // Cleared before it runs, so a cleanup that throws isn't run again at unmount.
                 hook.PendingCleanup = null;
+                cleanup();
             }
         }
 
@@ -1367,6 +1411,7 @@ public sealed class RenderContext
     {
         _hooks.Clear();
         _hookIndex = 0;
+        _validatedHookCount = -1;
     }
 
     /// <summary>
