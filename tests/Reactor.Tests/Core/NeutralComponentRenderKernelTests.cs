@@ -238,22 +238,4 @@ public class NeutralComponentRenderKernelTests
         finally { for (var i = 0; i < RerenderReentrancy.Max; i++) RerenderReentrancy.Exit(); }
         RerenderReentrancy.ThrowIfTooDeep();
     }
-
-    [Fact]
-    public void RerenderReentrancy_AForwardIsTakenOnce_ByTheWrapperItNames()
-    {
-        object parent = new(), other = new(), outer = new();
-        var previous = RerenderReentrancy.BeginForward(outer);
-        var mark = RerenderReentrancy.BeginForward(parent);
-        try
-        {
-            Assert.False(RerenderReentrancy.IsForwardedTo(other));
-            Assert.True(RerenderReentrancy.IsForwardedTo(parent));
-            // Taken: a second call from parent (a request it triggers in turn) is a new request.
-            Assert.False(RerenderReentrancy.IsForwardedTo(parent));
-        }
-        finally { RerenderReentrancy.EndForward(mark); }
-        Assert.True(RerenderReentrancy.IsForwardedTo(outer));
-        RerenderReentrancy.EndForward(previous);
-    }
 }

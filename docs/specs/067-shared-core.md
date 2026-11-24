@@ -473,9 +473,10 @@ phase 3, recorded now so they are designed rather than discovered:
      the UI thread;
    - the re-entrancy cap through the real wrapper (`Lifecycle_RerenderDepthCap`). As captured, a
      state change 60 components deep reached it, because every ancestor's wrapper counted the
-     request. The fix after the gate counts a request once, where it starts: the fixture now
-     checks that a chain 200 deep renders and that a real synchronous loop stops after exactly
-     `Max` requests, four components deep.
+     request. The fix after the gate walks the ancestors from the component that asked, so a
+     request is counted once and climbs on a constant stack: the fixture now checks that a chain
+     200 deep renders and that a real synchronous loop 200 deep stops after exactly `Max`
+     requests.
 
    The goldens were identical across the unpackaged, packaged and NativeAOT tiers and passed on the
    unchanged code in a separate run. Existing fixtures cover the rest: `RenderError.Propagate()` and

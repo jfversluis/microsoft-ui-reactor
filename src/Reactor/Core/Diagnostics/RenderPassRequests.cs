@@ -7,10 +7,10 @@ namespace Microsoft.UI.Reactor.Core.Diagnostics;
 /// </summary>
 /// <remarks>
 /// <para><b>How a request is attributed.</b> A component's re-render request runs through its
-/// wrapper (<c>Reconciler.CreateComponentRerender</c>), then each ancestor component's wrapper,
-/// then the host's <c>RequestRender</c>, all synchronously on one thread. The first wrapper to
-/// <see cref="Claim"/> the thread is the component that asked; the ancestors it passes through
-/// find the claim taken. The host root's own hooks claim through the host's root rerender
+/// callback (<c>Reconciler.CreateComponentRerender</c>), which marks each ancestor component on
+/// the way and then calls the host's <c>RequestRender</c>, all synchronously on one thread. The
+/// callback <see cref="Claim"/>s the thread for the component that asked. The host root's own
+/// hooks claim through the host's root rerender
 /// action, with the root's <see cref="RootRenderDiagnostics"/> (replaced when the root is), so
 /// a request from a root that was remounted before the pass names nobody rather than its
 /// replacement. A claim is consumed by the one request it was made for (<see cref="Note"/>),
