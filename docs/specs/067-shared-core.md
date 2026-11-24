@@ -501,3 +501,100 @@ and a fake host. **Perf:** every `/perf` leg (StocksGrid, skip floor, KeyedList,
 micro-suite) with allocations, plus the 30-rep skip floor and micro-suite isolation against the
 previous phase. Avoid allocations on the gate path (no closure adapters, no boxed scopes, no eager
 reason strings), keep element-neutral logic non-generic, and keep the cached hook setters.
+
+## 12. Phase 2c: the handler protocol
+
+§6 step 3 and §4 planned to make the handler protocol neutral before MAUI moves onto the core:
+`IElementHandler` with `TControl : class`, contexts without WinUI members (those becoming renderer
+extensions), generic children strategies, the registry and its latches, and a descriptor core
+separate from WinUI's DP features. §1 lists the protocol's shape, registration and trimming among
+the core's contents. Mapped against both renderers (WinUI at `9e85a6e0`, MAUI's spec 065
+renderer), the plan meets three facts. A cross-family review (gpt-6.1-sol) checked them and the
+options below.
+
+### 12.1 What the code shows
+
+**The public protocol is WinUI-shaped in its signatures, not just its constraints.**
+
+| Public type | WinUI in the signature |
+|---|---|
+| `IElementHandler<TElement, TControl>` | `TElement : Element` (WinUI's), `TControl : UIElement`; members take `MountContext`/`UpdateContext`/`UnmountContext` |
+| `MountContext`, `UpdateContext`, `UnmountContext` (`readonly ref struct`) | `Reconciler`; `MountChild`/`ReconcileChild` return `UIElement`; `BindFor(FrameworkElement, …)`; `AddRawRoutedHandler(UIElement, RoutedEvent, …)`; `RentControl`/`ReturnControl` (WinUI pooling) |
+| `ChildrenStrategy<TElement, TControl>` and its 11 variants | `TControl : UIElement`; `Panel` exposes `UIElementCollection`, child callbacks take `UIElement` |
+| `ControlDescriptor<TElement, TControl>` | `TControl : FrameworkElement, new()`; `Controlled` subscribes with `Action<FrameworkElement, …>`; `OneWay` and `Immediate` overloads take a `DependencyProperty`; `ImperativeBridged` takes the contexts; `PoolPolicy` |
+| `PropEntry<TElement, TControl>` | `TControl : UIElement`; virtual `Mount`/`Update` overloads take the contexts |
+| `IDecoratorElementHandler<TElement>`, `AttachedPropWriter<T>`, `ReactorBinding<T>` | return and take `UIElement`/`FrameworkElement` |
+
+Relaxing a constraint is binary compatible. Removing instance members is not: if the contexts move
+to the core, their WinUI members become extension members, and compiled code that calls
+`ctx.MountChild`, `ctx.ReconcileChild` or `ctx.Reconciler` fails with `MissingMethodException`
+until it is rebuilt. That code includes hand-written handlers and the wrappers spec 058 generates
+for secondary element slots and custom lifecycles (`WrapperGenerator.cs:1692-1730`); ordinary
+generated `.Controlled` entries don't call them. §1 accepts binary breaks (consumers rebuild), so
+this is a cost to weigh, not a bar.
+
+**The two protocols differ in structure, not just types.**
+
+| | WinUI (`V1Protocol`) | MAUI (spec 065, `Reactor.Maui.Core/Hosting`) |
+|---|---|---|
+| Children | the strategy drives mounting: the reconciler diffs children straight into the native collection (`ChildReconciler`, incremental insert/move/remove) | the engine reconciles child nodes, collects the flattened natives, then the strategy's `Sync(control, natives)` reorders by reference; slotted strategies get one group per child |
+| Context | per phase; reconciler, child mount, pooling, routed events, binding helper | one `HandlerContext`, retained by event handlers; the live element, echo guard, child roots, error reporting, restore-after-event |
+| Lifecycle | items bind before props (`DescriptorHandler.cs:109-139`) | props, then children sync; `CanUpdate` decides remount |
+| Registry | process-global, first registration wins, lazy self-registering latches (spec 048), per-reconciler overrides | an instance per root, last registration wins, so the hybrid set replaces Controls handlers with Direct ones (`DirectHandlers.cs:18-31`) |
+| Echo | a counter, plus a value-diff arm kept on per-control state in an attached DP; the descriptor's typed arm is synchronous-only and drains only on a matching readback (`PropEntry.cs:295-341, 647-656`) | a reference set active during the synchronous write only |
+| Props | mostly descriptors, a declarative entry table: 81 declarations (73 from `[GenerateReactorDescriptor]` and the wrapper generator, spec 058, plus 8 hand-written), and 18 hand-coded handlers | imperative `Mount`/`Update` code: 35 Controls handlers, plus 12 Direct or hybrid overrides |
+
+**There is one consumer.** MAUI doesn't use any of WinUI's protocol today. A neutral protocol
+extracted now would be shaped by WinUI alone, and phase 3 would reshape it, as §11.3 already
+expects of the render kernel's host contract.
+
+### 12.2 Options
+
+- **A. Move the public types to the core (§4 as written).** One `IElementHandler` for both
+  renderers, at the cost of the binary break above. The children model must also cover both the
+  incremental and the collect-and-sync shape before MAUI has tried either.
+- **A′. A new core contract, generic over the context.** Core interfaces take the renderer's context
+  as a type parameter (`allows ref struct`), and WinUI's public interfaces and contexts stay as
+  they are, adapted through the existing adapter shells. No break. It shares little beyond
+  lifecycle dispatch, though: MAUI still needs a context it can retain, `CanUpdate` and flattening.
+  Feasible, not worth it before MAUI uses it.
+- **B. Extract the descriptor interpreter now, behind WinUI's unchanged public types.** Large, and
+  shaped by one consumer: item-before-prop ordering, the synchronous-only typed arm and the
+  context-taking entries are WinUI policy that MAUI would have to undo.
+- **B-lite. Extract internal neutral decision helpers now:** the get/compare/set decision of a
+  one-way entry (`PropEntry.cs:86-110`), the scalar echo decision
+  (`ChangeEchoSuppressor.cs:161-188`), the registry's exact/base lookup and cache
+  (`ControlRegistry.cs:317-353`). Cheap and no hot-path cost (static helpers over existing fields),
+  but small payoff, and their signatures would still be guesses until MAUI calls them.
+- **C. Extract each piece when MAUI adopts it, in phase 3 (recommended).** Phase 3 starts by
+  re-hosting MAUI's components and hooks on the core (2a, 2b), which needs no protocol. Then the
+  protocol pieces move with MAUI as their second consumer. §1's goal stands; it is reached with two
+  consumers instead of one. WinUI's public types stay where they are until then; whether they
+  become neutral public types (A or A′) is decided once both renderers implement the same pieces,
+  at a phase 3 gate.
+
+### 12.3 Phase 3 gates the protocol pieces must pass
+
+Each extraction is gated like 2b (characterization first, WinUI tiers, `/perf` with the 30-rep
+isolation), plus:
+
+- **Echo.** Characterize before sharing anything: repeated writes before an event is delivered,
+  event payload versus current readback, coerced and no-op writes, several controlled properties on
+  one control, rejected user input (MAUI's restore-after-event) and teardown. Echo can land in
+  MAUI's existing imperative handlers first; it doesn't need descriptors.
+- **Registry.** State is per renderer or per root, and the renderer owns its duplicate and override
+  policy (WinUI first-wins, MAUI last-wins with hybrid overrides). Latches may seed a lazy catalog;
+  they don't populate roots.
+- **Descriptors.** Gates for the order of children and props, live-element access in events,
+  restore-after-event and hybrid remounts (`CanUpdate`).
+- **Children.** After MAUI's flattening is settled against the shared child diff (§11.3, identity).
+
+### 12.4 What 2c delivers
+
+- The deep-tree re-entrancy fix (phase 2b gate decision 5): a request climbs its ancestors
+  iteratively, so it is counted once and runs on a constant stack.
+- This analysis and the phase 3 gates above.
+
+Tooling (2d) follows the same rule. The analyzers already anchor on the core's types (2a), and the
+API index and docs pipeline were kept current in each phase. What remains (MAUI analyzer coverage,
+a MAUI wrapper generator) has no consumer until MAUI is on the core, so it moves to phases 3 and 4.
