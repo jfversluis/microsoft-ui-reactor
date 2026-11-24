@@ -576,18 +576,6 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
             new RenderError(ex, inEffects ? RenderErrorSource.Effects : RenderErrorSource.ComponentRender,
                 componentName, isHostLevel: false),
             _logger);
-    /// <summary>
-    /// Active rerender-callback depth. Throws past
-    /// <see cref="MaxRerenderReentrancy"/> so a component that synchronously
-    /// invokes its own <c>requestRerender</c> from inside <c>Render()</c> or
-    /// effect cleanup fails fast instead of recursing to a stack overflow.
-    /// TASK-059.
-    /// </summary>
-    [ThreadStatic]
-    private static int t_rerenderDepth;
-    /// <summary>Hard depth cap — see <see cref="t_rerenderDepth"/>.</summary>
-    private const int MaxRerenderReentrancy = 50;
-
     // ── Style cache: avoids redundant XamlReader.Load() for identical theme binding sets ──
     private static readonly global::System.Collections.Concurrent.ConcurrentDictionary<string, Style> _styleCache = new();
 
@@ -4030,132 +4018,24 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
             ? Diagnostics.ComponentRenderTrace.ClassifyUpdate(
                 forcedRender, HotReloadService.WithinUpdatePass || _hotReloadRetryActive, selfTriggered, memoReason)
             : null;
-        bool renderReported = false;
-
-        Element newChildElement;
-        // The RenderContext backing whichever branch we render (component or
-        // func/memo). Used to recover an in-flight hook-order change during a
-        // hot-reload pass: reset this context's hook state and re-render once.
-        RenderContext? renderCtx = node.Component?.Context ?? node.Context;
-        bool hotReloadRetried = false;
-        bool inEffects = false;
-        while (true)
+        // Render, effects, the hot-reload hook-order retry and failure handling: the core's
+        // component kernel (spec 067 §11.2).
+        var renderHost = new WinUIComponentRenderHost
         {
-            inEffects = false;
-            try
-            {
-                if (node.Component is not null)
-                {
-                    // Update props before re-rendering so the component sees fresh data
-                    if (newEl is ComponentElement compEl && compEl.Props is not null
-                        && node.Component is IPropsReceiver receiver)
-                    {
-                        receiver.SetProps(compEl.Props);
-                    }
-
-                    node.Component.Context.BeginRender(componentRerender, _contextScope, Owner);
-                    using (ValidationRenderScope.Begin(ReadContext(ValidationContexts.Current)))
-                    {
-                        newChildElement = ValidationRenderScope.ApplyProvide(node.Component.Render());
-                    }
-                    inEffects = true;
-                    FlushEffectsTraced(node.Component.Context, componentName);
-                }
-                else if (node.Context is not null && newEl is FuncElement func)
-                {
-                    node.Context.BeginRender(componentRerender, _contextScope, Owner);
-                    using (ValidationRenderScope.Begin(ReadContext(ValidationContexts.Current)))
-                    {
-                        newChildElement = ValidationRenderScope.ApplyProvide(func.RenderFunc(node.Context));
-                    }
-                    inEffects = true;
-                    FlushEffectsTraced(node.Context, componentName);
-                }
-                else if (node.Context is not null && newEl is MemoElement memo)
-                {
-                    node.Context.BeginRender(componentRerender, _contextScope, Owner);
-                    using (ValidationRenderScope.Begin(ReadContext(ValidationContexts.Current)))
-                    {
-                        newChildElement = ValidationRenderScope.ApplyProvide(memo.RenderFunc(node.Context));
-                    }
-                    inEffects = true;
-                    FlushEffectsTraced(node.Context, componentName);
-                }
-                else
-                {
-                    if (traceRender)
-                        Diagnostics.ReactorEventSource.Log.ComponentRenderStop(componentName!, 0);
-                    return;
-                }
-            }
-            // Tree-wide hot-reload hook-order recovery: when an edit reorders or
-            // retypes hooks in a *non-root* child, its Render() throws here.
-            // Inside a hot-reload pass we reset that child's hook state and
-            // re-render once (matching the root recovery in the host), so the
-            // edit applies and the subtree's descendant state is preserved,
-            // instead of falling through to the error-fallback path below.
-            catch (HookOrderException ex) when (!hotReloadRetried
-                && renderCtx is not null
-                && HotReloadService.WithinUpdatePass)
-            {
-                // The aborted attempt still ran Render(); report it before logging, so a
-                // slow logger is not charged to it.
-                if (traceRendered)
-                    EmitComponentRendered(node, null, newEl, Diagnostics.ComponentRenderTrace.Reasons.HotReload, renderedStart);
-                _logger?.LogWarning(ex,
-                    "Hot reload: hook order/type changed in child component — " +
-                    "resetting state and re-rendering: {ComponentName}",
-                    componentName ?? Diagnostics.ComponentNames.For(node.Component, newEl));
-                hotReloadRetried = true;
-                renderCtx.ResetForHotReload();
-                // Time the retry on its own (it reports itself after the loop), starting
-                // after the reset ran the effect cleanups.
-                if (traceRendered)
-                    renderedStart = global::System.Diagnostics.Stopwatch.GetTimestamp();
-                continue;
-            }
-            // Inside an ErrorBoundary the exception propagates to the boundary, which
-            // renders its fallback. Name the failing component here, at the throw site —
-            // the boundary itself cannot know which descendant threw — so a listener sees
-            // the error even though the app recovered. Rethrown unchanged. No OOM/SO carve-out:
-            // the boundary catches every exception, so every one it recovers from is reported.
-            // Outside a boundary, OOM/SO skip the fallback arm below and propagate to the
-            // host, which also recovers — so they are reported here too. An exception the app
-            // declined via RenderError.Propagate() was already reported where it was thrown,
-            // so it passes through unreported (issue #1291).
-            catch (Exception ex) when ((_errorBoundaryDepth > 0 || ex is OutOfMemoryException or StackOverflowException)
-                && !RenderErrorDispatch.IsPropagating(ex))
-            {
-                // The render still happened: report it, as the trailing arm does for the rest.
-                if (traceRendered)
-                    EmitComponentRendered(node, null, newEl, renderedReason!, renderedStart);
-                EmitRenderError(componentName ?? Diagnostics.ComponentNames.For(node.Component, newEl), ex);
-                throw;
-            }
-            catch (Exception ex) when (_errorBoundaryDepth == 0 && ex is not OutOfMemoryException and not StackOverflowException && !RenderErrorDispatch.IsPropagating(ex))
-            {
-                // Report before building the fallback: its time is not this render's, and
-                // a fallback that throws must not swallow the event.
-                if (traceRendered)
-                {
-                    EmitComponentRendered(node, control, newEl, renderedReason!, renderedStart);
-                    renderReported = true;
-                }
-                var failedName = componentName ?? Diagnostics.ComponentNames.For(node.Component, newEl);
-                _logger?.LogError(ex, "Component Render() threw: {ComponentName}", failedName);
-                // Before the fallback: the app's handler may call Propagate(), which throws.
-                EmitRenderError(failedName, ex);
-                newChildElement = BuildInTreeFallback(ex, inEffects, node.Component?.GetType().Name);
-            }
-            // Every other exception propagates (to an enclosing ErrorBoundary, or a fatal
-            // one to the host); the render still happened, so report it and rethrow.
-            catch (Exception) when (traceRendered)
-            {
-                EmitComponentRendered(node, null, newEl, renderedReason!, renderedStart);
-                throw;
-            }
-            break;
+            Reconciler = this, Node = node, Element = newEl, Site = ComponentRenderSite.Update,
+            Control = control, TraceRendered = traceRendered, RenderedStart = renderedStart,
+            RenderedReason = renderedReason, ComponentName = componentName,
+        };
+        if (!ComponentRenderKernel.TryRender(ref renderHost, node, newEl, ComponentRenderMode.Update,
+                componentRerender, _contextScope, Owner, out var rendered))
+        {
+            if (traceRender)
+                Diagnostics.ReactorEventSource.Log.ComponentRenderStop(componentName!, 0);
+            return;
         }
+        var newChildElement = (Element)rendered!;
+        renderedStart = renderHost.RenderedStart;
+        bool renderReported = renderHost.RenderReported;
 
         if (traceRender)
         {
@@ -4201,11 +4081,7 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
             // SECURITY (TASK-059): bound rerender re-entrancy. A component
             // that calls its own requestRerender synchronously from Render()
             // or an effect's cleanup would otherwise blow the stack.
-            if (t_rerenderDepth >= MaxRerenderReentrancy)
-                throw new InvalidOperationException(
-                    "Render loop detected: requestRerender re-entered more than " +
-                    $"{MaxRerenderReentrancy} times. Likely cause: setState called " +
-                    "synchronously inside Render() or effect cleanup.");
+            RerenderReentrancy.ThrowIfTooDeep();
 
             // SECURITY (TASK-063): if invoked off the UI thread (e.g.,
             // setState(threadSafe:true) firing from a worker, or a worker
@@ -4243,11 +4119,11 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
 
     private static void InvokeRerenderTracked(Action requestRerender, ComponentNode requester)
     {
-        t_rerenderDepth++;
+        RerenderReentrancy.Enter();
         // The perf RenderPass names the component that asked: the innermost wrapper claims the
         // thread before the request climbs through its ancestors' wrappers to the host.
         try { Diagnostics.RenderPassRequests.InvokeAs(requester, requestRerender); }
-        finally { t_rerenderDepth--; }
+        finally { RerenderReentrancy.Exit(); }
     }
 
     /// <summary>
