@@ -29,7 +29,11 @@ internal static class ComponentLifecycleCharacterization
 
     internal static void Log(string entry)
     {
-        lock (Gate) s_log?.Add(entry);
+        // Non-ASCII (the fallback's warning sign, an em dash in a log message) as '?', so a golden
+        // reads the same wherever it was captured.
+        var ascii = new StringBuilder(entry.Length);
+        foreach (var c in entry) ascii.Append(c < 128 ? c : '?');
+        lock (Gate) s_log?.Add(ascii.ToString());
     }
 
     private static readonly HashSet<string> TracedEvents =
@@ -44,9 +48,13 @@ internal static class ComponentLifecycleCharacterization
     private sealed class RecordingLogger : ILogger
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => true;
+        // Warnings and errors: the reconciler's debug lines carry timings.
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Warning;
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => ComponentLifecycleCharacterization.Log($"log:{logLevel}:{formatter(state, exception)}" + (exception is null ? "" : $"[{exception.GetType().Name}]"));
+        {
+            if (!IsEnabled(logLevel)) return;
+            ComponentLifecycleCharacterization.Log($"log:{logLevel}:{formatter(state, exception)}" + (exception is null ? "" : $"[{exception.GetType().Name}]"));
+        }
     }
 
     /// <summary>
@@ -54,18 +62,12 @@ internal static class ComponentLifecycleCharacterization
     /// step's log against its golden. <paramref name="scenario"/> calls the step callback after each
     /// step it wants pinned.
     /// </summary>
-    private static async Task RunAsync(Harness h, string name, IReadOnlyDictionary<string, string> goldens,
+    private static async Task RunAsync(Harness h, string name, IReadOnlyDictionary<string, string[]> goldens,
         Func<ReactorHost, Func<string, Task>, Task> scenario)
     {
         foreach (var traced in new[] { false, true })
         {
             var mode = traced ? "traced" : "untraced";
-            if (traced && !ComponentRenderTrace.IsEnabled)
-            {
-                h.Skip($"Lifecycle_{name}_{mode}", "EventSource disabled (NativeAOT)");
-                continue;
-            }
-
             lock (Gate) s_log = [];
             using var subscription = traced
                 ? ReactorTrace.Subscribe(e =>
@@ -77,6 +79,13 @@ internal static class ComponentLifecycleCharacterization
                     Log($"ev:{e.EventName}({string.Join(",", strings)})");
                 }, EventLevel.Verbose, (EventKeywords)(-1))
                 : null;
+            // The events are enabled once a listener exists; NativeAOT strips EventSource.
+            if (traced && !ComponentRenderTrace.IsEnabled)
+            {
+                h.Skip($"Lifecycle_{name}_{mode}", "EventSource disabled (NativeAOT)");
+                lock (Gate) s_log = null;
+                continue;
+            }
 
             var target = new Microsoft.UI.Xaml.Controls.Border();
             h.SetContent(target);
@@ -86,19 +95,15 @@ internal static class ComponentLifecycleCharacterization
                 await scenario(host, async step =>
                 {
                     await host.WaitForIdleAsync();
-                    string observed;
+                    string[] observed;
                     lock (Gate)
                     {
-                        observed = string.Join(" | ", s_log!);
+                        observed = [.. s_log!];
                         s_log!.Clear();
                     }
                     var key = $"{step}/{mode}";
                     var check = $"Lifecycle_{name}_{step}_{mode}";
-                    Console.WriteLine($"# lifecycle {name} {key}: {observed}");
-                    if (goldens.TryGetValue(key, out var expected))
-                        h.Check(check, observed == expected, $"expected: {expected}\n  observed: {observed}");
-                    else
-                        h.Check(check, false, $"no golden recorded; observed: {observed}");
+                    Check(h, check, goldens.TryGetValue(key, out var expected) ? expected : null, observed);
                 });
             }
             finally
@@ -110,13 +115,40 @@ internal static class ComponentLifecycleCharacterization
         }
     }
 
-    /// <summary>The rendered texts under the host, in tree order, so the output is part of the log.</summary>
+    /// <summary>
+    /// Compares a step's log with its golden. A mismatch names the first entry that differs, with
+    /// its neighbors; a missing golden prints every entry on its own line (the test runner shortens
+    /// long details), so the golden can be read back from the log.
+    /// </summary>
+    private static void Check(Harness h, string check, string[]? expected, string[] observed)
+    {
+        if (expected is null)
+        {
+            h.Check(check, false, $"no golden recorded; {observed.Length} entries follow");
+            for (var i = 0; i < observed.Length; i++)
+                h.Check($"{check}#{i:D2}", false, $"golden entry: {observed[i]}");
+            return;
+        }
+        var length = Math.Max(expected.Length, observed.Length);
+        for (var i = 0; i < length; i++)
+        {
+            var e = i < expected.Length ? expected[i] : "<none>";
+            var o = i < observed.Length ? observed[i] : "<none>";
+            if (e == o) continue;
+            h.Check(check, false, $"entry {i} of {observed.Length} differs (golden has {expected.Length}). " +
+                $"expected: {e} | observed: {o} | previous: {(i > 0 ? observed[i - 1] : "<start>")}");
+            return;
+        }
+        h.Check(check, true);
+    }
+
+    /// <summary>The rendered texts under the host, in tree order (first line of each), so the output is part of the log.</summary>
     private static void LogOutput(Microsoft.UI.Xaml.DependencyObject root)
     {
         var texts = new List<string>();
         void Walk(Microsoft.UI.Xaml.DependencyObject node)
         {
-            if (node is Microsoft.UI.Xaml.Controls.TextBlock tb) texts.Add(tb.Text);
+            if (node is Microsoft.UI.Xaml.Controls.TextBlock tb) texts.Add(tb.Text.Split('\n')[0].Trim());
             var count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(node);
             for (var i = 0; i < count; i++) Walk(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(node, i));
         }
@@ -382,8 +414,8 @@ internal static class ComponentLifecycleCharacterization
 
     // ── Goldens, captured on the unchanged reconciler (spec 067 phase 2b, step 0) ──
 
-    private static readonly Dictionary<string, string> KindsGoldens = new();
-    private static readonly Dictionary<string, string> ErrorsGoldens = new();
-    private static readonly Dictionary<string, string> HotReloadGoldens = new();
-    private static readonly Dictionary<string, string> RerenderGoldens = new();
+    private static readonly Dictionary<string, string[]> KindsGoldens = new();
+    private static readonly Dictionary<string, string[]> ErrorsGoldens = new();
+    private static readonly Dictionary<string, string[]> HotReloadGoldens = new();
+    private static readonly Dictionary<string, string[]> RerenderGoldens = new();
 }
