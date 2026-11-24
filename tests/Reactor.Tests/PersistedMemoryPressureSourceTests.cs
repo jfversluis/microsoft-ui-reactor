@@ -35,6 +35,10 @@ public class PersistedMemoryPressureSourceTests
 
     private static void WithSource(Action body)
     {
+        // Install WinUI's source and create Default first, so Default never waits for (and then
+        // subscribes to) a fake source: restoring the delegate afterwards would not undo that.
+        WinUICoreServices.EnsureInstalled();
+        _ = ApplicationPersistedScope.Default;
         var saved = ApplicationPersistedScope.MemoryPressureSource;
         try { body(); }
         finally { ApplicationPersistedScope.MemoryPressureSource = saved; }

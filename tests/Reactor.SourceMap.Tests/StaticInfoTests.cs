@@ -164,6 +164,23 @@ public sealed class StaticInfoTests : IDisposable
             ReactorSourceMap.GetRenderFunctionHooks(memo.CallSite!.Value));
     }
 
+    // An extension block on a type other than RenderContext whose member takes the context as an
+    // ordinary parameter is still a custom hook: its body's one UseState is counted.
+    [Fact]
+    public void Hooks_RenderFunction_CountsAnExtensionBlockHookThatTakesTheContext()
+    {
+        var memo = Memo(ctx =>
+        {
+            var c = new CounterModel().UseCount(ctx); // hook:c
+            var (n, _) = ctx.UseState(0); // hook:after-c
+            return TextBlock($"{c} {n}");
+        }, 3);
+
+        Assert.Equal(
+            $"0:c@{LineOf("hook:c")};1:n@{LineOf("hook:after-c")}",
+            ReactorSourceMap.GetRenderFunctionHooks(memo.CallSite!.Value));
+    }
+
     [Fact]
     public void Hooks_NoneForAComponentTheGeneratorDidNotSee()
         => Assert.Null(ReactorSourceMap.GetComponentHooks(typeof(StaticInfoTests)));
@@ -265,5 +282,19 @@ public sealed class StaticInfoTests : IDisposable
         Assert.Null(ReactorSourceMap.GetRenderFunctionHooks(new SourceLocation("/_/Clash/Page.cs", 20, 9)));
         // Positive control: the same file compiled into both assemblies keeps its facts.
         Assert.Equal("kept", ReactorSourceMap.GetDeclaredName(new SourceLocation("/_/Agree/Page.cs", 3, 1)));
+    }
+}
+
+internal sealed class CounterModel;
+
+internal static class CounterModelHooks
+{
+    extension(CounterModel model)
+    {
+        public int UseCount(RenderContext ctx)
+        {
+            var (count, _) = ctx.UseState(0);
+            return count;
+        }
     }
 }

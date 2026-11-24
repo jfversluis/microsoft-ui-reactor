@@ -301,12 +301,13 @@ public sealed partial class SourceMapInterceptorGenerator
     {
         if (!IsHookName(method.Name)) return false;
         // A C# 14 extension-block member (WinUI's hooks on RenderContext, spec 067) has no receiver
-        // parameter: the block's receiver decides.
-        if (method.ContainingType is { IsExtension: true } block)
+        // parameter, so the block's receiver counts as one; its other parameters still do below.
+        if (method.ContainingType is { IsExtension: true } block
+            && block.ExtensionParameter?.Type is INamedTypeSymbol receiver
+            && (SymbolEqualityComparer.Default.Equals(receiver, renderContext)
+                || DerivesFrom(receiver, component) || IsComponentBase(receiver, component)))
         {
-            return block.ExtensionParameter?.Type is INamedTypeSymbol receiver
-                && (SymbolEqualityComparer.Default.Equals(receiver, renderContext)
-                    || DerivesFrom(receiver, component) || IsComponentBase(receiver, component));
+            return true;
         }
         if (method.ContainingType is { } owner
             && (SymbolEqualityComparer.Default.Equals(owner, renderContext) || DerivesFrom(owner, component)
