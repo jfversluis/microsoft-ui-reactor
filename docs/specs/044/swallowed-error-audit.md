@@ -274,16 +274,23 @@ file that exists, unless the heading carries a `(retired …)` marker.
 | First-render catches outside any `ErrorBoundary` (`_errorBoundaryDepth == 0`) — `MountComponent`, `MountFuncComponent`, `MountMemoComponent` | 3 | `Keep` | shipped | **user-callback isolation** per §6.7.3 — each `try` wraps the app's first `Render()` (class, function or memo component) and its effect flush; arbitrary app code, so no narrowing. The render is replaced by `ErrorFallback` and reported through `ILogger` and, since issue #1321 (PR #1323), the typed `RenderError` event — these arms previously only logged — then handed to the app's `RenderErrorHandler` when one is set (issue #1291). `OutOfMemoryException` / `StackOverflowException` propagate (after the report-and-rethrow arm has reported them). Pre-date the ledger; adjudicated when #1321 touched them. |
 | First-render report-and-rethrow arms — inside an `ErrorBoundary` (`_errorBoundaryDepth > 0`), or `OutOfMemoryException` / `StackOverflowException` anywhere — `MountComponent`, `MountFuncComponent`, `MountMemoComponent` | 3 | `PromoteEvent` | shipped | Report-and-rethrow, **not a swallow**: emits `RenderError` naming the component that threw, then `throw;` rethrows unchanged to the enclosing boundary, which does not report again (one event per throw). Same filter as the update-path arm: every exception inside a boundary, plus OOM/SO outside one (the host recovers from those too), minus a declined propagation. Added by issue #1321 / PR #1323. |
 
-### `src/Reactor/Core/RenderContext.cs` — Phase C.6 (commit `90d516b0`) + Phase C.9 narrowing
+### `src/Reactor.Core/RenderContext.cs` — Phase C.6 (commit `90d516b0`) + Phase C.9 narrowing
+
+Spec 067 moved `RenderContext` into the neutral core; its WinUI hooks, `UseCommand` among them, are in the next section.
+
+| Site(s) | Sites | Verdict | Status | Notes |
+|---|---|---|---|---|
+| `UseEffect` cleanup (FlushEffects phase 1) | 1 | `Keep` | shipped | **sibling-independence** — slot i's failure must not block slots i+1…n in the same flush. The loop's invariant (forward progress through all cleanups) requires the broad catch. |
+| `UseEffect` effect (FlushEffects phase 2) | 1 | `Keep` | shipped | **sibling-independence.** Same. |
+| `RunCleanups.effectCleanup` | 1 | `Keep` | shipped | **sibling-independence.** Same. |
+| `RunCleanups.persistedSave` | 1 | `Keep` | shipped | **sibling-independence** — persisted-slot independence. The try-catch wraps the user contact point (`IPersistedStateScope.Set`); the surrounding hook-iteration loop is outside. |
+
+### `src/Reactor/Core/RenderContext.WinUI.cs` — Phase C.9 narrowing (moved from `RenderContext.cs` by spec 067)
 
 | Site(s) | Sites | Verdict | Status | Notes |
 |---|---|---|---|---|
 | `UseCommand.ExecuteAsync` | 1 | `TryFinally` | shipped | Phase C.9: fire-and-forget `Task.Run` wraps the user action with `try { await asyncAction(); } finally { guardRef.Current = false; setIsExecuting(false); }`. The framework state is restored before unwind; the user's throw faults the Task and surfaces via `Task.UnobservedTaskException` rather than being swallowed under `SwallowedError`. The earlier "Keep + DiagnosticLog" shape was hiding user bugs — apps couldn't tell their command was broken without subscribing to ETW. |
 | `UseCommand<T>.ExecuteAsync` | 1 | `TryFinally` | shipped | Same shape. |
-| `UseEffect` cleanup (FlushEffects phase 1) | 1 | `Keep` | shipped | **sibling-independence** — slot i's failure must not block slots i+1…n in the same flush. The loop's invariant (forward progress through all cleanups) requires the broad catch. |
-| `UseEffect` effect (FlushEffects phase 2) | 1 | `Keep` | shipped | **sibling-independence.** Same. |
-| `RunCleanups.effectCleanup` | 1 | `Keep` | shipped | **sibling-independence.** Same. |
-| `RunCleanups.persistedSave` | 1 | `Keep` | shipped | **sibling-independence** — persisted-slot independence. The try-catch wraps the user contact point (`IPersistedStateScope.Set`); the surrounding hook-iteration loop is outside. |
 
 ### `src/Reactor/Hosting/Etw/LayoutEtwConsumer.cs` — Phase C.7a (commit `b761a7a1`) — (retired: file removed in `25a753d2` / #507)
 

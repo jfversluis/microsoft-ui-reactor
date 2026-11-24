@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Microsoft.UI.Reactor.Core;
 using Microsoft.UI.Reactor.Diagnostics;
+using Microsoft.UI.Reactor.Hooks;
 using Xunit;
 using static Microsoft.UI.Reactor.Factories;
 
@@ -140,6 +141,26 @@ public sealed class StaticInfoTests : IDisposable
 
         Assert.Equal(
             $"0:n@{LineOf("hook:n")};1:flag@{LineOf("hook:flag")}",
+            ReactorSourceMap.GetRenderFunctionHooks(memo.CallSite!.Value));
+    }
+
+    // Spec 067 split Reactor in two: RenderContext's hooks live in the neutral core, WinUI's are
+    // C# 14 extension members of it (no receiver parameter), and helpers like UseElementRef stay
+    // in Reactor.dll. Each must still be seen as a Reactor hook: UseElementRef takes one slot, the
+    // window hook is listed with an untracked slot count, so the hook after it reads `?`.
+    [Fact]
+    public void Hooks_RenderFunction_SeesWinUIExtensionHooksAndReactorDllHooks()
+    {
+        var memo = Memo(ctx =>
+        {
+            var box = ctx.UseElementRef<Microsoft.UI.Xaml.Controls.TextBlock>(); // hook:box
+            var size = ctx.UseWindowSize(); // hook:size
+            var (n, _) = ctx.UseState(0); // hook:after
+            return TextBlock($"{n} {size.Width} {box}");
+        }, 2);
+
+        Assert.Equal(
+            $"0:box@{LineOf("hook:box")};1:size@{LineOf("hook:size")};?:n@{LineOf("hook:after")}",
             ReactorSourceMap.GetRenderFunctionHooks(memo.CallSite!.Value));
     }
 

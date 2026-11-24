@@ -293,8 +293,15 @@ Every sample compiles unchanged. Code that hard-codes where a member is declared
   `Component`. The shared shortcuts are now declared on `ReactorComponent`, which they would have
   silently stopped matching; they accept it now. `ReactorComponentHookAnchorTests` stubs the real
   hierarchy, unlike the older analyzer suites, which declare the hooks on `Component`.
-- Tests that read `src/Reactor/Core/RenderContext.cs` by path, and `tools/reviewer/manifest.json`,
-  point at the new files.
+- The source-map generator, which numbers each component's hook slots for devtools, recognised a
+  hook the same ways: declared on `RenderContext` or a `Component` subclass, taking a `RenderContext`,
+  or declared in `RenderContext`'s assembly. It now also accepts `ReactorComponent`, reads an
+  extension block's receiver (Roslyn reports `ctx.UseWindow()` as declared on the block, with no
+  `RenderContext` parameter), and counts both the core and `Reactor.dll` as Reactor's own. Without
+  that, class components lost their hook table and WinUI hooks dropped out of the slot numbering.
+- Tests that read `src/Reactor/Core/RenderContext.cs` by path, `tools/reviewer/manifest.json`, and
+  the swallowed-error ledger (spec 044), whose `RenderContext.cs` section is now one per file, point
+  at the new files.
 - Reactor.Advanced's reviewed InternalsVisibleTo pin: the four internals it reaches that moved
   (`ReactorEventSource`, `DiagnosticLog`, `LogCategory`, the component `Context`) are now pinned
   against the core instead of `Reactor.dll`.
