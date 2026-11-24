@@ -19,7 +19,7 @@ internal enum ContentOwnerStatus
 /// so call-time APIs (the picker methods) resolve the window that renders the component
 /// rather than the process-wide active host.
 /// </summary>
-internal interface IContentOwner
+internal interface IContentOwner : IRenderOwner
 {
     /// <summary>
     /// The <see cref="Microsoft.UI.Reactor.ReactorWindow"/> that owns the host, or null for a
@@ -32,4 +32,7 @@ internal interface IContentOwner
     /// from any thread: the closed and thread checks run before any XAML access.
     /// </summary>
     ContentOwnerStatus TryGetWindowId(out WindowId id);
+
+    /// <summary>The owning window's persisted-state scope, for <see cref="PersistedScope.Window"/>.</summary>
+    IPersistedStateScope? IRenderOwner.WindowPersistedScope => ReactorWindow?.PersistedScope;
 }

@@ -232,6 +232,8 @@ internal static unsafe partial class ReactorPerfTrace
                 break;
             // ControlCodeCaptureState: nothing to rundown.
         }
+        // The framework-neutral core's hooks read these two gates (spec 067).
+        CorePerfHooks.Publish(StateEnabled, StateSetsEnabled, StateChange);
     }
 
     internal static bool IsRegisteredForTests => Volatile.Read(ref s_regHandle) != 0;

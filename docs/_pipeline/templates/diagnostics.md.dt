@@ -442,7 +442,7 @@ trace shrinks by an order of magnitude.
 
 ### Computing the diagnostic payload outside the IsEnabled gate
 
-```csharp snippet="source:src/Reactor/Core/Diagnostics/DiagnosticLog.cs#swallowed-error-shape"
+```csharp snippet="source:src/Reactor.Core/Diagnostics/DiagnosticLog.cs#swallowed-error-shape"
 ```
 
 `DiagnosticLog.SwallowedError` does its `category.ToString()` and
@@ -454,7 +454,7 @@ the payload first and gates second, the no-allocation regression
 test (`DisabledKeyword_skips_ReactorEventSource_WriteEvent_payload_marshal`)
 catches it. The companion `HResultFailed` event has the same shape:
 
-```csharp snippet="source:src/Reactor/Core/Diagnostics/ReactorEventSource.cs#hresult-failed-event"
+```csharp snippet="source:src/Reactor.Core/Diagnostics/ReactorEventSource.cs#hresult-failed-event"
 ```
 
 ### Forwarding `ex.Message` through `ReactorTrace.Subscribe`

@@ -1558,6 +1558,8 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
         // Registered before the first render, so a perf session already running (or started
         // later, e.g. by `winapp perf`) enables the provider. Once per process.
         Diagnostics.ReactorPerfTrace.EnsureRegistered();
+        // The core's platform seams (spec 067), before any context renders. Once per process.
+        WinUICoreServices.EnsureInstalled();
         // Spec 048 §3.4 — no more bootstrap. Built-in handlers register
         // themselves lazily on first factory call (per-control Reg<>/
         // RegDecorator<> cctor latch in `Dsl.cs`), or callers register
@@ -9297,17 +9299,17 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
     // ════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Collects all <see cref="RenderContext.NavigationLifecycleHookState"/> instances from
+    /// Collects all <see cref="NavigationLifecycleHookState"/> instances from
     /// the component subtree rooted at <paramref name="root"/>.
     /// </summary>
-    internal List<RenderContext.NavigationLifecycleHookState> CollectLifecycleHooks(UIElement? root)
+    internal List<NavigationLifecycleHookState> CollectLifecycleHooks(UIElement? root)
     {
-        var hooks = new List<RenderContext.NavigationLifecycleHookState>();
+        var hooks = new List<NavigationLifecycleHookState>();
         CollectLifecycleHooksRecursive(root, hooks);
         return hooks;
     }
 
-    private void CollectLifecycleHooksRecursive(UIElement? control, List<RenderContext.NavigationLifecycleHookState> hooks)
+    private void CollectLifecycleHooksRecursive(UIElement? control, List<NavigationLifecycleHookState> hooks)
     {
         // A nested host owns its pages' lifecycle. Its route contexts and guards
         // belong to that stack, not the enclosing page's navigation operation.
@@ -9330,7 +9332,7 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
     /// </summary>
     internal void InvokePostNavigationLifecycle(
         UIElement? newChildControl,
-        List<RenderContext.NavigationLifecycleHookState>? oldHooks,
+        List<NavigationLifecycleHookState>? oldHooks,
         object currentRoute, object? previousRoute, Navigation.NavigationMode mode)
     {
         // onNavigatedTo on the new page's component tree

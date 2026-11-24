@@ -439,17 +439,3 @@ internal sealed class ComponentHandle
         _ => "unknown",
     };
 }
-
-/// <summary>Which hook produced a hook cell. Internal: the public surface reports it as text.</summary>
-internal enum HookKind
-{
-    Unknown,
-    State,
-    Reducer,
-    Ref,
-    Memo,
-    Effect,
-    Context,
-    Persisted,
-    NavigationLifecycle,
-}

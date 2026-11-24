@@ -142,7 +142,7 @@ recursion shares the dispatch.
 
 ## Hooks — slot table per RenderContext
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#use-state-slot"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#use-state-slot"
 ```
 
 Each component instance owns a [`RenderContext`](hooks-internals.md)

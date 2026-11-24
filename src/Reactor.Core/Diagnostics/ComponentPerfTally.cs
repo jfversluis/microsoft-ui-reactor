@@ -39,7 +39,7 @@ internal static class ComponentPerfTally
 
     /// <summary>
     /// The reconciler changed <paramref name="count"/> controls on this thread. Callers check
-    /// <see cref="ReactorPerfTrace.ComponentEnabled"/> first.
+    /// <c>ReactorPerfTrace.ComponentEnabled</c> first.
     /// </summary>
     internal static void AddChanges(uint count)
     {
@@ -49,7 +49,7 @@ internal static class ComponentPerfTally
 
     /// <summary>
     /// A state setter ran on this thread; it counts toward the innermost open span, if any.
-    /// Callers check <see cref="ReactorPerfTrace.StateSetsEnabled"/> first.
+    /// Callers check <see cref="CorePerfHooks.StateSetsEnabled"/> first.
     /// </summary>
     internal static void NoteStateSet()
     {

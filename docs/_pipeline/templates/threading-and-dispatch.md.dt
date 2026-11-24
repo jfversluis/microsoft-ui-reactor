@@ -30,7 +30,7 @@ The render context records `Environment.CurrentManagedThreadId` at the
 start of every render pass. Every subsequent hook-setter call compares
 against that captured id and routes accordingly:
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#ui-thread-invariant"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#ui-thread-invariant"
 ```
 
 The hot path is `Environment.CurrentManagedThreadId == _uiThreadId` —
@@ -61,7 +61,7 @@ after `await ... ConfigureAwait(false)` is correct by default — the
 setter detects the off-thread call and queues itself back onto the
 captured dispatcher:
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#set-state"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#set-state"
 ```
 
 The marshalled lambda re-enters `Setter(newValue)` on the UI thread,

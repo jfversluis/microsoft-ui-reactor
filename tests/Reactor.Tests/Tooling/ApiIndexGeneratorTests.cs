@@ -139,6 +139,19 @@ public sealed class ApiIndexGeneratorTests
         Assert.Contains("SetPosition(double x, double y)", block);
     }
 
+    // Spec 067 moved RenderContext into the neutral core and made WinUI's hooks C# 14 extension
+    // members of it. Its block keeps listing both, and types that moved keep their blocks.
+    [Fact]
+    public void PublicTypes_ListMovedCoreTypes_AndExtensionMembersOnTheirReceiver()
+    {
+        var output = Generate();
+        var renderContext = TypeBlock(output, "RenderContext").Split('\n').Select(l => l.TrimEnd('\r')).ToList();
+        Assert.Contains("UseWindow() → ReactorWindow", renderContext);
+        Assert.Contains(renderContext, l => l.StartsWith("UseState<T>(", StringComparison.Ordinal));
+        Assert.Contains("PersistedScope { Window, Application }", output.Split('\n').Select(l => l.TrimEnd('\r')));
+        Assert.Contains("T DefaultValue { get; }", TypeBlock(output, "Context<T>").Split('\n').Select(l => l.TrimEnd('\r')));
+    }
+
     // Spec 067 moved Key to ReactorElement in the neutral core, which is not indexed on its own.
     // Element must keep listing it, and a type further down must not repeat it.
     [Fact]

@@ -10,8 +10,8 @@ namespace Microsoft.UI.Reactor.Core;
 public enum PersistedScope
 {
     /// <summary>
-    /// Bound to the lifetime of the hosting <see cref="Microsoft.UI.Reactor.Hosting.ReactorHost"/>
-    /// or <see cref="Microsoft.UI.Reactor.Hosting.ReactorHostControl"/>. State is
+    /// Bound to the lifetime of the hosting <c>ReactorHost</c>
+    /// or <c>ReactorHostControl</c>. State is
     /// dropped when the host unloads. Recommended default for new code.
     /// </summary>
     Window,

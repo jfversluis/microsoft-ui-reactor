@@ -59,16 +59,16 @@ internal static class HotReloadService
     // decide whether a HookOrderException raised by a non-root child is a
     // hot-reload recovery trigger (reset + retry) rather than a hard error.
     //
-    // [ThreadStatic] is correct here: Render runs on the UI dispatcher and all
-    // child Render() calls run synchronously on that same thread within the
-    // pass, so no other thread should observe the flag.
-    [ThreadStatic] private static bool _withinUpdatePass;
+    // The flag lives in the framework-neutral core (HotReloadState, spec 067),
+    // whose hook migration reads it; it is [ThreadStatic] there, which is correct:
+    // Render runs on the UI dispatcher and all child Render() calls run
+    // synchronously on that same thread within the pass.
 
     /// <summary>
     /// True while a hot-reload-flagged render pass is executing on the current
     /// (UI dispatcher) thread. See <see cref="BeginUpdatePass"/>.
     /// </summary>
-    internal static bool WithinUpdatePass => _withinUpdatePass;
+    internal static bool WithinUpdatePass => Core.HotReloadState.WithinUpdatePass;
 
     /// <summary>
     /// The set of types the runtime reported as metadata-updated for the most
@@ -89,7 +89,7 @@ internal static class HotReloadService
     /// (<see cref="MetadataUpdater.IsSupported"/> == false) the whole subsystem
     /// is statically dead and trims away — see spec 049 §8.
     /// </summary>
-    internal static bool IsHotReloadLive => MetadataUpdater.IsSupported && _withinUpdatePass;
+    internal static bool IsHotReloadLive => MetadataUpdater.IsSupported && Core.HotReloadState.WithinUpdatePass;
 
     /// <summary>
     /// Opens a hot-reload update pass on the current thread. The returned
@@ -98,8 +98,8 @@ internal static class HotReloadService
     /// </summary>
     internal static IDisposable BeginUpdatePass()
     {
-        bool previous = _withinUpdatePass;
-        _withinUpdatePass = true;
+        bool previous = Core.HotReloadState.WithinUpdatePass;
+        Core.HotReloadState.WithinUpdatePass = true;
         return new UpdatePassScope(previous);
     }
 
@@ -109,7 +109,7 @@ internal static class HotReloadService
         // thread cannot reset an outer pass's flag when the inner one disposes.
         public void Dispose()
         {
-            _withinUpdatePass = previous;
+            Core.HotReloadState.WithinUpdatePass = previous;
             // Clear the migrated-type set only when the outermost pass closes
             // (previous == false). A nested pass disposing must not drop the
             // set the outer pass is still migrating against.

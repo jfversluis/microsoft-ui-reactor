@@ -86,12 +86,12 @@ public class WindowHookFallbackTests
     // transition itself is exercised by the WindowHookOwner selftests.
     public static TheoryData<string, Type> WindowBranchShapes() => new()
     {
-        { nameof(RenderContext.UseWindowState), typeof(WindowState) },
-        { nameof(RenderContext.UseIsActive), typeof(bool) },
-        { nameof(RenderContext.UseDpi), typeof(uint) },
-        { nameof(RenderContext.UseWindowSize), typeof((double, double)) },
-        { nameof(RenderContext.UseWindowPosition), typeof((double, double)) },
-        { nameof(RenderContext.UseIsCovered), typeof(bool) },
+        { "UseWindowState", typeof(WindowState) },
+        { "UseIsActive", typeof(bool) },
+        { "UseDpi", typeof(uint) },
+        { "UseWindowSize", typeof((double, double)) },
+        { "UseWindowPosition", typeof((double, double)) },
+        { "UseIsCovered", typeof(bool) },
     };
 
     [Theory]
@@ -101,12 +101,12 @@ public class WindowHookFallbackTests
         var ctx = NewRenderContext();
         switch (hook)
         {
-            case nameof(RenderContext.UseWindowState): ctx.UseWindowState(); break;
-            case nameof(RenderContext.UseIsActive): ctx.UseIsActive(); break;
-            case nameof(RenderContext.UseDpi): ctx.UseDpi(); break;
-            case nameof(RenderContext.UseWindowSize): ctx.UseWindowSize(); break;
-            case nameof(RenderContext.UseWindowPosition): ctx.UseWindowPosition(); break;
-            case nameof(RenderContext.UseIsCovered): ctx.UseIsCovered(); break;
+            case "UseWindowState": ctx.UseWindowState(); break;
+            case "UseIsActive": ctx.UseIsActive(); break;
+            case "UseDpi": ctx.UseDpi(); break;
+            case "UseWindowSize": ctx.UseWindowSize(); break;
+            case "UseWindowPosition": ctx.UseWindowPosition(); break;
+            case "UseIsCovered": ctx.UseIsCovered(); break;
         }
 
         var slots = ctx.SnapshotHooks();

@@ -213,7 +213,7 @@ public abstract class Component
         => Context.UseOpenWindow(key, spec, factory);
 
     /// <summary>
-    /// Component mirror of <see cref="RenderContext.UseTrayIcon"/>. Opens
+    /// Component mirror of <see cref="WinUIHooks.extension(RenderContext).UseTrayIcon"/>. Opens
     /// (or reuses by key) a system-tray icon scoped to this component;
     /// closes on unmount. (spec 036 §11.4)
     /// </summary>

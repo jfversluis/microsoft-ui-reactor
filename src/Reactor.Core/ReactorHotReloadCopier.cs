@@ -16,7 +16,7 @@ namespace Microsoft.UI.Reactor.Hosting;
 ///
 /// <para>This is reflection-heavy by nature (it walks runtime field metadata of
 /// arbitrary user types). It is only ever reached through
-/// <see cref="HotReloadService.IsHotReloadLive"/>-gated branches, so under
+/// <c>HotReloadService.IsHotReloadLive</c>-gated branches, so under
 /// NativeAOT — where <see cref="global::System.Reflection.Metadata.MetadataUpdater.IsSupported"/>
 /// is <c>false</c> — the whole call graph is statically dead and trims away
 /// (spec 049 §8). The trim/AOT suppressions below document that invariant.</para>

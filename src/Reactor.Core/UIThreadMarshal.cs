@@ -93,7 +93,7 @@ internal static class UIThreadMarshal
     /// callers can write
     /// <c>if (IsOffUIThread(id) &amp;&amp; MarshalOffUIThread(...)) return;</c>.
     /// <para>
-    /// When no <see cref="Microsoft.UI.Reactor.ReactorApp.UIDispatcher"/> has been
+    /// When no <c>ReactorApp.UIDispatcher</c> has been
     /// captured (unit-test / headless contexts) or when the dispatcher has already
     /// begun shutting down, this throws <see cref="InvalidOperationException"/>
     /// instead of silently racing the reconciler or dropping the mutation &#8212;
@@ -114,9 +114,8 @@ internal static class UIThreadMarshal
     /// </param>
     public static bool MarshalOffUIThread(int uiThreadId, string operation, global::System.Action work)
     {
-        var dq = Microsoft.UI.Reactor.ReactorApp.UIDispatcher;
         return EnqueueOrThrow(
-            dq is null ? null : w => dq.TryEnqueue(w.Invoke),
+            RenderScheduler.TryEnqueueOnUIThread,
             work,
             () =>
             {

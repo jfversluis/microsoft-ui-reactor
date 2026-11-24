@@ -8,7 +8,7 @@ namespace Microsoft.UI.Reactor.Core;
 /// <param name="Extensions">The extensions in the group, each including the leading dot.</param>
 public sealed record FileTypeChoice(string Label, IReadOnlyList<string> Extensions);
 
-/// <summary>Options for <see cref="RenderContext.PickFileAsync"/> and <see cref="RenderContext.PickMultipleFilesAsync"/>.</summary>
+/// <summary>Options for <see cref="WinUIHooks.extension(RenderContext).PickFileAsync"/> and <see cref="WinUIHooks.extension(RenderContext).PickMultipleFilesAsync"/>.</summary>
 /// <param name="FileTypeFilter">Extensions shown, such as ".txt"; null or empty shows all files. Ignored when <see cref="FileTypeChoices"/> is non-empty.</param>
 /// <param name="SuggestedStartLocation">The initial location suggested to Windows.</param>
 /// <param name="CommitButtonText">The commit button label; empty uses the platform default.</param>
@@ -39,7 +39,7 @@ public sealed record FilePickerOptions(
     public int? InitialFileTypeIndex { get; init; }
 }
 
-/// <summary>Options for <see cref="RenderContext.PickFolderAsync"/> and <see cref="RenderContext.PickMultipleFoldersAsync"/>.</summary>
+/// <summary>Options for <see cref="WinUIHooks.extension(RenderContext).PickFolderAsync"/> and <see cref="WinUIHooks.extension(RenderContext).PickMultipleFoldersAsync"/>.</summary>
 /// <param name="SuggestedStartLocation">The initial location suggested to Windows.</param>
 /// <param name="CommitButtonText">The commit button label; empty uses the platform default.</param>
 public sealed record FolderPickerOptions(
@@ -62,7 +62,7 @@ public sealed record FolderPickerOptions(
     public string SuggestedStartFolder { get; init; } = "";
 }
 
-/// <summary>Options for <see cref="RenderContext.PickSaveFileAsync"/>.</summary>
+/// <summary>Options for <see cref="WinUIHooks.extension(RenderContext).PickSaveFileAsync"/>.</summary>
 /// <param name="FileTypeChoices">Ordered, labelled file-type groups. At least one choice is required.</param>
 /// <param name="SuggestedFileName">The name suggested to the user, without requiring an extension.</param>
 /// <param name="SuggestedStartLocation">The initial location suggested to Windows.</param>

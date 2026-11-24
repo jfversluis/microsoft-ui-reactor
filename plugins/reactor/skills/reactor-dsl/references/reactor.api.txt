@@ -899,6 +899,11 @@ ReactorBinding<TElement>.ReferenceList<TTarget>(Func<TElement, IReadOnlyList<Ele
 # Call from Render() / function-component body. Same order every render —
 # never inside if/for. Use the result conditionally, not the call.
 
+RenderContext.PickFileAsync(FilePickerOptions options) → Task<PickFileResult>
+RenderContext.PickFolderAsync(FolderPickerOptions options) → Task<PickFolderResult>
+RenderContext.PickMultipleFilesAsync(FilePickerOptions options) → Task<IReadOnlyList<PickFileResult>>
+RenderContext.PickMultipleFoldersAsync(FolderPickerOptions options) → Task<IReadOnlyList<PickFolderResult>>
+RenderContext.PickSaveFileAsync(SaveFilePickerOptions options) → Task<PickFileResult>
 RenderContext.UseAnnounce() → AnnounceHandle
 RenderContext.UseBreakpoint(Window window, double minWidth) → bool
 RenderContext.UseBreakpoint(double minWidth) → bool
@@ -4662,6 +4667,13 @@ DisplayInfo Primary { get; }
 IReadOnlyList<DisplayInfo> Displays { get; }
 NearestTo(double dipX, double dipY) → DisplayInfo
 event EventHandler DisplayLayoutChanged
+
+### record ReactorElement
+string Key { get; init; }
+Equals(ReactorElement other) → bool
+Equals(object obj) → bool
+GetHashCode() → int
+ToString() → string
 
 ### struct ReactorEvent
 new(int EventId, string EventName, EventLevel Level, EventKeywords Keywords, DateTime TimestampUtc, int ThreadId, IReadOnlyList<object> Payload, IReadOnlyList<string> PayloadNames)

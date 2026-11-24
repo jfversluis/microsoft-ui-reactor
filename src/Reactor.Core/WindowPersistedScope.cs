@@ -6,8 +6,8 @@ namespace Microsoft.UI.Reactor.Core;
 
 /// <summary>
 /// Per-host (per-window) persisted-state scope. Owned by a
-/// <see cref="Microsoft.UI.Reactor.Hosting.ReactorHost"/> /
-/// <see cref="Microsoft.UI.Reactor.Hosting.ReactorHostControl"/> and disposed
+/// <c>ReactorHost</c> /
+/// <c>ReactorHostControl</c> and disposed
 /// when the host unloads — so window-scoped state is bounded by window
 /// lifetime, not process lifetime.
 /// </summary>

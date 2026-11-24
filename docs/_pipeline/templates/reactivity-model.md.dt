@@ -56,7 +56,7 @@ way it is.
 
 ## The setter is the signal
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#use-state-slot"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#use-state-slot"
 ```
 
 `UseState` returns `(value, setter)`. The `value` is just a read of
@@ -68,7 +68,7 @@ into the host with `_requestRerender`. The host decides when to render
 next — typically on the next dispatcher tick — and once it does, the
 component's `Render()` runs and the slot read returns the new value.
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#set-state"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#set-state"
 ```
 
 A few details matter for understanding the model:
@@ -195,7 +195,7 @@ change.
 
 ## State batching
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#set-state"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#set-state"
 ```
 
 Three setters in the same synchronous block call `_requestRerender`
@@ -252,7 +252,7 @@ items.Add("new");        // mutates the same list the slot holds
 setItems(items);         // equality check sees same reference → no rerender
 ```
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#use-state-slot"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#use-state-slot"
 ```
 
 The setter's equality compares `newValue` against `hook.Value`. After

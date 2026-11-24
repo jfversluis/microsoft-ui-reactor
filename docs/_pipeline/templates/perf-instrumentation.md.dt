@@ -70,7 +70,7 @@ power-of-two flags on `EventKeywords`, so a consumer can request
 
 ## Keywords
 
-```csharp snippet="source:src/Reactor/Core/Diagnostics/ReactorEventSource.cs#etw-keywords"
+```csharp snippet="source:src/Reactor.Core/Diagnostics/ReactorEventSource.cs#etw-keywords"
 ```
 
 Fifteen keywords carve the event surface so a consumer can pay for
@@ -112,7 +112,7 @@ tens of megabytes.
 
 ## The IsEnabled gate
 
-```csharp snippet="source:src/Reactor/Core/Diagnostics/ReactorEventSource.cs#isenabled-gate"
+```csharp snippet="source:src/Reactor.Core/Diagnostics/ReactorEventSource.cs#isenabled-gate"
 ```
 
 Every event method has the same shape: a single `IsEnabled` check
@@ -134,7 +134,7 @@ computation is itself behind the gate.
 
 ## The reconcile stop event
 
-```csharp snippet="source:src/Reactor/Core/Diagnostics/ReactorEventSource.cs#reconcile-stop-event"
+```csharp snippet="source:src/Reactor.Core/Diagnostics/ReactorEventSource.cs#reconcile-stop-event"
 ```
 
 `ReconcileStop` is the most-consumed event in the catalog — every
@@ -264,7 +264,7 @@ public void ComponentRenderStop(string componentName, Stopwatch sw)
 }
 ```
 
-```csharp snippet="source:src/Reactor/Core/Diagnostics/ReactorEventSource.cs#isenabled-gate"
+```csharp snippet="source:src/Reactor.Core/Diagnostics/ReactorEventSource.cs#isenabled-gate"
 ```
 
 The anti-pattern allocates and computes the payload every render

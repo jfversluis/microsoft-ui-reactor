@@ -67,10 +67,9 @@ internal static class ComponentRenderTrace
         get => ReactorEventSource.Log.IsEnabled(EventLevel.Verbose, Mask);
     }
 
-    private static long s_nextId;
 
     /// <summary>Process-unique, never reused, never 0.</summary>
-    internal static long NextId() => Interlocked.Increment(ref s_nextId);
+    internal static long NextId() => ComponentIds.Next();
 
     internal static long ElapsedMicroseconds(long startTimestamp)
         => (long)((global::System.Diagnostics.Stopwatch.GetTimestamp() - startTimestamp)
