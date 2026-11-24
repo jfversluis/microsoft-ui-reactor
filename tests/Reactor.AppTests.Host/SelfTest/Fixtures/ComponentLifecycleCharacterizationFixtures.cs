@@ -94,6 +94,9 @@ internal static class ComponentLifecycleCharacterization
             {
                 await scenario(host, async step =>
                 {
+                    // A state change made on another thread reaches the host through the
+                    // dispatcher; let it arrive before asking whether the host is idle.
+                    await DispatcherHop();
                     await host.WaitForIdleAsync();
                     string[] observed;
                     lock (Gate)
@@ -118,6 +121,16 @@ internal static class ComponentLifecycleCharacterization
                 h.SetContent(null);
             }
         }
+    }
+
+    /// <summary>Completes after everything already queued on the UI dispatcher has run.</summary>
+    private static Task DispatcherHop()
+    {
+        var done = new TaskCompletionSource();
+        var queue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+        if (!queue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => done.SetResult()))
+            done.SetResult();
+        return done.Task;
     }
 
     /// <summary>
