@@ -455,10 +455,12 @@ internal static class ComponentLifecycleCharacterization
     }
 
     // ── Scenario 5: the re-render re-entrancy cap (TASK-059) through the real wrapper ──
-    // Each component's re-render request runs through its ancestors' wrappers, and every wrapper
-    // counts toward the cap, so a state change deep enough in a component chain reaches it. This
-    // pins the wiring: deleting the check or the counting fails the deep case, and a counter that
-    // isn't released fails the shallow case that follows it.
+    // A state change climbs from the component through its ancestors' wrappers to the host. The
+    // climb is one request: a chain far deeper than the cap must render. A request that really
+    // re-enters (here the host's request sets the state again, synchronously) must still hit the
+    // cap, after exactly Max requests however deep the component sits: counting the climb would
+    // stop it after Max / depth. The deep chain runs after the loop, so a counter or forward mark
+    // the throw failed to release would fail it too.
 
     private sealed class LcNest : Component<int>
     {
@@ -481,24 +483,30 @@ internal static class ComponentLifecycleCharacterization
             using var host = new ReactorHost(H.Window) { ContentTarget = target };
             try
             {
-                string? Change(int depth)
+                string? Change(int value)
                 {
-                    try { LcNest.SetLeaf!(depth); return null; }
+                    try { LcNest.SetLeaf!(value); return null; }
                     catch (InvalidOperationException ex) { return ex.Message; }
                 }
 
-                host.Mount(_ => Component<LcNest, int>(60));
-                await host.WaitForIdleAsync();
-                var deep = Change(1);
-                H.Check("Lifecycle_DepthCap_DeepChainHitsTheCap",
-                    deep?.StartsWith("Render loop detected", StringComparison.Ordinal) == true, $"observed: {deep ?? "no exception"}");
+                // A loop four components deep, behind a host whose request re-enters at once.
+                using (var reconciler = new Reconciler())
+                {
+                    var requests = 0;
+                    reconciler.Mount(Component<LcNest, int>(3), () => LcNest.SetLeaf!(1000 + ++requests));
+                    var loop = Change(1);
+                    H.Check("Lifecycle_DepthCap_LoopHitsTheCap",
+                        loop?.StartsWith("Render loop detected", StringComparison.Ordinal) == true, $"observed: {loop ?? "no exception"}");
+                    H.Check("Lifecycle_DepthCap_LoopCountsRequestsNotWrappers",
+                        requests == Microsoft.UI.Reactor.Core.RerenderReentrancy.Max, $"requests={requests}");
+                }
 
-                host.Mount(_ => Component<LcNest, int>(10));
+                host.Mount(_ => Component<LcNest, int>(200));
                 await host.WaitForIdleAsync();
-                var shallow = Change(2);
+                var deep = Change(2);
                 await host.WaitForIdleAsync();
-                H.Check("Lifecycle_DepthCap_ShallowChainIsFine", shallow is null, $"observed: {shallow}");
-                H.Check("Lifecycle_DepthCap_ShallowChainRenders", ContainsText(target, "leaf 2"));
+                H.Check("Lifecycle_DepthCap_DeepChainIsNoLoop", deep is null, $"observed: {deep}");
+                H.Check("Lifecycle_DepthCap_DeepChainRenders", ContainsText(target, "leaf 2"));
             }
             finally
             {
