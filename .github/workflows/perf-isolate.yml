@@ -4,7 +4,7 @@
 name: Perf isolate (scratch)
 on:
   push:
-    branches: [perf/isolate-2a]
+    branches: [perf/isolate-2a, perf/isolate-2b]
 permissions:
   contents: read
 jobs:
@@ -16,12 +16,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: micro-phase1-vs-phase2a
-            base: 4c6d22744087f82e6df0d2c1fdaa42f66e4e1f32
-            head: 5cf7f166
-          - name: micro-aa-phase2a
-            base: 5cf7f166
-            head: 5cf7f166
+          - name: floor-phase2a-vs-phase2b
+            kind: floor
+            base: 8c458598d2f68361f07e71f097090e023a0e90a7
+            head: 57a61e38
+          - name: micro-phase2a-vs-phase2b
+            kind: micro
+            base: 8c458598d2f68361f07e71f097090e023a0e90a7
+            head: 57a61e38
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,7 +41,7 @@ jobs:
           BASE: ${{ matrix.base }}
           HEAD: ${{ matrix.head }}
         run: |
-          git fetch --no-tags origin main maui/phase-01-core-design maui/phase-02a-foundations 2>&1 | Out-Host
+          git fetch --no-tags origin main maui/phase-01-core-design maui/phase-02a-foundations maui/phase-02b-engine 2>&1 | Out-Host
           $b = (git rev-parse $env:BASE).Trim(); $h = (git rev-parse $env:HEAD).Trim()
           $bt = Join-Path $env:RUNNER_TEMP 'base-tree'; $ht = Join-Path $env:RUNNER_TEMP 'head-tree'
           git worktree add --force --detach $bt $b 2>&1 | Out-Host
@@ -48,23 +50,30 @@ jobs:
           "head_sha=$h" | Out-File $env:GITHUB_OUTPUT -Append
           "base_tree=$bt" | Out-File $env:GITHUB_OUTPUT -Append
           "head_tree=$ht" | Out-File $env:GITHUB_OUTPUT -Append
-      - name: Run (micro-suite, 30 paired reps; macro leg minimal)
+      - name: Run
         shell: pwsh
         env:
           BT: ${{ steps.wt.outputs.base_tree }}
           HT: ${{ steps.wt.outputs.head_tree }}
           BS: ${{ steps.wt.outputs.base_sha }}
           HS: ${{ steps.wt.outputs.head_sha }}
+          KIND: ${{ matrix.kind }}
           OUT_DIR: ${{ github.workspace }}/perf-out
         run: |
-          ./tests/stress_perf/ci/Run-PerfBenchmark.ps1 `
-            -Root $env:HT -BaselineRoot $env:BT `
-            -Percent 0 -Duration 5 -Reps 2 -Warmup 1 -PinAffinity `
-            -IncludeMicro $true -MicroReps 30 -MicroWarmup 2 `
-            -IncludeSkipFloor $false -IncludeKeyedList $false `
-            -IncludeFlex $false -IncludeDataGrid $false -IncludeRowMemo $false `
-            -Apps ReactorOptimized -DefenderExclude `
-            -HeadSha $env:HS -BaseSha $env:BS -OutDir $env:OUT_DIR
+          if ($env:KIND -eq 'floor') {
+            ./tests/stress_perf/ci/Run-PerfBenchmark.ps1 -Root $env:HT -BaselineRoot $env:BT `
+              -Percent 0 -Duration 10 -Reps 30 -Warmup 2 -PinAffinity `
+              -IncludeMicro $false -IncludeSkipFloor $false -IncludeKeyedList $false `
+              -IncludeFlex $false -IncludeDataGrid $false -IncludeRowMemo $false `
+              -Apps ReactorOptimized -DefenderExclude -HeadSha $env:HS -BaseSha $env:BS -OutDir $env:OUT_DIR
+          } else {
+            ./tests/stress_perf/ci/Run-PerfBenchmark.ps1 -Root $env:HT -BaselineRoot $env:BT `
+              -Percent 0 -Duration 5 -Reps 2 -Warmup 1 -PinAffinity `
+              -IncludeMicro $true -MicroReps 30 -MicroWarmup 2 `
+              -IncludeSkipFloor $false -IncludeKeyedList $false `
+              -IncludeFlex $false -IncludeDataGrid $false -IncludeRowMemo $false `
+              -Apps ReactorOptimized -DefenderExclude -HeadSha $env:HS -BaseSha $env:BS -OutDir $env:OUT_DIR
+          }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
