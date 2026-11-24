@@ -300,8 +300,18 @@ public sealed partial class SourceMapInterceptorGenerator
     private static bool IsHook(IMethodSymbol method, INamedTypeSymbol renderContext, INamedTypeSymbol component)
     {
         if (!IsHookName(method.Name)) return false;
+        // A C# 14 extension-block member (WinUI's hooks on RenderContext, spec 067) has no receiver
+        // parameter, so the block's receiver counts as one; its other parameters still do below.
+        if (method.ContainingType is { IsExtension: true } block
+            && block.ExtensionParameter?.Type is INamedTypeSymbol receiver
+            && (SymbolEqualityComparer.Default.Equals(receiver, renderContext)
+                || DerivesFrom(receiver, component) || IsComponentBase(receiver, component)))
+        {
+            return true;
+        }
         if (method.ContainingType is { } owner
-            && (SymbolEqualityComparer.Default.Equals(owner, renderContext) || DerivesFrom(owner, component)))
+            && (SymbolEqualityComparer.Default.Equals(owner, renderContext) || DerivesFrom(owner, component)
+                || IsComponentBase(owner, component)))
         {
             return true;
         }
@@ -309,6 +319,19 @@ public sealed partial class SourceMapInterceptorGenerator
         // (`this.UseElementFocus()`, `this.UseElementRef<T>()`) take the Component.
         return method.Parameters.Any(p => SymbolEqualityComparer.Default.Equals(p.Type, renderContext)
             || (p.Type is INamedTypeSymbol named && DerivesFrom(named, component)));
+    }
+
+    /// <summary>
+    /// True for a base class of <c>Component</c> other than <c>object</c>: the framework-neutral
+    /// <c>ReactorComponent</c>, which declares the shared hooks' shortcuts (spec 067).
+    /// </summary>
+    private static bool IsComponentBase(INamedTypeSymbol type, INamedTypeSymbol component)
+    {
+        for (var t = component.BaseType; t is { SpecialType: not SpecialType.System_Object }; t = t.BaseType)
+        {
+            if (SymbolEqualityComparer.Default.Equals(t.OriginalDefinition, type.OriginalDefinition)) return true;
+        }
+        return false;
     }
 
     private static bool DerivesFrom(INamedTypeSymbol type, INamedTypeSymbol baseType)
@@ -465,18 +488,22 @@ public sealed partial class SourceMapInterceptorGenerator
         IMethodSymbol method, INamedTypeSymbol renderContext, INamedTypeSymbol component, Compilation compilation)
     {
         var owner = method.ContainingType;
+        if (owner is { IsExtension: true }) owner = owner.ContainingType; // the block's static holder
         if (owner is null) return false;
         if (SymbolEqualityComparer.Default.Equals(owner, renderContext)) return true;
         if (SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, component)) return true;
+        if (IsComponentBase(owner, component)) return true;
         if (owner.ContainingNamespace?.ToDisplayString() == "Microsoft.UI.Reactor.Core"
             && owner.Name == "Component" && owner.IsGenericType)
             return true;
         if (owner.ToDisplayString() == ContextExtensionsMetadataName) return true;
-        // Any other hook declared in Reactor itself. Decided by assembly, not by "has no
-        // source": under `dotnet watch` a project-referenced Reactor arrives as a compilation
-        // reference whose symbols DO carry (foreign) syntax. Only when Reactor is the
+        // Any other hook declared in Reactor itself: the neutral core (RenderContext's assembly)
+        // or the WinUI renderer (Component's), which spec 067 split apart. Decided by assembly,
+        // not by "has no source": under `dotnet watch` a project-referenced Reactor arrives as a
+        // compilation reference whose symbols DO carry (foreign) syntax. Only when Reactor is the
         // compilation being generated are its in-source hooks walked like any custom hook.
-        return SymbolEqualityComparer.Default.Equals(owner.ContainingAssembly, renderContext.ContainingAssembly)
+        return (SymbolEqualityComparer.Default.Equals(owner.ContainingAssembly, renderContext.ContainingAssembly)
+                || SymbolEqualityComparer.Default.Equals(owner.ContainingAssembly, component.ContainingAssembly))
             && !SymbolEqualityComparer.Default.Equals(owner.ContainingAssembly, compilation.Assembly);
     }
 

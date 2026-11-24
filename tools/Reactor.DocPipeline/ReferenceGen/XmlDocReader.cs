@@ -53,6 +53,70 @@ internal sealed record MemberDoc(
 /// </summary>
 internal static class XmlDocReader
 {
+    // A C# 14 extension block's members are documented on a compiler-generated grouping type,
+    // `M:Holder.<G>$hash.Name(params)`, in the form a caller sees (no receiver parameter), and
+    // the callable implementation `M:Holder.Name(Receiver,params)` only carries an
+    // <inheritdoc cref="…<G>$hash.Name…"/>. A caller writes `receiver.Name(...)`, so the page
+    // belongs to the receiver: rename `Holder.<G>$hash.` to `Receiver.` in member names and
+    // crefs, and drop the implementation stubs. This keeps WinUI's hooks, which spec 067 turned
+    // into extension members of the core's RenderContext, at their RenderContext crefs.
+    private static readonly System.Text.RegularExpressions.Regex ExtensionStub = new(
+        @"^M:(?<holder>[^(]+)\.(?<name>[^.(]+)\((?<receiver>[^,)]+)[,)]",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    private static readonly System.Text.RegularExpressions.Regex GroupingRef = new(
+        @"^M:(?<grouping>.+\.<G>\$[0-9A-F]+)\.",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    internal static void NormalizeExtensionBlocks(XDocument doc)
+    {
+        var membersEl = doc.Root?.Element("members");
+        if (membersEl is null) return;
+
+        var receiverByGrouping = new Dictionary<string, string>(StringComparer.Ordinal);
+        var stubs = new List<XElement>();
+        var targetByStub = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var m in membersEl.Elements("member"))
+        {
+            var name = (string?)m.Attribute("name");
+            if (name is null) continue;
+            var children = m.Elements().Take(2).ToList();
+            if (children.Count != 1 || children[0].Name != "inheritdoc") continue;
+            var inherit = children[0];
+            var target = (string?)inherit.Attribute("cref");
+            if (target is null) continue;
+            var g = GroupingRef.Match(target);
+            var stub = ExtensionStub.Match(name);
+            if (!g.Success || !stub.Success) continue;
+            if (!g.Groups["grouping"].Value.StartsWith(stub.Groups["holder"].Value + ".<G>$", StringComparison.Ordinal)) continue;
+            receiverByGrouping[g.Groups["grouping"].Value] = stub.Groups["receiver"].Value;
+            stubs.Add(m);
+            targetByStub[name] = target;
+        }
+        if (receiverByGrouping.Count == 0) return;
+
+        foreach (var stub in stubs) stub.Remove();
+
+        string Rename(string value)
+        {
+            // A cref written inside an extension block to a sibling member binds to its
+            // implementation stub; point it at the member the stub stands for.
+            if (targetByStub.TryGetValue(value, out var target)) value = target;
+            foreach (var (grouping, receiver) in receiverByGrouping)
+                value = value.Replace(grouping + ".", receiver + ".", StringComparison.Ordinal);
+            return value;
+        }
+
+        foreach (var attr in doc.Descendants().Attributes())
+        {
+            if (attr.Name == "name" || attr.Name == "cref")
+            {
+                var renamed = Rename(attr.Value);
+                if (renamed != attr.Value) attr.Value = renamed;
+            }
+        }
+    }
+
     public static List<MemberDoc> Read(string xmlPath)
     {
         var doc = XDocument.Load(xmlPath);
@@ -67,6 +131,7 @@ internal static class XmlDocReader
 
     private static List<MemberDoc> Parse(XDocument doc)
     {
+        NormalizeExtensionBlocks(doc);
         var members = new List<MemberDoc>();
         var root = doc.Root;
         if (root is null) return members;

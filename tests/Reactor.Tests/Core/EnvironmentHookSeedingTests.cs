@@ -44,8 +44,8 @@ public sealed class EnvironmentHookSeedingTests
 
     static MethodDeclarationSyntax Method(string name)
     {
-        var path = Path.Join(GallerySources.RepoRoot(), "src", "Reactor", "Core", "RenderContext.cs");
-        Assert.True(File.Exists(path), $"RenderContext.cs not found at {path}");
+        var path = Path.Join(GallerySources.RepoRoot(), "src", "Reactor", "Core", "RenderContext.WinUI.cs");
+        Assert.True(File.Exists(path), $"RenderContext.WinUI.cs not found at {path}");
 
         var root = Parse(File.ReadAllText(path));
         var method = root.DescendantNodes()
@@ -54,7 +54,7 @@ public sealed class EnvironmentHookSeedingTests
 
         // A rename would otherwise silently reduce every assertion below to "zero writes
         // found, none of them inside an effect" — vacuously true.
-        Assert.True(method is not null, $"{name} not found in RenderContext.cs — was it renamed?");
+        Assert.True(method is not null, $"{name} not found in RenderContext.WinUI.cs — was it renamed or moved?");
         return method!;
     }
 

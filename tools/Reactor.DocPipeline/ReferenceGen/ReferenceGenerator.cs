@@ -51,6 +51,8 @@ internal sealed record GeneratedPage(MemberDoc Member, RouterResult Route, strin
 /// </summary>
 internal sealed class ReferenceGenerator
 {
+    internal const string NeutralCoreXmlFileName = "Microsoft.UI.Reactor.Core.xml";
+
     public ReferenceGenResult Generate(
         string xmlPath,
         ReferenceMap map,
@@ -71,6 +73,11 @@ internal sealed class ReferenceGenerator
         }
 
         var members = XmlDocReader.Read(xmlPath);
+        // The framework-neutral core's docs (RenderContext and its hooks, spec 067) ship as their
+        // own XML file, copied next to the framework's by the build.
+        var coreXml = Path.Combine(Path.GetDirectoryName(xmlPath) ?? ".", NeutralCoreXmlFileName);
+        if (File.Exists(coreXml))
+            members.AddRange(XmlDocReader.Read(coreXml));
         var router = new MemberRouter(map, referenceRoot);
 
         // Documented <typeparam> names, keyed by type cref, so a method's

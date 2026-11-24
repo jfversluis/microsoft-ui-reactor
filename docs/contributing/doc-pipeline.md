@@ -955,7 +955,7 @@ For code that *is* framework, analyzer, or test code. Add the same markers to th
 reference it by path:
 
 ````markdown
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#use-state-slot"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#use-state-slot"
 ```
 ````
 

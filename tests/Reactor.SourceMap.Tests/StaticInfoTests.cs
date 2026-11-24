@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Microsoft.UI.Reactor.Core;
 using Microsoft.UI.Reactor.Diagnostics;
+using Microsoft.UI.Reactor.Hooks;
 using Xunit;
 using static Microsoft.UI.Reactor.Factories;
 
@@ -143,6 +144,43 @@ public sealed class StaticInfoTests : IDisposable
             ReactorSourceMap.GetRenderFunctionHooks(memo.CallSite!.Value));
     }
 
+    // Spec 067 split Reactor in two: RenderContext's hooks live in the neutral core, WinUI's are
+    // C# 14 extension members of it (no receiver parameter), and helpers like UseElementRef stay
+    // in Reactor.dll. Each must still be seen as a Reactor hook: UseElementRef takes one slot, the
+    // window hook is listed with an untracked slot count, so the hook after it reads `?`.
+    [Fact]
+    public void Hooks_RenderFunction_SeesWinUIExtensionHooksAndReactorDllHooks()
+    {
+        var memo = Memo(ctx =>
+        {
+            var box = ctx.UseElementRef<Microsoft.UI.Xaml.Controls.TextBlock>(); // hook:box
+            var size = ctx.UseWindowSize(); // hook:size
+            var (n, _) = ctx.UseState(0); // hook:afterwindow
+            return TextBlock($"{n} {size.Width} {box}");
+        }, 2);
+
+        Assert.Equal(
+            $"0:box@{LineOf("hook:box")};1:size@{LineOf("hook:size")};?:n@{LineOf("hook:afterwindow")}",
+            ReactorSourceMap.GetRenderFunctionHooks(memo.CallSite!.Value));
+    }
+
+    // An extension block on a type other than RenderContext whose member takes the context as an
+    // ordinary parameter is still a custom hook: its body's one UseState is counted.
+    [Fact]
+    public void Hooks_RenderFunction_CountsAnExtensionBlockHookThatTakesTheContext()
+    {
+        var memo = Memo(ctx =>
+        {
+            var c = new CounterModel().UseCount(ctx); // hook:modelcount
+            var (n, _) = ctx.UseState(0); // hook:aftermodel
+            return TextBlock($"{c} {n}");
+        }, 3);
+
+        Assert.Equal(
+            $"0:c@{LineOf("hook:modelcount")};1:n@{LineOf("hook:aftermodel")}",
+            ReactorSourceMap.GetRenderFunctionHooks(memo.CallSite!.Value));
+    }
+
     [Fact]
     public void Hooks_NoneForAComponentTheGeneratorDidNotSee()
         => Assert.Null(ReactorSourceMap.GetComponentHooks(typeof(StaticInfoTests)));
@@ -244,5 +282,19 @@ public sealed class StaticInfoTests : IDisposable
         Assert.Null(ReactorSourceMap.GetRenderFunctionHooks(new SourceLocation("/_/Clash/Page.cs", 20, 9)));
         // Positive control: the same file compiled into both assemblies keeps its facts.
         Assert.Equal("kept", ReactorSourceMap.GetDeclaredName(new SourceLocation("/_/Agree/Page.cs", 3, 1)));
+    }
+}
+
+internal sealed class CounterModel;
+
+internal static class CounterModelHooks
+{
+    extension(CounterModel model)
+    {
+        public int UseCount(RenderContext ctx)
+        {
+            var (count, _) = ctx.UseState(0);
+            return count;
+        }
     }
 }

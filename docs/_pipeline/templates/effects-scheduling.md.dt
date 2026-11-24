@@ -44,7 +44,7 @@ A render pass runs in three phases. The first is pure description —
 WinUI. The reconciler then walks the tree, mounts or updates real
 controls, and only after that does it flush queued effects.
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#effect-schedule"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#effect-schedule"
 ```
 
 `UseEffect` does not call your callback. It checks the dependency
@@ -93,7 +93,7 @@ For classes that don't override `Equals(object)`, it's reference equality,
 even if they implement `IEquatable<T>`. The typed overloads retain their
 allocation-free `EqualityComparer<T>.Default` path for value-type dependencies.
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#use-state-slot"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#use-state-slot"
 ```
 
 `UseState` returns the *same* `Action<T>` setter instance across
@@ -209,7 +209,7 @@ UseEffect(() => {
 });
 ```
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#set-state"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#set-state"
 ```
 
 Every state setter schedules a re-render. An effect with no deps

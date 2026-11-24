@@ -52,7 +52,8 @@
         "src/Reactor/Core/Reconciler.Mount.cs",
         "src/Reactor/Core/Reconciler.Update.cs",
         "src/Reactor/Core/ChildReconciler.cs",
-        "src/Reactor/Core/RenderContext.cs",
+        "src/Reactor.Core/RenderContext.cs",
+        "src/Reactor/Core/RenderContext.WinUI.cs",
         "src/Reactor/Core/Element.cs",
         "src/Reactor/Core/Component.cs",
         "src/Reactor/Core/ElementPool.cs"
@@ -63,13 +64,13 @@
       "id": "safety-batch-2",
       "agent": "safety",
       "files": [
-        "src/Reactor/Core/Context.cs",
-        "src/Reactor/Core/ContextScope.cs",
+        "src/Reactor.Core/Context.cs",
+        "src/Reactor.Core/ContextScope.cs",
         "src/Reactor/Core/ContextExtensions.cs",
         "src/Reactor/Core/ChildCollection.cs",
         "src/Reactor/Core/ElementFactory.cs",
         "src/Reactor/Core/ObservableTreeTracker.cs",
-        "src/Reactor/Core/PersistedStateCache.cs"
+        "src/Reactor.Core/PersistedStateCache.cs"
       ],
       "description": "Core context, state management, and observable tracking \u2014 thread-safety boundaries"
     },
@@ -121,7 +122,8 @@
         "src/Reactor/Core/ChildReconciler.cs",
         "src/Reactor/Core/Element.cs",
         "src/Reactor/Core/Component.cs",
-        "src/Reactor/Core/RenderContext.cs"
+        "src/Reactor.Core/RenderContext.cs",
+        "src/Reactor/Core/RenderContext.WinUI.cs"
       ],
       "description": "Core reconciler lifecycle \u2014 mount, update, unmount paths"
     },
@@ -129,14 +131,14 @@
       "id": "lifecycle-batch-2",
       "agent": "lifecycle",
       "files": [
-        "src/Reactor/Core/Context.cs",
-        "src/Reactor/Core/ContextScope.cs",
+        "src/Reactor.Core/Context.cs",
+        "src/Reactor.Core/ContextScope.cs",
         "src/Reactor/Core/ContextExtensions.cs",
         "src/Reactor/Core/ChildCollection.cs",
         "src/Reactor/Core/ElementPool.cs",
         "src/Reactor/Core/ElementFactory.cs",
         "src/Reactor/Core/ObservableTreeTracker.cs",
-        "src/Reactor/Core/PersistedStateCache.cs"
+        "src/Reactor.Core/PersistedStateCache.cs"
       ],
       "description": "Context lifecycle, element pooling, observable dispose patterns"
     },
@@ -879,7 +881,8 @@
         "src/Reactor/Core/Reconciler.Mount.cs",
         "src/Reactor/Core/Reconciler.Update.cs",
         "src/Reactor/Core/ChildReconciler.cs",
-        "src/Reactor/Core/RenderContext.cs",
+        "src/Reactor.Core/RenderContext.cs",
+        "src/Reactor/Core/RenderContext.WinUI.cs",
         "src/Reactor/Core/Element.cs",
         "src/Reactor/Core/Component.cs",
         "src/Reactor/Core/ElementPool.cs"
@@ -890,13 +893,13 @@
       "id": "general-batch-2",
       "agent": "general",
       "files": [
-        "src/Reactor/Core/Context.cs",
-        "src/Reactor/Core/ContextScope.cs",
+        "src/Reactor.Core/Context.cs",
+        "src/Reactor.Core/ContextScope.cs",
         "src/Reactor/Core/ContextExtensions.cs",
         "src/Reactor/Core/ChildCollection.cs",
         "src/Reactor/Core/ElementFactory.cs",
         "src/Reactor/Core/ObservableTreeTracker.cs",
-        "src/Reactor/Core/PersistedStateCache.cs",
+        "src/Reactor.Core/PersistedStateCache.cs",
         "src/Reactor/Core/Theme.cs"
       ],
       "description": "Core context, state, and observable infrastructure"

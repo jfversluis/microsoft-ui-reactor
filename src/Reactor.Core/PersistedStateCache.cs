@@ -23,6 +23,12 @@ public sealed class ApplicationPersistedScope : IPersistedStateScope
     /// <summary>Default capacity for the singleton process-wide scope.</summary>
     public const int DefaultCapacity = 4096;
 
+    // Static initializers run in declaration order, and Default's constructor takes s_sourceSync,
+    // so these three must stay above Default.
+    private static readonly Lock s_sourceSync = new();
+    private static Func<Action, IDisposable?>? s_memoryPressureSource;
+    private static List<WeakReference<ApplicationPersistedScope>>? s_awaitingSource;
+
     /// <summary>Process-wide singleton instance.</summary>
     public static ApplicationPersistedScope Default { get; } = new(DefaultCapacity);
 
@@ -103,20 +109,67 @@ public sealed class ApplicationPersistedScope : IPersistedStateScope
     }
 
     // ── Memory-pressure escape valve ────────────────────────────────────────
+    // The pressure signal is platform-specific (WinUI: Windows.System.MemoryManager), so the
+    // renderer installs it as MemoryPressureSource (spec 067). A scope constructed before that
+    // (the static Default can be) is remembered weakly and registered when the source arrives.
+    // The static fields it uses are declared above Default, whose initializer runs first.
+
+    private IDisposable? _memPressureRegistration;
+
+    /// <summary>
+    /// Subscribes a callback to the platform's high-memory-pressure signal and returns the
+    /// subscription, or null when the platform has none. Set once by the renderer; scopes
+    /// created earlier register then.
+    /// </summary>
+    internal static Func<Action, IDisposable?>? MemoryPressureSource
+    {
+        get { lock (s_sourceSync) return s_memoryPressureSource; }
+        set
+        {
+            List<WeakReference<ApplicationPersistedScope>>? waiting;
+            lock (s_sourceSync)
+            {
+                s_memoryPressureSource = value;
+                waiting = value is null ? null : s_awaitingSource;
+                if (waiting is not null) s_awaitingSource = null;
+            }
+            if (waiting is null) return;
+            foreach (var weak in waiting)
+            {
+                if (weak.TryGetTarget(out var scope))
+                    scope.TryRegisterMemoryPressureHandler();
+            }
+        }
+    }
 
     private void TryRegisterMemoryPressureHandler()
     {
+        Func<Action, IDisposable?>? source;
+        lock (s_sourceSync)
+        {
+            source = s_memoryPressureSource;
+            if (source is null)
+            {
+                var awaiting = s_awaitingSource ??= [];
+                // A host that never installs a source would otherwise grow this list forever.
+                if (awaiting.Count >= 64 && (awaiting.Count & 63) == 0)
+                    awaiting.RemoveAll(static w => !w.TryGetTarget(out _));
+                awaiting.Add(new WeakReference<ApplicationPersistedScope>(this));
+                return;
+            }
+        }
+
         lock (_memPressureSync)
         {
-            if (_memPressureRegistered) return;
+            if (_memPressureRegistered || _disposed) return;
             try
             {
-                global::Windows.System.MemoryManager.AppMemoryUsageIncreased += OnAppMemoryUsageIncreased;
-                _memPressureRegistered = true;
+                _memPressureRegistration = source(OnMemoryPressure);
+                _memPressureRegistered = _memPressureRegistration is not null;
             }
             catch (Exception ex)
             {
-                // Some hosting models don't expose AppMemoryUsageIncreased
+                // Some hosting models don't expose a memory-pressure signal
                 // (unpackaged apps, headless tests, etc.). Spec: log + carry on.
                 Debug.WriteLine($"[Reactor] ApplicationPersistedScope: memory-pressure registration failed: {ex.GetType().Name}: {ex.Message}");
             }
@@ -128,29 +181,22 @@ public sealed class ApplicationPersistedScope : IPersistedStateScope
         lock (_memPressureSync)
         {
             if (!_memPressureRegistered) return;
-            try { global::Windows.System.MemoryManager.AppMemoryUsageIncreased -= OnAppMemoryUsageIncreased; }
+            try { _memPressureRegistration?.Dispose(); }
             catch { /* best effort */ }
+            _memPressureRegistration = null;
             _memPressureRegistered = false;
         }
     }
 
-    private void OnAppMemoryUsageIncreased(object? sender, object e)
+    private void OnMemoryPressure()
     {
-        // Race: the event can fire after Dispose has unregistered (if a callback
+        // Race: the signal can fire after Dispose has unregistered (if a callback
         // is already in flight) or while disposing. Match the WindowPersistedScope
         // pattern and become inert post-dispose.
         if (_disposed) return;
-
-        // The event arg type is opaque-ish; what we care about is the current
-        // app memory usage level. Trim aggressively when over-limit.
         try
         {
-            var level = global::Windows.System.MemoryManager.AppMemoryUsageLevel;
-            if (level == global::Windows.System.AppMemoryUsageLevel.OverLimit ||
-                level == global::Windows.System.AppMemoryUsageLevel.High)
-            {
-                ApplyMemoryPressureTrim();
-            }
+            ApplyMemoryPressureTrim();
         }
         catch (Exception ex)
         {

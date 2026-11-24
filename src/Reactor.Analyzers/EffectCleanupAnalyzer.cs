@@ -48,6 +48,7 @@ public sealed class EffectCleanupAnalyzer : DiagnosticAnalyzer
 
     private const string UseEffectName = "UseEffect";
     private const string ComponentType = "Microsoft.UI.Reactor.Core.Component";
+    private const string ReactorComponentType = "Microsoft.UI.Reactor.Core.ReactorComponent";
     private const string RenderContextType = "Microsoft.UI.Reactor.Core.RenderContext";
 
     /// <summary>
@@ -149,15 +150,17 @@ public sealed class EffectCleanupAnalyzer : DiagnosticAnalyzer
 
     /// <summary>
     /// True when the resolved <c>UseEffect</c> is declared <b>exactly</b> on the Reactor
-    /// <c>Component</c> / <c>Component&lt;T&gt;</c> (the protected wrappers) or <c>RenderContext</c>
-    /// (the instance methods) — the types that own the Action-vs-<c>Func&lt;Action&gt;</c> cleanup
+    /// <c>ReactorComponent</c> (the protected wrappers; spec 067 moved them there from
+    /// <c>Component</c>, which still matches for older Reactor versions), <c>Component&lt;T&gt;</c>,
+    /// or <c>RenderContext</c> (the instance methods) — the types that own the Action-vs-<c>Func&lt;Action&gt;</c> cleanup
     /// contract. A <c>UseEffect</c> a user declares on their own <c>Component</c> subclass shadows
     /// (not overrides — the framework methods are non-virtual) the hook and has unknown semantics,
     /// so an exact-type check (rather than a derives-from walk) avoids a false positive there while
-    /// still accepting the idiomatic unqualified call, which binds to <c>Component.UseEffect</c>.
+    /// still accepting the idiomatic unqualified call, which binds to <c>ReactorComponent.UseEffect</c>.
     /// </summary>
     private static bool IsReactorUseEffect(IMethodSymbol method)
-        => IsReactorHostType(method.ContainingType, ComponentType)
+        => IsReactorHostType(method.ContainingType, ReactorComponentType)
+        || IsReactorHostType(method.ContainingType, ComponentType)
         || IsReactorHostType(method.ContainingType, RenderContextType);
 
     /// <summary>

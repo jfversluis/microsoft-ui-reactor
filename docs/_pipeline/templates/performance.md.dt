@@ -48,7 +48,7 @@ The Reactor provider's events split across fifteen keywords. A consumer
 masks in only the ones it wants, so a "just reconcile" trace doesn't
 pay for state writes, MCP traffic, or trampoline dispatches:
 
-```csharp snippet="source:src/Reactor/Core/Diagnostics/ReactorEventSource.cs#etw-keywords"
+```csharp snippet="source:src/Reactor.Core/Diagnostics/ReactorEventSource.cs#etw-keywords"
 ```
 
 The seven that cover the render loop: `Reconcile` covers reconcile-pass

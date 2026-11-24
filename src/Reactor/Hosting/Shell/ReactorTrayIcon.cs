@@ -18,7 +18,7 @@ namespace Microsoft.UI.Reactor;
 /// second <see cref="Close"/> / <see cref="Dispose"/> call is a no-op.</para>
 /// <para>The flyout-content reconciliation runs in a <see cref="RenderContext"/>
 /// without an owning <see cref="ReactorWindow"/>; hooks like
-/// <see cref="RenderContext.UseWindow"/> return their documented fallback
+/// <see cref="WinUIHooks.extension(RenderContext).UseWindow"/> return their documented fallback
 /// values (spec 036 §7.1).</para>
 /// </remarks>
 public sealed class ReactorTrayIcon : IDisposable
@@ -311,7 +311,7 @@ public sealed class ReactorTrayIcon : IDisposable
     /// <summary>
     /// Show a Reactor <see cref="Element"/> as the tray icon's flyout. UI-thread
     /// only. The flyout reconciles in a context without an owning window
-    /// (<see cref="RenderContext.UseWindow"/> returns null inside).
+    /// (<see cref="WinUIHooks.extension(RenderContext).UseWindow"/> returns null inside).
     /// Light-dismisses automatically when the user clicks outside it or
     /// presses Escape.
     /// (spec 036 §7.1, §11.4)

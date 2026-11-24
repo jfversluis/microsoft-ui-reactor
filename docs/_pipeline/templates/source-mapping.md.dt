@@ -46,7 +46,7 @@ Every `ComponentRender` boundary emits an ETW event keyed by the
 component's CLR type name. The keyword `Render` gates the events so
 consumers can subscribe to just the render channel:
 
-```csharp snippet="source:src/Reactor/Core/Diagnostics/ReactorEventSource.cs#etw-keywords"
+```csharp snippet="source:src/Reactor.Core/Diagnostics/ReactorEventSource.cs#etw-keywords"
 ```
 
 `ComponentRenderStart` / `ComponentRenderStop` fire with the component's
@@ -79,7 +79,7 @@ components, which have no type of their own, report `FuncElement` and
 
 The reconcile pass also emits a counter summary on stop:
 
-```csharp snippet="source:src/Reactor/Core/Diagnostics/ReactorEventSource.cs#reconcile-stop-event"
+```csharp snippet="source:src/Reactor.Core/Diagnostics/ReactorEventSource.cs#reconcile-stop-event"
 ```
 
 `elementsDiffed` / `elementsSkipped` / `uiElementsCreated` /
@@ -96,7 +96,7 @@ before falling back to composition-primitive handlers. The handler that
 constructs the WinUI control doesn't know which user line called
 `TextBlock("hello")`:
 
-```csharp snippet="source:src/Reactor/Core/Component.cs#render-loop"
+```csharp snippet="source:src/Reactor.Core/ReactorComponent.cs#render-loop"
 ```
 
 `Component.Render()` returns an `Element` tree the reconciler walks.

@@ -56,7 +56,7 @@ way it is.
 
 ## The setter is the signal
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#use-state-slot"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#use-state-slot"
 ```
 
 `UseState` returns `(value, setter)`. The `value` is just a read of
@@ -68,7 +68,7 @@ into the host with `_requestRerender`. The host decides when to render
 next — typically on the next dispatcher tick — and once it does, the
 component's `Render()` runs and the slot read returns the new value.
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#set-state"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#set-state"
 ```
 
 A few details matter for understanding the model:
@@ -164,14 +164,15 @@ tracking.
 
 ## ShouldUpdate — opting out of parent-driven re-renders
 
-```csharp snippet="source:src/Reactor/Core/Component.cs#render-loop"
+```csharp snippet="source:src/Reactor.Core/ReactorComponent.cs#render-loop"
 ```
 
 A parent re-render normally cascades to its children: the parent's
 `Render()` produces a new element tree, the reconciler walks it, and
 each child component's `Render()` is invoked because the parent's call
 to `Component(...)` is what allocated the child element. The default
-`ShouldUpdate()` on the propless `Component` base returns `false` —
+`ShouldUpdate()` on the propless `Component` base (declared on its
+framework-neutral base, `ReactorComponent`) returns `false` —
 those have no inputs that could have changed, so a parent re-render with
 the same shape doesn't propagate. `Component<TProps>` overrides the
 props-aware sibling, `ShouldUpdate(TProps? old, TProps? next)`, with
@@ -195,7 +196,7 @@ change.
 
 ## State batching
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#set-state"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#set-state"
 ```
 
 Three setters in the same synchronous block call `_requestRerender`
@@ -252,7 +253,7 @@ items.Add("new");        // mutates the same list the slot holds
 setItems(items);         // equality check sees same reference → no rerender
 ```
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#use-state-slot"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#use-state-slot"
 ```
 
 The setter's equality compares `newValue` against `hook.Value`. After

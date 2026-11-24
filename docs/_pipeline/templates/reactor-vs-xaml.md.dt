@@ -113,7 +113,7 @@ the source and writes the target DP. The binding is a long-lived
 object; mode (`OneWay`, `TwoWay`, `OneTime`), update trigger, converter,
 and fallback all live on it.
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#use-state-slot"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#use-state-slot"
 ```
 
 Reactor doesn't install anything. `TextBlock(name)` reads the current
@@ -282,7 +282,7 @@ The mechanical translation has four steps:
    [commanding](commanding.md) page documents the explicit shape if
    the command must be sharable.
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#use-state-slot"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#use-state-slot"
 ```
 
 The [Reactor for XAML Developers](xaml-developers.md) cookbook has
@@ -308,7 +308,7 @@ public class ProfilePage : Component, INotifyPropertyChanged
 }
 ```
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#use-state-slot"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#use-state-slot"
 ```
 
 The framework doesn't subscribe to `PropertyChanged` on a component —

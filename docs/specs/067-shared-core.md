@@ -249,3 +249,111 @@ spike's one moved member.
 errors). A forwarding `new Key` on `Element` would hide it but makes record `ToString()` print `Key`
 twice, so the spike documents the break (CHANGELOG) instead; the gate decides whether that is
 acceptable under the source-compatibility rule.
+
+## 10. Phase 2a: foundations
+
+`RenderContext` moved into the core with its full name, along with the hooks every renderer shares:
+
+- **Hooks:** state, reducer, effect, memo, callback, ref, context, persisted, observable, collection
+  and external store.
+- **Hook bookkeeping:** effect flushing, cleanups, hot-reload hook migration and the devtools
+  snapshots.
+- **Their types:** `Context<T>`, `ContextBase`, `ContextScope`, `Ref<T>`, `HookOrderException`, the
+  persisted-state scopes and `LruCache`.
+- **The neutral diagnostics:** `ReactorEventSource`, `DiagnosticLog`, `LogCategory` and
+  `ComponentPerfTally`.
+
+`Reactor.dll` type-forwards each public type that moved.
+
+**WinUI hooks are extension members.** Windows, pickers, navigation, theme and accessibility,
+commands, `UseIntl` and `UseObservableTree` are C# 14 extension members of `RenderContext` in
+`WinUIHooks` (`src/Reactor/Core/RenderContext.WinUI.cs`). `ctx.UseWindow()` and the static
+`RenderContext.PickerService` keep their spelling. A subclass would have kept them as instance
+methods, but every app references both assemblies, so two `Microsoft.UI.Reactor.Core.RenderContext`
+types would collide (CS0433). It would also break the far more common `cref="RenderContext.UseState"`
+(a cref doesn't resolve inherited members) and rule out component libraries written against the
+core alone.
+
+**What a recompile can see:**
+
+- A WinUI hook called on a context whose type the file never names, such as
+  `Memo(ctx => ctx.UseWindow())`: CS1061 without `using Microsoft.UI.Reactor.Core;`. An instance
+  member needed no import; an extension member resolves only through an imported namespace. Every
+  sample already imports it, because it also holds `Element` and `Component`.
+- `nameof(RenderContext.UseWindow)`: CS8093, since `nameof` takes no extension members. One repo
+  test changed; write the string instead.
+- `cref="RenderContext.UseWindow"`: CS1574. Write `cref="WinUIHooks.extension(RenderContext).UseWindow"`.
+- A binary compiled against an earlier `Reactor.dll` that calls a WinUI hook needs a rebuild. Types
+  are forwarded, members are not.
+
+Every sample compiles unchanged. Code that hard-codes where a member is declared did need updating:
+
+- Four analyzers (`HookRulesAnalyzer`, `EffectCleanupAnalyzer`, `BlockingTaskAnalyzer`,
+  `UsePersistedScopeAnalyzer`) recognised a class component's hook by its declaring type being
+  `Component`. The shared shortcuts are now declared on `ReactorComponent`, which they would have
+  silently stopped matching; they accept it now. `ReactorComponentHookAnchorTests` stubs the real
+  hierarchy, unlike the older analyzer suites, which declare the hooks on `Component`.
+- The source-map generator, which numbers each component's hook slots for devtools, recognised a
+  hook the same ways: declared on `RenderContext` or a `Component` subclass, taking a `RenderContext`,
+  or declared in `RenderContext`'s assembly. It now also accepts `ReactorComponent`, reads an
+  extension block's receiver (Roslyn reports `ctx.UseWindow()` as declared on the block, with no
+  `RenderContext` parameter), and counts both the core and `Reactor.dll` as Reactor's own. Without
+  that, class components lost their hook table and WinUI hooks dropped out of the slot numbering.
+- Tests that read `src/Reactor/Core/RenderContext.cs` by path, `tools/reviewer/manifest.json`, and
+  the swallowed-error ledger (spec 044), whose `RenderContext.cs` section is now one per file, point
+  at the new files.
+- Reactor.Advanced's reviewed InternalsVisibleTo pin: the four internals it reaches that moved
+  (`ReactorEventSource`, `DiagnosticLog`, `LogCategory`, the component `Context`) are now pinned
+  against the core instead of `Reactor.dll`.
+
+**Seams.** Each is a core abstraction with WinUI's implementation, chosen so behavior is identical:
+
+| Seam | Core | WinUI |
+|---|---|---|
+| Owner | `IRenderOwner` (the window's persisted scope) | `IContentOwner : IRenderOwner`; hooks cast to it |
+| UI dispatcher | `RenderScheduler.TryEnqueueOnUIThread` | Pushed by the one `ReactorApp.UIDispatcher` setter |
+| Perf state events | `CorePerfHooks` (two published gates + a writer) | `ReactorPerfTrace.ApplyControlCode`, the only place the session state changes, publishes them |
+| Component ids | `ComponentIds` | `ComponentRenderTrace.NextId` delegates |
+| Hot-reload pass | `HotReloadState` (`[ThreadStatic]`) | `HotReloadService` opens and closes passes |
+| Memory pressure | `ApplicationPersistedScope.MemoryPressureSource`; scopes created earlier register when it is set | `WinUICoreServices.EnsureInstalled()` (Windows `MemoryManager`), called from the `Reconciler` constructor and the dispatcher setter |
+
+`WinUICoreServices` replaces a module initializer, which the repo avoids because it is an
+unconditional trimming root (`ReactorApp.BuiltIns.cs`).
+
+**Seam follow-ups (from the phase 2a review).** These are behavior-preserving today and are revisited
+when MAUI plugs into them (phases 2b–3):
+
+- *The UI dispatcher is process-wide.* `RenderScheduler` reproduces the old behavior, where
+  `ReactorApp.UIDispatcher` is the first host's queue, including its limit with hosts on separate UI
+  threads (the reconciler already prefers the host's own `OwningDispatcher`). The better shape is a
+  per-owner `TryEnqueue` on `IRenderOwner`, with the static as the fallback for ownerless contexts;
+  that is also what MAUI's per-root scheduler wants.
+- *Memory pressure is pulled.* Each scope subscribes through the installed source, so scopes created
+  before it are held weakly until it arrives. A push model, where the renderer subscribes once and
+  calls into the core, would drop that bookkeeping.
+- *Renderer hooks touch the slot table directly.* WinUI's navigation-lifecycle hook claims its slot
+  through `_hooks`/`_hookIndex`, now internal, and `HookKind` lists it. A narrow internal
+  slot-claim primitive, with hook states naming themselves for diagnostics, would keep renderer hooks
+  out of the core's fields; the handler protocol (2c) is where MAUI's hooks would first need it.
+
+**Deferred on purpose.** `SourceLocation` and `ReactorPerfTrace` stay in WinUI: `SourceLocation`
+reads the source-map generator's tables, which generated code calls by their WinUI name.
+`UseObservableTree` stays too: its tracker marshals through the current thread's `DispatcherQueue`,
+which is a different seam from the UI dispatcher.
+
+**Components.** `ReactorComponent` (core) holds the context, `abstract ReactorElement? Render()`,
+`ShouldUpdate()` and the shared hooks' shortcuts. WinUI's `Component : ReactorComponent`
+redeclares `public abstract override Element Render()` (a covariant override, so user overrides
+written as `Element Render()` compile unchanged) and keeps WinUI's shortcuts; `Component<TProps>`
+is unchanged. One more compile-visible edge, the same kind as `Element.Key`: a doc comment
+`cref="Component.UseState"` names an inherited member and needs `ReactorComponent.UseState`.
+
+**Tooling.**
+
+- The API index now indexes the core assembly and lists extension-block members on their receiver.
+  The diff is additive: `ReactorElement` and `ReactorComponent` get their own blocks. `## Hooks`
+  keeps its `Use*` gate for extension members too, so the pickers, which are extension members but
+  not hooks, stay out of it and are listed on `RenderContext`.
+- The docs pipeline reads `Microsoft.UI.Reactor.Core.xml` beside `Reactor.xml`. It maps the
+  compiler's extension-block doc ids back to `RenderContext` crefs, so every hook reference page
+  regenerates byte-identical.

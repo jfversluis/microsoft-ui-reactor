@@ -221,7 +221,7 @@ tracking.
 ## ShouldUpdate — opting out of parent-driven re-renders
 
 ```csharp
-public abstract class Component
+public abstract class ReactorComponent
 {
     // Settable so the reconciler can transfer a live RenderContext (hooks +
     // cleanups) onto a freshly-constructed instance when a Hot Reload edit
@@ -233,7 +233,7 @@ public abstract class Component
     /// Override to describe the UI. Use UseState, UseEffect, etc. from the context.
     /// Must call hooks in the same order every render.
     /// </summary>
-    public abstract Element Render();
+    public abstract ReactorElement? Render();
 
     /// <summary>
     /// Controls whether this propless component should re-render when its parent re-renders.
@@ -247,7 +247,8 @@ A parent re-render normally cascades to its children: the parent's
 `Render()` produces a new element tree, the reconciler walks it, and
 each child component's `Render()` is invoked because the parent's call
 to `Component(...)` is what allocated the child element. The default
-`ShouldUpdate()` on the propless `Component` base returns `false` —
+`ShouldUpdate()` on the propless `Component` base (declared on its
+framework-neutral base, `ReactorComponent`) returns `false` —
 those have no inputs that could have changed, so a parent re-render with
 the same shape doesn't propagate. `Component<TProps>` overrides the
 props-aware sibling, `ShouldUpdate(TProps? old, TProps? next)`, with

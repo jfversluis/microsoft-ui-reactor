@@ -78,6 +78,24 @@ Conventions for contributors:
   `cref="ReactorElement.Key"`. An offline feed needs `Microsoft.UI.Reactor.Core.<version>.nupkg`
   next to the framework package; `mur pack-local` and the release assets include it.
 
+- **`RenderContext` and the hooks every renderer shares moved into `Microsoft.UI.Reactor.Core` (spec
+  067, phase 2a).** That covers `UseState`, `UseReducer`, `UseEffect`, `UseMemo`, `UseCallback`,
+  `UseRef`, `UseContext`, `UsePersisted`, `UseObservable`, `UseExternalStore`, and with them
+  `Context<T>`, `Ref<T>`, the persisted-state scopes and `HookOrderException`. Namespaces are
+  unchanged, and `Reactor.dll` forwards each moved type. The WinUI
+  hooks (windows, pickers, navigation, theme and accessibility, commands, `UseIntl`,
+  `UseObservableTree`) are now C# 14 extension members of `RenderContext` declared in
+  `Microsoft.UI.Reactor.Core.WinUIHooks`, so `ctx.UseWindow()` reads as before; a component
+  library compiled against an earlier version that calls one of them needs a rebuild
+  (`MissingMethodException` otherwise). Three things a recompile catches: a file that calls a WinUI
+  hook on a context whose type it never names, such as `Memo(ctx => ctx.UseWindow())`, needs
+  `using Microsoft.UI.Reactor.Core;` (CS1061 otherwise; extension members resolve only through an
+  imported namespace); `nameof(RenderContext.UseWindow)` (CS8093, `nameof` doesn't accept extension
+  members; use the string); and a doc comment `cref="RenderContext.UseWindow"` (CS1574; write
+  `cref="WinUIHooks.extension(RenderContext).UseWindow"`). `Component` now derives from the core's
+  `ReactorComponent`, which declares `ShouldUpdate()` and the shared hooks' shortcuts, so a doc
+  comment `cref="Component.UseState"` needs `cref="ReactorComponent.UseState"`.
+
 - Opt-in Markdown text selection supports double-click to select a word and
   triple-click to select a text surface, including drag extension by either unit.
   Selection drags from inline links and release-mode custom link buttons do not

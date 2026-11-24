@@ -59,7 +59,7 @@ its hook surface depends on.
 
 ## RenderContext owns the table
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#use-state-slot"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#use-state-slot"
 ```
 
 `RenderContext` holds the `List<HookState> _hooks` and an `int
@@ -75,7 +75,7 @@ element).
 
 The slot-type check at the top of each hook is the runtime guard:
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#use-state-slot"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#use-state-slot"
 ```
 
 That check is the reason hook rules exist. A conditional hook
@@ -88,7 +88,7 @@ assertion of last resort.
 
 ## UseState — the canonical slot
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#use-state-slot"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#use-state-slot"
 ```
 
 `UseState` allocates a `ValueHookState<T>` on first render (`_hookIndex
@@ -102,7 +102,7 @@ same-typed delegate). That cache is why setter identity is stable across
 renders — the closure is allocated once, not because an index happens to
 stay constant.
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#set-state"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#set-state"
 ```
 
 The setter is also where the auto-marshal, the equality check, and
@@ -137,7 +137,7 @@ the surviving cells and remounts).
 
 ## UseEffect — the slot that runs later
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#effect-schedule"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#effect-schedule"
 ```
 
 `UseEffect` doesn't run the body during `Render()`. It allocates an
@@ -247,7 +247,7 @@ the providing parent's re-render) marks the consuming component dirty.
 
 ## Function components
 
-```csharp snippet="source:src/Reactor/Core/Component.cs#render-loop"
+```csharp snippet="source:src/Reactor.Core/ReactorComponent.cs#render-loop"
 ```
 
 `Memo(ctx => Render(ctx))` materializes as a function-component
@@ -315,7 +315,7 @@ public override Element Render()
 }
 ```
 
-```csharp snippet="source:src/Reactor/Core/RenderContext.cs#use-state-slot"
+```csharp snippet="source:src/Reactor.Core/RenderContext.cs#use-state-slot"
 ```
 
 When `showCounter` flips from true to false, slot 0 (which had been

@@ -5,10 +5,10 @@ namespace Microsoft.UI.Reactor.Core;
 /// <summary>
 /// Represents a color scheme variant a component can adapt its rendering to.
 /// <para>
-/// Note that <see cref="RenderContext.UseColorScheme"/> reports the app-global theme and
+/// Note that <see cref="WinUIHooks.extension(RenderContext).UseColorScheme"/> reports the app-global theme and
 /// only ever returns <see cref="Light"/> or <see cref="Dark"/>; <see cref="HighContrast"/>
 /// is produced solely by the <see cref="ElementTheme.Default"/> mapping arm below. Use
-/// <see cref="RenderContext.UseHighContrast"/> to detect forced-colors mode.
+/// <see cref="WinUIHooks.extension(RenderContext).UseHighContrast"/> to detect forced-colors mode.
 /// </para>
 /// </summary>
 public enum ColorScheme

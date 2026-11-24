@@ -133,11 +133,15 @@ dotnet run --project samples/Reactor.TestApp
 ## Project layout
 
 ```
-src/Reactor/                      Core framework library
+src/Reactor.Core/                 Framework-neutral core (spec 067), shared by the renderers
+  ReactorComponent.cs             Component base: Render() contract, shared hook shortcuts
+  RenderContext.cs                Hook state storage, effect tracking, the shared hooks
+  Engine/ChildReconciler.cs       Keyed child-reconciliation engine
+src/Reactor/                      Core framework library (the WinUI renderer)
   Core/
-    Component.cs                  Base Component class, hook methods
+    Component.cs                  WinUI Component class, WinUI hook shortcuts
     Element.cs                    40+ virtual element record types
-    RenderContext.cs              Hook state storage, effect tracking
+    RenderContext.WinUI.cs        WinUI hooks, as extension members of RenderContext
     Reconciler.cs                 Tree diff orchestration
     Reconciler.Mount.cs           Mount dispatch and composition-primitive handlers
     Reconciler.Update.cs          Update dispatch and composition-primitive handlers
@@ -195,10 +199,17 @@ Use unit tests in `tests/Reactor.Tests/` for element creation and pure managed l
 
 ## How to add a new hook
 
-Hooks live in `src/Reactor/Core/Component.cs` (public API) and `src/Reactor/Core/RenderContext.cs` (implementation).
+Hooks live in two places (spec 067). A hook that needs no UI-framework type goes in the
+framework-neutral core: implement it on `RenderContext` in `src/Reactor.Core/RenderContext.cs` and
+add its protected shortcut to `ReactorComponent` in `src/Reactor.Core/ReactorComponent.cs`. A hook
+that uses WinUI types goes in `src/Reactor/Core/RenderContext.WinUI.cs`, as a member of the
+`extension(RenderContext ctx)` block in `WinUIHooks`, with its shortcut on `Component` in
+`src/Reactor/Core/Component.cs`.
 
-1. Add the hook method to `Component` (delegates to `RenderContext`)
-2. Implement the logic in `RenderContext`, using `GetOrCreateHook<T>()` to manage state
+1. Implement the hook. Claim its slot the way `UseState` does: add the state on first render
+   (`_hookIndex >= _hooks.Count`), advance `_hookIndex`, and throw `HookOrderException` when the slot
+   holds another hook's state
+2. Add the protected shortcut that delegates to `Context`
 3. Follow the convention: hooks must be called in the same order every render, no conditional calls
 4. Add tests in `tests/Reactor.Tests/`
 

@@ -18,6 +18,8 @@
     <!-- Match Reactor's explicit platforms so its ProjectReference handshake resolves a matching
          build under Release|x64 / Release|ARM64 (as Reactor.Wrappers.Abstractions does). -->
     <Platforms>AnyCPU;x64;ARM64</Platforms>
+    <!-- The event sources write EventData spans with fixed buffers (moved from Reactor, spec 067). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <Import Project="..\Reactor.Maui.Packaging.props" />

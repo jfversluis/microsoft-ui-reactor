@@ -338,9 +338,11 @@ public sealed class HookRulesAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
-        // Method on Component<>/Component (the protected helpers).
+        // Method on Component<>/Component or, since spec 067, their base ReactorComponent (the
+        // protected helpers; the shared ones are declared on ReactorComponent).
         if (symbol is { ContainingType: INamedTypeSymbol container }
-            && IsOrDerivesFrom(container, "Microsoft.UI.Reactor.Core.Component"))
+            && (IsOrDerivesFrom(container, "Microsoft.UI.Reactor.Core.Component")
+                || IsOrDerivesFrom(container, "Microsoft.UI.Reactor.Core.ReactorComponent")))
         {
             return true;
         }

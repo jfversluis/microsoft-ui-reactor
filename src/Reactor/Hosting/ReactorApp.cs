@@ -99,7 +99,13 @@ public static partial class ReactorApp
     public static Microsoft.UI.Dispatching.DispatcherQueue? UIDispatcher
     {
         get => Volatile.Read(ref _uiDispatcher);
-        internal set => Volatile.Write(ref _uiDispatcher, value);
+        internal set
+        {
+            Volatile.Write(ref _uiDispatcher, value);
+            // The framework-neutral core marshals off-thread hook setters through this (spec 067).
+            Core.RenderScheduler.TryEnqueueOnUIThread = value is null ? null : work => value.TryEnqueue(work.Invoke);
+            Core.WinUICoreServices.EnsureInstalled();
+        }
     }
 
     private static Hosting.Persistence.IWindowPersistenceStore? _windowPersistenceStore;

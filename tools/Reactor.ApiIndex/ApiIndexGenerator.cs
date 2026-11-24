@@ -78,8 +78,11 @@ public static class ApiIndexGenerator
         EmitReferenceBuilders(asm, sb);
         EmitHooks(asm, sb);
         EmitTheme(asm, sb);
-        EmitEnums(asm, sb);
-        EmitPublicTypes(asm, sb);
+        // Types that moved into the framework-neutral core (spec 067) are still part of the
+        // framework's surface: Reactor.dll forwards them and every app gets the core with it.
+        var neutralCore = FindNeutralCore(asm);
+        EmitEnums(asm, sb, neutralCore: neutralCore);
+        EmitPublicTypes(asm, sb, neutralCore: neutralCore);
 
         if (advanced is not null)
         {
@@ -196,6 +199,9 @@ public static class ApiIndexGenerator
             .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly))
             .Where(m => m.IsDefined(typeof(global::System.Runtime.CompilerServices.ExtensionAttribute), false))
             .Where(IsHookExtension)
+            // Same name gate as the instance hooks: WinUI's pickers are RenderContext extension
+            // members too (spec 067) but are not hooks — they run from event handlers, not Render.
+            .Where(m => m.Name.StartsWith("Use", StringComparison.Ordinal))
             .Where(m => !IsObsolete(m))
             .Select(FormatMethod);
 
@@ -249,12 +255,12 @@ public static class ApiIndexGenerator
     }
 
     [RequiresUnreferencedCode(ReflectionJustification)]
-    static void EmitEnums(Assembly asm, StringBuilder sb, string heading = "Enums")
+    static void EmitEnums(Assembly asm, StringBuilder sb, string heading = "Enums", Assembly? neutralCore = null)
     {
         sb.AppendLine($"## {heading} (public, under Microsoft.UI.Reactor.*)");
         sb.AppendLine();
 
-        var enums = asm.GetExportedTypes()
+        var enums = ExportedTypes(asm, neutralCore)
             .Where(t => t.IsEnum)
             .Where(t => !IsObsolete(t))
             .OrderBy(t => t.FullName, StringComparer.Ordinal);
@@ -276,16 +282,17 @@ public static class ApiIndexGenerator
     // -----------------------------------------------------------------------
 
     [RequiresUnreferencedCode(ReflectionJustification)]
-    static void EmitPublicTypes(Assembly asm, StringBuilder sb, string heading = "Public types")
+    static void EmitPublicTypes(Assembly asm, StringBuilder sb, string heading = "Public types", Assembly? neutralCore = null)
     {
         sb.AppendLine($"## {heading} (ctors / properties / methods / events)");
         sb.AppendLine("# Every public type not already covered above. Members alphabetized within");
         sb.AppendLine("# each type: constructors, then properties, then methods, then events.");
         sb.AppendLine();
 
-        var types = asm.GetExportedTypes()
+        var types = ExportedTypes(asm, neutralCore)
             .Where(IsIndexablePublicType)
             .ToList();
+        var extensionMembers = ExtensionBlockMembersByReceiver(asm, neutralCore);
 
         // Disambiguate `### <kind> <name>` headers for nested types and for two
         // distinct types that share a simple name (different namespaces). A nested
@@ -365,7 +372,11 @@ public static class ApiIndexGenerator
                 .Where(m => !IsOwnedByEarlierSection(m))
                 .Where(m => !m.Name.Contains('<') && !m.Name.Contains('>'))
                 .Where(m => !IsObsolete(m))
-                .Select(FormatMethod);
+                .Select(FormatMethod)
+                // C# 14 extension-block members are called like the receiver's own members
+                // (`ctx.UseWindow()`), so they are listed on it too (spec 067: WinUI's hooks
+                // on the core's RenderContext).
+                .Concat(extensionMembers.TryGetValue(t, out var ext) ? ext : []);
             Section(methods);
 
             // Public events.
@@ -381,6 +392,48 @@ public static class ApiIndexGenerator
     const string CoreFactoriesTypeFullName = "Microsoft.UI.Reactor.Factories";
     const string AdvancedFactoriesTypeFullName = "Microsoft.UI.Reactor.Advanced.Factories";
     const string NeutralCoreAssemblyName = "Microsoft.UI.Reactor.Core";
+
+    // The framework-neutral core the framework assembly references, or null (an older build,
+    // or an assembly without one).
+    [RequiresUnreferencedCode(ReflectionJustification)]
+    static Assembly? FindNeutralCore(Assembly asm)
+    {
+        var name = asm.GetReferencedAssemblies().FirstOrDefault(n => n.Name == NeutralCoreAssemblyName);
+        return name is null ? null : Assembly.Load(name);
+    }
+
+    [RequiresUnreferencedCode(ReflectionJustification)]
+    static IEnumerable<Type> ExportedTypes(Assembly asm, Assembly? neutralCore) =>
+        neutralCore is null ? asm.GetExportedTypes() : asm.GetExportedTypes().Concat(neutralCore.GetExportedTypes());
+
+    // Public instance members declared in C# 14 extension blocks, grouped by receiver type and
+    // formatted as the receiver's own methods. The compiler marks a static class that holds
+    // extension blocks with nested grouping types named `<G>$…`; the callable implementation of
+    // each instance member is an ordinary [Extension] static method on that class.
+    [RequiresUnreferencedCode(ReflectionJustification)]
+    static Dictionary<Type, List<string>> ExtensionBlockMembersByReceiver(Assembly asm, Assembly? neutralCore)
+    {
+        var result = new Dictionary<Type, List<string>>();
+        foreach (var holder in ExportedTypes(asm, neutralCore))
+        {
+            if (!(holder.IsClass && holder.IsAbstract && holder.IsSealed) || IsObsolete(holder)) continue;
+            if (!holder.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic).Any(n => n.Name.StartsWith("<G>$", StringComparison.Ordinal))) continue;
+            foreach (var m in holder.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly))
+            {
+                if (!IsExtensionMethod(m) || IsObsolete(m) || m.IsSpecialName) continue;
+                var ps = m.GetParameters();
+                if (ps.Length == 0) continue;
+                var receiver = ps[0].ParameterType;
+                var generics = m.IsGenericMethodDefinition
+                    ? "<" + string.Join(", ", m.GetGenericArguments().Select(g => g.Name)) + ">"
+                    : "";
+                var line = $"{m.Name}{generics}({string.Join(", ", ps.Skip(1).Select(FormatParam))}) → {Short(m.ReturnType)}";
+                if (!result.TryGetValue(receiver, out var lines)) result[receiver] = lines = [];
+                lines.Add(line);
+            }
+        }
+        return result;
+    }
 
     // The type itself plus the unbroken run of base types directly above it that live in the
     // neutral core. Stops at the first base outside the core, so a type further down the

@@ -40,14 +40,45 @@ public class NeutralCoreBoundaryTests
     }
 
     /// <summary>
-    /// The renderer's element base derives from the neutral one, so the engine can diff WinUI
-    /// elements; a regression here means the engine is no longer what WinUI runs on.
+    /// Every public type that moved from Reactor.dll to the core is type-forwarded, so a binary
+    /// compiled against an earlier Reactor.dll still finds it. Types created in the core never
+    /// lived in Reactor.dll and need no forward; anything else the core exports must be forwarded.
     /// </summary>
     [Fact]
-    public void WinUIElement_DerivesFromTheNeutralElement()
+    [global::System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "Test-only: enumerates the two assemblies' exported and forwarded types by reflection. Standard `dotnet test` is JIT (never trimmed). Behaviour-neutral.")]
+    public void ReactorDll_ForwardsEveryPublicTypeThatMovedToTheCore()
+    {
+        var bornInCore = new[] { typeof(ReactorElement), typeof(ReactorComponent) };
+        var moved = typeof(ReactorElement).Assembly.GetExportedTypes()
+            .Where(t => !t.IsNested)
+            .Except(bornInCore)
+            .OrderBy(t => t.FullName, global::System.StringComparer.Ordinal)
+            .ToArray();
+        var forwarded = typeof(Element).Assembly.GetForwardedTypes()
+            .OrderBy(t => t.FullName, global::System.StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Contains(typeof(RenderContext), moved);
+        Assert.Equal(moved, forwarded);
+
+        // A reference compiled before the move names Reactor.dll; the forward must resolve it.
+        Assert.Equal("Reactor", typeof(Element).Assembly.GetName().Name);
+        Assert.Same(typeof(RenderContext), global::System.Type.GetType("Microsoft.UI.Reactor.Core.RenderContext, Reactor"));
+    }
+
+    /// <summary>
+    /// The renderer's element and component bases derive from the neutral ones, so the core can
+    /// diff WinUI elements and run WinUI components; a regression here means the core is no longer
+    /// what WinUI runs on.
+    /// </summary>
+    [Fact]
+    public void WinUIBases_DeriveFromTheNeutralOnes()
     {
         Assert.True(typeof(ReactorElement).IsAssignableFrom(typeof(Element)));
         Assert.NotEqual(typeof(Element).Assembly, typeof(ReactorElement).Assembly);
+        Assert.True(typeof(ReactorComponent).IsAssignableFrom(typeof(Component)));
+        Assert.NotEqual(typeof(Component).Assembly, typeof(ReactorComponent).Assembly);
+        Assert.Same(typeof(ReactorComponent).Assembly, typeof(RenderContext).Assembly);
     }
 
     /// <summary>
