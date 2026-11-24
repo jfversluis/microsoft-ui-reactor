@@ -475,6 +475,23 @@ internal static class ComponentLifecycleCharacterization
         }
     }
 
+    // A handler that mounts its child with a multicast callback (its own work, then the owner's).
+    private sealed record LcRelay(Element Child, Action Before) : Element;
+
+    private sealed class LcRelayHandler : Microsoft.UI.Reactor.Core.V1Protocol.IElementHandler<LcRelay, Microsoft.UI.Xaml.Controls.Border>
+    {
+        public Microsoft.UI.Xaml.Controls.Border Mount(Microsoft.UI.Reactor.Core.V1Protocol.MountContext ctx, LcRelay el)
+            => new() { Child = ctx.Reconciler.Mount(el.Child, el.Before + ctx.RequestRerender) };
+
+        public void Update(Microsoft.UI.Reactor.Core.V1Protocol.UpdateContext ctx, LcRelay oldEl, LcRelay newEl,
+            Microsoft.UI.Xaml.Controls.Border control) { }
+    }
+
+    private sealed class LcRelayOwner : Component<Action>
+    {
+        public override Element Render() => new LcRelay(Component<LcNest, int>(0), Props);
+    }
+
     internal sealed class RerenderDepthCap(Harness h) : SelfTestFixtureBase(h)
     {
         public override async Task RunAsync()
@@ -500,6 +517,18 @@ internal static class ComponentLifecycleCharacterization
                         loop?.StartsWith("Render loop detected", StringComparison.Ordinal) == true, $"observed: {loop ?? "no exception"}");
                     H.Check("Lifecycle_DepthCap_LoopCountsRequestsNotWrappers",
                         requests == Microsoft.UI.Reactor.Core.RerenderReentrancy.Max, $"requests={requests}");
+                }
+
+                // A multicast parent callback is invoked, not walked past.
+                using (var reconciler = new Reconciler())
+                {
+                    reconciler.RegisterHandler(new LcRelayHandler());
+                    int before = 0, hostRequests = 0;
+                    reconciler.Mount(Component<LcRelayOwner, Action>(() => before++), () => hostRequests++);
+                    var relayed = Change(3);
+                    H.Check("Lifecycle_DepthCap_MulticastParentIsInvoked",
+                        relayed is null && before == 1 && hostRequests == 1,
+                        $"observed: {relayed ?? "no exception"}, before={before}, host={hostRequests}");
                 }
 
                 host.Mount(_ => Component<LcNest, int>(200));

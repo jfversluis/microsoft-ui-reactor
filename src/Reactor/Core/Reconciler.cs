@@ -4075,7 +4075,7 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
     /// Captures the node directly to avoid accessing _componentNodes from background threads.
     /// </summary>
     private Action CreateComponentRerender(ComponentNode node, Action requestRerender)
-        => new ComponentRerender(this, node, requestRerender).Request;
+        => new ComponentRerender(this, node, requestRerender).Callback;
 
     /// <summary>
     /// One component's re-render callback. A request climbs from the component that asked to the
@@ -4085,13 +4085,26 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
     /// component sits. Calling them instead counted every ancestor, so a state change more than 50
     /// components deep threw "Render loop detected" with no loop.
     /// </summary>
-    private sealed class ComponentRerender(Reconciler owner, ComponentNode node, Action parent)
+    private sealed class ComponentRerender
     {
-        private readonly Reconciler _owner = owner;
-        private readonly ComponentNode _node = node;
-        private readonly Action _parent = parent;
+        private readonly Reconciler _owner;
+        private readonly ComponentNode _node;
+        private readonly Action _parent;
 
-        internal void Request()
+        /// <summary>The callback handed to the component and its children. The climb recognises an
+        /// ancestor by this exact delegate, so anything else, such as a handler's multicast
+        /// <c>before + ctx.RequestRerender</c>, is invoked as it is rather than walked.</summary>
+        internal readonly Action Callback;
+
+        internal ComponentRerender(Reconciler owner, ComponentNode node, Action parent)
+        {
+            _owner = owner;
+            _node = node;
+            _parent = parent;
+            Callback = Request;
+        }
+
+        private void Request()
         {
             // SECURITY (TASK-063): if invoked off the UI thread (e.g.,
             // setState(threadSafe:true) firing from a worker, or a worker
@@ -4132,7 +4145,8 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
 
             _node.SelfTriggered = true;
             var next = _parent;
-            while (next.Target is ComponentRerender up && ReferenceEquals(up._owner, _owner))
+            while (next.Target is ComponentRerender up && ReferenceEquals(next, up.Callback)
+                && ReferenceEquals(up._owner, _owner))
             {
                 up._node.SelfTriggered = true;
                 next = up._parent;
