@@ -357,3 +357,78 @@ is unchanged. One more compile-visible edge, the same kind as `Element.Key`: a d
 - The docs pipeline reads `Microsoft.UI.Reactor.Core.xml` beside `Reactor.xml`. It maps the
   compiler's extension-block doc ids back to `RenderContext` crefs, so every hook reference page
   regenerates byte-identical.
+
+## 11. Phase 2b: the component runtime
+
+### 11.1 Scope change from §4, and why
+
+§4 sketched one generic `Reconciler<TNative>` that owns the tree walk for both renderers. Measured
+against the code, the two walks differ in more than types:
+
+| | WinUI (`Reconciler*.cs`) | MAUI (spec 065, `ReactorRoot`) |
+|---|---|---|
+| Anchors | a `Border` per component; per-native state (attached DP, dictionaries keyed by `UIElement`) | none: a retained `Node` tree, natives flattened into the nearest host |
+| Re-render | a root pass per batch; `SelfTriggered` marks the path through skippable ancestors | a dirty-node list, rendered parents first |
+| Context | a traversal scope (`ContextScope`), consumers compare their last value | providers keep subscriber sets |
+| Effects | flushed right after each component's `Render()`, before its children mount | after the commit, deepest first |
+
+Replacing WinUI's walk would rewrite about 14.5k lines of traversal under a no-behavior-change rule.
+2b instead extracts what makes a component a component, so both renderers get the same semantics
+for it, and leaves the walk to the renderer. WinUI keeps its anchors (option A for WinUI); MAUI keeps
+its flattened node tree (option B's goal for MAUI). The retained node tree is therefore a renderer
+choice, not a core requirement, and §5's prototype is not needed to unblock MAUI.
+
+**Effect timing** is the one hook semantic that differs between the renderers today. 2b makes it a
+host policy (WinUI flushes inline, as now), so neither renderer changes. Whether MAUI moves to
+WinUI's timing, or WinUI to React's, is a decision for the phase 3 gate.
+
+### 11.2 What moves to the core
+
+All in `Microsoft.UI.Reactor.Core.Engine`, internal unless noted, visible to the renderers through
+the existing `InternalsVisibleTo` list.
+
+1. **Element contracts** (public interfaces): `IComponentElement` (component type, props, creates
+   the instance), `IRenderFunctionElement` (renders against a `RenderContext`) and `IMemoElement`
+   (adds dependencies). WinUI's `ComponentElement`, `FuncElement` and `MemoElement` implement them
+   explicitly, so their public members don't change.
+2. **`ComponentNode`**, today `Reconciler.ComponentNode`: component or context, element, rendered
+   element, previous props, memo dependencies, the self-triggered flag and diagnostic ids, typed to
+   `ReactorComponent`/`ReactorElement`. WinUI still finds nodes through its anchors.
+3. **The skip gate**: class components (`ShouldUpdate(old, new)` or `ShouldUpdate()`), memo
+   dependencies, consumed-context changes against a `ContextScope`, the hot-reload force and the
+   self-triggered bypass; it returns the decision plus the reason the traces report. The skip path's
+   props refresh (issue #151) moves with it.
+4. **The render pass**: install props, `BeginRender`, render, flush effects, recover from a
+   hook-order change once during a hot-reload pass, and classify a failure (rethrow to a boundary or
+   the host, or render the in-tree fallback; `RenderError.Propagate()` passes through). Mount and
+   update share it: today the three mount methods and `ReconcileComponent` repeat it four times.
+   Renderer-specific parts are a struct host: the validation scope, effect timing, trace and perf
+   events, logging, and building the fallback element.
+5. **The re-render wrapper**: the re-entrancy bound, marshaling onto the owner's UI thread, and
+   marking the node self-triggered. Marshaling goes through a per-owner `TryEnqueue` on
+   `IRenderOwner`, with the process-wide scheduler as the fallback for ownerless contexts. This
+   resolves the first seam follow-up from 2a (§10).
+6. **The render-loop gate**: the coalescing flags both WinUI hosts implement separately today (one
+   pending pass, requests during a pass deferred to the next).
+7. **Diff hints and memo-cell caches**: the changed-index hint protocol generic over the element
+   type, with theme sensitivity as a renderer policy, and the dependency and index/key bookkeeping of
+   `UseMemoCells*`.
+
+Stays in WinUI: anchors and the tree walk, error-boundary nodes (they are walk structure), element
+equality (`ShallowEquals`, `SettersEqual`: a catalog of WinUI records), modifiers, pooling and the
+element factory.
+
+### 11.3 Steps, each with WinUI tiers green
+
+1. Contracts, `ComponentNode` and the skip gate; the gate's tests run on a fake element set.
+2. The render pass and the re-render wrapper, with the per-owner dispatcher.
+3. The render-loop gate.
+4. Diff hints and memo-cell caches.
+
+**Guards.** A neutral test suite drives the runtime through fake elements and a fake host: every
+gate arm, the hot-reload retry, each error path and the re-entrancy bound. Existing WinUI tests
+cover the integration. Trace event order is pinned by the existing render-trace tests; any test
+that needs editing to pass is treated as a behavior change and reviewed.
+
+**Perf.** Component mount and update gain at most one host-struct call per hook point, and the
+gate becomes a static call. The skip floor and StocksGrid legs are the ones to watch, at 30 reps.
