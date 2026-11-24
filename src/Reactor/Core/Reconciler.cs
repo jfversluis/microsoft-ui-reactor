@@ -4075,14 +4075,37 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
     /// Captures the node directly to avoid accessing _componentNodes from background threads.
     /// </summary>
     private Action CreateComponentRerender(ComponentNode node, Action requestRerender)
-    {
-        return () =>
-        {
-            // SECURITY (TASK-059): bound rerender re-entrancy. A component
-            // that calls its own requestRerender synchronously from Render()
-            // or an effect's cleanup would otherwise blow the stack.
-            RerenderReentrancy.ThrowIfTooDeep();
+        => new ComponentRerender(this, node, requestRerender).Callback;
 
+    /// <summary>
+    /// One component's re-render callback. A request climbs from the component that asked to the
+    /// host, marking every ancestor self-triggered so the pass doesn't skip them on the way down.
+    /// The innermost callback walks its ancestors' callbacks instead of calling them, so the climb
+    /// is one request, counted once against the TASK-059 cap, on a constant stack however deep the
+    /// component sits. Calling them instead counted every ancestor, so a state change more than 50
+    /// components deep threw "Render loop detected" with no loop.
+    /// </summary>
+    private sealed class ComponentRerender
+    {
+        private readonly Reconciler _owner;
+        private readonly ComponentNode _node;
+        private readonly Action _parent;
+
+        /// <summary>The callback handed to the component and its children. The climb recognises an
+        /// ancestor by this exact delegate, so anything else, such as a handler's multicast
+        /// <c>before + ctx.RequestRerender</c>, is invoked as it is rather than walked.</summary>
+        internal readonly Action Callback;
+
+        internal ComponentRerender(Reconciler owner, ComponentNode node, Action parent)
+        {
+            _owner = owner;
+            _node = node;
+            _parent = parent;
+            Callback = Request;
+        }
+
+        private void Request()
+        {
             // SECURITY (TASK-063): if invoked off the UI thread (e.g.,
             // setState(threadSafe:true) firing from a worker, or a worker
             // that owns its own DispatcherQueue), marshal onto the UI
@@ -4092,7 +4115,7 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
             // thread must render on theirs. A non-null GetForCurrentThread()
             // doesn't imply UI affinity — the only authoritative check is
             // HasThreadAccess on the UI DQ.
-            var uiDq = OwningDispatcher ?? Microsoft.UI.Reactor.ReactorApp.UIDispatcher;
+            var uiDq = _owner.OwningDispatcher ?? Microsoft.UI.Reactor.ReactorApp.UIDispatcher;
             bool onUiThread = false;
             if (uiDq is not null)
             {
@@ -4102,28 +4125,38 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
 
             if (!onUiThread && uiDq is not null)
             {
-                uiDq.TryEnqueue(() =>
-                {
-                    node.SelfTriggered = true;
-                    InvokeRerenderTracked(requestRerender, node);
-                });
+                uiDq.TryEnqueue(Climb);
                 return;
             }
 
             // Either we're on the UI thread, or no UI DQ has been captured
             // (test/headless host) — run inline.
-            node.SelfTriggered = true;
-            InvokeRerenderTracked(requestRerender, node);
-        };
-    }
+            Climb();
+        }
 
-    private static void InvokeRerenderTracked(Action requestRerender, ComponentNode requester)
-    {
-        RerenderReentrancy.Enter();
-        // The perf RenderPass names the component that asked: the innermost wrapper claims the
-        // thread before the request climbs through its ancestors' wrappers to the host.
-        try { Diagnostics.RenderPassRequests.InvokeAs(requester, requestRerender); }
-        finally { RerenderReentrancy.Exit(); }
+        private void Climb()
+        {
+            // SECURITY (TASK-059): bound rerender re-entrancy. A component
+            // that calls its own requestRerender synchronously from Render()
+            // or an effect's cleanup would otherwise blow the stack. Checked
+            // on the thread that does the work, so a marshalled request
+            // counts against the UI thread's depth.
+            RerenderReentrancy.ThrowIfTooDeep();
+
+            _node.SelfTriggered = true;
+            var next = _parent;
+            while (next.Target is ComponentRerender up && ReferenceEquals(next, up.Callback)
+                && ReferenceEquals(up._owner, _owner))
+            {
+                up._node.SelfTriggered = true;
+                next = up._parent;
+            }
+
+            RerenderReentrancy.Enter();
+            // The perf RenderPass names the component that asked.
+            try { Diagnostics.RenderPassRequests.InvokeAs(_node, next); }
+            finally { RerenderReentrancy.Exit(); }
+        }
     }
 
     /// <summary>

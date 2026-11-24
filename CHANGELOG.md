@@ -196,6 +196,13 @@ Conventions for contributors:
 
 ### Fixed
 
+- A state change in a component nested more than 50 components deep no longer throws "Render loop
+  detected". The re-render loop guard (TASK-059) counted every ancestor component the request
+  passed through on its way to the host, so a deep enough tree reached the cap with no loop at
+  all. The request now walks its ancestors from the component that asked, so it is counted once
+  and climbs on a constant stack; a component that really re-requests a render synchronously
+  still stops after 50 requests (spec 067 §11.4).
+
 - Removing a `.Keyframes(...)` animation, or unmounting its element, now stops a running
   `rotation:` channel when the keyframes never used `translation:`. The cleanup stopped every
   channel inside one `try`, and stopping `Translation` throws when translation was never

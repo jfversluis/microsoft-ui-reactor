@@ -455,10 +455,13 @@ internal static class ComponentLifecycleCharacterization
     }
 
     // ── Scenario 5: the re-render re-entrancy cap (TASK-059) through the real wrapper ──
-    // Each component's re-render request runs through its ancestors' wrappers, and every wrapper
-    // counts toward the cap, so a state change deep enough in a component chain reaches it. This
-    // pins the wiring: deleting the check or the counting fails the deep case, and a counter that
-    // isn't released fails the shallow case that follows it.
+    // A state change climbs from the component through its ancestors to the host. The climb is one
+    // request: a chain far deeper than the cap must render. A request that really re-enters (here
+    // the host's request sets the state again, synchronously) must still hit the cap, after exactly
+    // Max requests, and 200 components deep: counting the climb stops it before the first request
+    // reaches the host, and climbing by recursion holds Max x 200 callback frames, enough to
+    // overflow the stack. The deep chain runs after the loop, so a counter the throw failed to
+    // release would fail it too.
 
     private sealed class LcNest : Component<int>
     {
@@ -472,6 +475,23 @@ internal static class ComponentLifecycleCharacterization
         }
     }
 
+    // A handler that mounts its child with a multicast callback (its own work, then the owner's).
+    private sealed record LcRelay(Element Child, Action Before) : Element;
+
+    private sealed class LcRelayHandler : Microsoft.UI.Reactor.Core.V1Protocol.IElementHandler<LcRelay, Microsoft.UI.Xaml.Controls.Border>
+    {
+        public Microsoft.UI.Xaml.Controls.Border Mount(Microsoft.UI.Reactor.Core.V1Protocol.MountContext ctx, LcRelay el)
+            => new() { Child = ctx.Reconciler.Mount(el.Child, el.Before + ctx.RequestRerender) };
+
+        public void Update(Microsoft.UI.Reactor.Core.V1Protocol.UpdateContext ctx, LcRelay oldEl, LcRelay newEl,
+            Microsoft.UI.Xaml.Controls.Border control) { }
+    }
+
+    private sealed class LcRelayOwner : Component<Action>
+    {
+        public override Element Render() => new LcRelay(Component<LcNest, int>(0), Props);
+    }
+
     internal sealed class RerenderDepthCap(Harness h) : SelfTestFixtureBase(h)
     {
         public override async Task RunAsync()
@@ -481,24 +501,42 @@ internal static class ComponentLifecycleCharacterization
             using var host = new ReactorHost(H.Window) { ContentTarget = target };
             try
             {
-                string? Change(int depth)
+                string? Change(int value)
                 {
-                    try { LcNest.SetLeaf!(depth); return null; }
+                    try { LcNest.SetLeaf!(value); return null; }
                     catch (InvalidOperationException ex) { return ex.Message; }
                 }
 
-                host.Mount(_ => Component<LcNest, int>(60));
-                await host.WaitForIdleAsync();
-                var deep = Change(1);
-                H.Check("Lifecycle_DepthCap_DeepChainHitsTheCap",
-                    deep?.StartsWith("Render loop detected", StringComparison.Ordinal) == true, $"observed: {deep ?? "no exception"}");
+                // A loop 200 components deep, behind a host whose request re-enters at once.
+                using (var reconciler = new Reconciler())
+                {
+                    var requests = 0;
+                    reconciler.Mount(Component<LcNest, int>(200), () => LcNest.SetLeaf!(1000 + ++requests));
+                    var loop = Change(1);
+                    H.Check("Lifecycle_DepthCap_LoopHitsTheCap",
+                        loop?.StartsWith("Render loop detected", StringComparison.Ordinal) == true, $"observed: {loop ?? "no exception"}");
+                    H.Check("Lifecycle_DepthCap_LoopCountsRequestsNotWrappers",
+                        requests == Microsoft.UI.Reactor.Core.RerenderReentrancy.Max, $"requests={requests}");
+                }
 
-                host.Mount(_ => Component<LcNest, int>(10));
+                // A multicast parent callback is invoked, not walked past.
+                using (var reconciler = new Reconciler())
+                {
+                    reconciler.RegisterHandler(new LcRelayHandler());
+                    int before = 0, hostRequests = 0;
+                    reconciler.Mount(Component<LcRelayOwner, Action>(() => before++), () => hostRequests++);
+                    var relayed = Change(3);
+                    H.Check("Lifecycle_DepthCap_MulticastParentIsInvoked",
+                        relayed is null && before == 1 && hostRequests == 1,
+                        $"observed: {relayed ?? "no exception"}, before={before}, host={hostRequests}");
+                }
+
+                host.Mount(_ => Component<LcNest, int>(200));
                 await host.WaitForIdleAsync();
-                var shallow = Change(2);
+                var deep = Change(2);
                 await host.WaitForIdleAsync();
-                H.Check("Lifecycle_DepthCap_ShallowChainIsFine", shallow is null, $"observed: {shallow}");
-                H.Check("Lifecycle_DepthCap_ShallowChainRenders", ContainsText(target, "leaf 2"));
+                H.Check("Lifecycle_DepthCap_DeepChainIsNoLoop", deep is null, $"observed: {deep}");
+                H.Check("Lifecycle_DepthCap_DeepChainRenders", ContainsText(target, "leaf 2"));
             }
             finally
             {
