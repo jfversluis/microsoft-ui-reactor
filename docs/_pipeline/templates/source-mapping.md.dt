@@ -96,7 +96,7 @@ before falling back to composition-primitive handlers. The handler that
 constructs the WinUI control doesn't know which user line called
 `TextBlock("hello")`:
 
-```csharp snippet="source:src/Reactor/Core/Component.cs#render-loop"
+```csharp snippet="source:src/Reactor.Core/ReactorComponent.cs#render-loop"
 ```
 
 `Component.Render()` returns an `Element` tree the reconciler walks.

@@ -4629,6 +4629,9 @@ Reference<TTarget>(Func<TElement, ElementRef<TTarget>> get, Action<FrameworkElem
 ReferenceList<TTarget>(Func<TElement, IReadOnlyList<ElementRef<TTarget>>> get, Action<FrameworkElement, IReadOnlyList<TTarget>> apply) → void
 WriteSuppressed(Action mutate) → void
 
+### class ReactorComponent
+Render() → ReactorElement
+
 ### record ReactorDevtoolsBootRequest
 new(DevtoolsCliOptions Options, string Title, double? Width, double? Height, bool FullScreen, Type HostRoot, Func<Component> HostRootFactory, Func<RenderContext, Element> RootRenderFunc, Action<ReactorHost> Configure)
 Action<ReactorHost> Configure { get; init; }

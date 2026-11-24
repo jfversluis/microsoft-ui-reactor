@@ -38,8 +38,8 @@ reconciler is the single mutator.
 
 | Subsystem | Files | What it owns |
 |---|---|---|
-| Component shell | `src/Reactor/Core/Component.cs` | `Render()` contract, `ShouldUpdate`, hook convenience methods |
-| Hook table | `src/Reactor/Core/RenderContext.cs` | Slot table, hook implementations, UI-thread invariant |
+| Component shell | `src/Reactor.Core/ReactorComponent.cs`, `src/Reactor/Core/Component.cs` | `Render()` contract, `ShouldUpdate`, hook convenience methods (the framework-neutral base and WinUI's `Component`, spec 067) |
+| Hook table | `src/Reactor.Core/RenderContext.cs`, `src/Reactor/Core/RenderContext.WinUI.cs` | Slot table, hook implementations, UI-thread invariant; WinUI's hooks as extension members |
 | Elements | `src/Reactor/Core/Element.cs`, `ElementFactory.cs` | Immutable records, factory plumbing for ItemsRepeater |
 | Reconciler | `src/Reactor/Core/Reconciler*.cs`, `src/Reactor.Core/Engine/ChildReconciler.cs` | Mount / Update / Unmount, keyed LIS diff |
 | Pool | `src/Reactor/Core/ElementPool.cs` | `TryRent` / `Return` for poolable leaf controls |
@@ -51,7 +51,7 @@ reconciler is the single mutator.
 Every section below zooms into one row of that table.
 
 ```csharp
-public abstract class Component
+public abstract class ReactorComponent
 {
     // Settable so the reconciler can transfer a live RenderContext (hooks +
     // cleanups) onto a freshly-constructed instance when a Hot Reload edit
@@ -63,7 +63,7 @@ public abstract class Component
     /// Override to describe the UI. Use UseState, UseEffect, etc. from the context.
     /// Must call hooks in the same order every render.
     /// </summary>
-    public abstract Element Render();
+    public abstract ReactorElement? Render();
 
     /// <summary>
     /// Controls whether this propless component should re-render when its parent re-renders.
@@ -413,7 +413,7 @@ attribution side; the [devtools-internals](devtools-internals.md) page
 covers the overlay rendering.
 
 ```csharp
-public abstract class Component
+public abstract class ReactorComponent
 {
     // Settable so the reconciler can transfer a live RenderContext (hooks +
     // cleanups) onto a freshly-constructed instance when a Hot Reload edit
@@ -425,7 +425,7 @@ public abstract class Component
     /// Override to describe the UI. Use UseState, UseEffect, etc. from the context.
     /// Must call hooks in the same order every render.
     /// </summary>
-    public abstract Element Render();
+    public abstract ReactorElement? Render();
 
     /// <summary>
     /// Controls whether this propless component should re-render when its parent re-renders.

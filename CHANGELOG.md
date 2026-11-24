@@ -90,7 +90,9 @@ Conventions for contributors:
   (`MissingMethodException` otherwise). Two spellings a recompile catches:
   `nameof(RenderContext.UseWindow)` (CS8093, `nameof` doesn't accept extension members; use the
   string) and a doc comment `cref="RenderContext.UseWindow"` (CS1574; write
-  `cref="WinUIHooks.extension(RenderContext).UseWindow"`).
+  `cref="WinUIHooks.extension(RenderContext).UseWindow"`). `Component` now derives from the core's
+  `ReactorComponent`, which declares `ShouldUpdate()` and the shared hooks' shortcuts, so a doc
+  comment `cref="Component.UseState"` needs `cref="ReactorComponent.UseState"`.
 
 - Opt-in Markdown text selection supports double-click to select a word and
   triple-click to select a text surface, including drag extension by either unit.

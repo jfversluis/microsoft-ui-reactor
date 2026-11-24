@@ -113,7 +113,7 @@ constructs the WinUI control doesn't know which user line called
 `TextBlock("hello")`:
 
 ```csharp
-public abstract class Component
+public abstract class ReactorComponent
 {
     // Settable so the reconciler can transfer a live RenderContext (hooks +
     // cleanups) onto a freshly-constructed instance when a Hot Reload edit
@@ -125,7 +125,7 @@ public abstract class Component
     /// Override to describe the UI. Use UseState, UseEffect, etc. from the context.
     /// Must call hooks in the same order every render.
     /// </summary>
-    public abstract Element Render();
+    public abstract ReactorElement? Render();
 
     /// <summary>
     /// Controls whether this propless component should re-render when its parent re-renders.

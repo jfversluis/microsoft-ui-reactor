@@ -9428,7 +9428,7 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
     /// Hot Reload (spec 049 §6 step 3). Invokes <paramref name="action"/> once for
     /// every live <see cref="RenderContext"/> tracked by this reconciler — both
     /// function-component contexts (<see cref="ComponentNode.Context"/>) and
-    /// class-component contexts (<see cref="Component.Context"/>). The host calls
+    /// class-component contexts (<see cref="ReactorComponent.Context"/>). The host calls
     /// this at the start of a hot-reload pass to migrate hook state tree-wide
     /// before any component re-renders. The root component's context is NOT in
     /// <c>_componentNodes</c>, so the host migrates it separately.

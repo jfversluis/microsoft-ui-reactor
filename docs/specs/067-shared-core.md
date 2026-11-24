@@ -301,7 +301,14 @@ unconditional trimming root (`ReactorApp.BuiltIns.cs`).
 **Deferred on purpose.** `SourceLocation` and `ReactorPerfTrace` stay in WinUI: `SourceLocation`
 reads the source-map generator's tables, which generated code calls by their WinUI name.
 `UseObservableTree` stays too: its tracker marshals through the current thread's `DispatcherQueue`,
-which is a different seam from the UI dispatcher. `Component` is the next step.
+which is a different seam from the UI dispatcher.
+
+**Components.** `ReactorComponent` (core) holds the context, `abstract ReactorElement? Render()`,
+`ShouldUpdate()` and the shared hooks' shortcuts. WinUI's `Component : ReactorComponent`
+redeclares `public abstract override Element Render()` (a covariant override, so user overrides
+written as `Element Render()` compile unchanged) and keeps WinUI's shortcuts; `Component<TProps>`
+is unchanged. One more compile-visible edge, the same kind as `Element.Key`: a doc comment
+`cref="Component.UseState"` names an inherited member and needs `ReactorComponent.UseState`.
 
 **Tooling.**
 

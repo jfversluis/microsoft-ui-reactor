@@ -40,14 +40,18 @@ public class NeutralCoreBoundaryTests
     }
 
     /// <summary>
-    /// The renderer's element base derives from the neutral one, so the engine can diff WinUI
-    /// elements; a regression here means the engine is no longer what WinUI runs on.
+    /// The renderer's element and component bases derive from the neutral ones, so the core can
+    /// diff WinUI elements and run WinUI components; a regression here means the core is no longer
+    /// what WinUI runs on.
     /// </summary>
     [Fact]
-    public void WinUIElement_DerivesFromTheNeutralElement()
+    public void WinUIBases_DeriveFromTheNeutralOnes()
     {
         Assert.True(typeof(ReactorElement).IsAssignableFrom(typeof(Element)));
         Assert.NotEqual(typeof(Element).Assembly, typeof(ReactorElement).Assembly);
+        Assert.True(typeof(ReactorComponent).IsAssignableFrom(typeof(Component)));
+        Assert.NotEqual(typeof(Component).Assembly, typeof(ReactorComponent).Assembly);
+        Assert.Same(typeof(ReactorComponent).Assembly, typeof(RenderContext).Assembly);
     }
 
     /// <summary>

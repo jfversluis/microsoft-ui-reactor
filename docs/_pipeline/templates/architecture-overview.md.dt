@@ -53,8 +53,8 @@ reconciler is the single mutator.
 
 | Subsystem | Files | What it owns |
 |---|---|---|
-| Component shell | `src/Reactor/Core/Component.cs` | `Render()` contract, `ShouldUpdate`, hook convenience methods |
-| Hook table | `src/Reactor/Core/RenderContext.cs` | Slot table, hook implementations, UI-thread invariant |
+| Component shell | `src/Reactor.Core/ReactorComponent.cs`, `src/Reactor/Core/Component.cs` | `Render()` contract, `ShouldUpdate`, hook convenience methods (the framework-neutral base and WinUI's `Component`, spec 067) |
+| Hook table | `src/Reactor.Core/RenderContext.cs`, `src/Reactor/Core/RenderContext.WinUI.cs` | Slot table, hook implementations, UI-thread invariant; WinUI's hooks as extension members |
 | Elements | `src/Reactor/Core/Element.cs`, `ElementFactory.cs` | Immutable records, factory plumbing for ItemsRepeater |
 | Reconciler | `src/Reactor/Core/Reconciler*.cs`, `src/Reactor.Core/Engine/ChildReconciler.cs` | Mount / Update / Unmount, keyed LIS diff |
 | Pool | `src/Reactor/Core/ElementPool.cs` | `TryRent` / `Return` for poolable leaf controls |
@@ -65,7 +65,7 @@ reconciler is the single mutator.
 
 Every section below zooms into one row of that table.
 
-```csharp snippet="source:src/Reactor/Core/Component.cs#render-loop"
+```csharp snippet="source:src/Reactor.Core/ReactorComponent.cs#render-loop"
 ```
 
 `Component` is the surface — a single `abstract Element Render()` plus
@@ -173,7 +173,7 @@ roughly corresponds to one box on the diagram above. The
 attribution side; the [devtools-internals](devtools-internals.md) page
 covers the overlay rendering.
 
-```csharp snippet="source:src/Reactor/Core/Component.cs#render-loop"
+```csharp snippet="source:src/Reactor.Core/ReactorComponent.cs#render-loop"
 ```
 
 Setting a state cell turns into a `StateChange` event, the request
