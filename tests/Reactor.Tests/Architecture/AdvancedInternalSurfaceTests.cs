@@ -101,14 +101,10 @@ public class AdvancedInternalSurfaceTests
         "override: Microsoft.UI.Reactor.Core.Element::OwnPropsEqualOverride",
 
         // ── Framework-level operations ────────────────────────────────────────
-        "type: Microsoft.UI.Reactor.Core.Diagnostics.ReactorEventSource",
-        // Markdown's missing-Scope warning uses the framework's Release-visible ETW
-        // helper and DEBUG mirror; there is no public warning-emission API.
-        "type: Microsoft.UI.Reactor.Core.Diagnostics.DiagnosticLog",
-        "type: Microsoft.UI.Reactor.Core.Diagnostics.LogCategory",
+        // (ReactorEventSource, DiagnosticLog/LogCategory and the component Context moved to the
+        // neutral core in spec 067; they are pinned in ApprovedNeutralCoreSurface below.)
         "member: Microsoft.UI.Reactor.Controls.ReflectionTypeMetadataProvider::BuildInitOnlySetter",
         "member: Microsoft.UI.Reactor.Controls.Validation.ValidationContext::ClearInternal",
-        "member: Microsoft.UI.Reactor.Core.Component::get_Context",
         "member: Microsoft.UI.Reactor.ReactorApp::OpenWindowCore",
 
         // ── Performance hooks ─────────────────────────────────────────────────
@@ -152,13 +148,26 @@ public class AdvancedInternalSurfaceTests
     }
 
     /// <summary>
+    /// Spec 067: the internals Reactor.Advanced reaches in the framework-neutral core, which grants
+    /// it InternalsVisibleTo like Reactor does. Each moved there from Reactor.dll with the code that
+    /// declares it, keeping the rationale it had in <see cref="ApprovedSurface"/>.
+    /// </summary>
+    private static readonly ImmutableHashSet<string> ApprovedNeutralCoreSurface = ImmutableHashSet.Create(
+        "type: Microsoft.UI.Reactor.Core.Diagnostics.ReactorEventSource",
+        // Markdown's missing-Scope warning uses the framework's Release-visible ETW
+        // helper and DEBUG mirror; there is no public warning-emission API.
+        "type: Microsoft.UI.Reactor.Core.Diagnostics.DiagnosticLog",
+        "type: Microsoft.UI.Reactor.Core.Diagnostics.LogCategory",
+        "member: Microsoft.UI.Reactor.Core.ReactorComponent::get_Context");
+
+    /// <summary>
     /// Spec 067: the framework-neutral core grants Reactor.Advanced internals too (it mirrors
-    /// Reactor's grants, because engine internals used to live in Reactor.dll). Advanced uses
-    /// none of them, and any future use should be a reviewed decision like the list above.
+    /// Reactor's grants, because engine internals used to live in Reactor.dll). Any use beyond
+    /// <see cref="ApprovedNeutralCoreSurface"/> should be a reviewed decision like the list above.
     /// </summary>
     [Fact]
     [global::System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("SingleFile", "IL3000", Justification = "Test-only metadata scan; see the sibling test. Behaviour-neutral.")]
-    public void Advanced_TouchesNoNeutralCoreInternals()
+    public void Advanced_TouchesOnlyTheApprovedNeutralCoreInternalSurface()
     {
         var actual = ScanInternalSurface(typeof(ReactorElement).Assembly.Location, out var coreTypesIndexed, out var advancedTypesScanned);
 
@@ -166,10 +175,16 @@ public class AdvancedInternalSurfaceTests
             $"Indexed only {coreTypesIndexed} neutral core types — the scan is misconfigured and would pass vacuously.");
         Assert.True(advancedTypesScanned > 50,
             $"Scanned only {advancedTypesScanned} Reactor.Advanced types — the scan is misconfigured and would pass vacuously.");
-        Assert.True(actual.IsEmpty,
-            "Reactor.Advanced reaches Microsoft.UI.Reactor.Core internals (spec 067). Prefer the public " +
-            "API; if the internal is really required, pin it with a reviewed allowlist like " +
-            "ApprovedSurface.\n  " + string.Join("\n  ", actual));
+
+        var added = actual.Except(ApprovedNeutralCoreSurface).ToArray();
+        var removed = ApprovedNeutralCoreSurface.Except(actual).ToArray();
+        Assert.True(added.Length == 0,
+            "Reactor.Advanced reaches Microsoft.UI.Reactor.Core internals that are not in the reviewed " +
+            "allowlist (spec 067). Prefer the public API; if the internal is really required, add it to " +
+            "ApprovedNeutralCoreSurface with a rationale.\n  New: " + string.Join("\n  New: ", added));
+        Assert.True(removed.Length == 0,
+            "Reactor.Advanced no longer reaches these neutral core internals; remove them from " +
+            "ApprovedNeutralCoreSurface.\n  Gone: " + string.Join("\n  Gone: ", removed));
     }
 
     /// <summary>

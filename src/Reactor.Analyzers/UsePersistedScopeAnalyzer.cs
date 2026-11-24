@@ -21,7 +21,7 @@ namespace Microsoft.UI.Reactor.Analyzers;
 /// arguments, no explicit <c>scope:</c>) followed by a single semantic check that
 /// the call really binds to the default-scope <c>UsePersisted&lt;T&gt;(string, T)</c>
 /// hook — either on <c>RenderContext</c> (where it is declared) or on
-/// <c>Component</c> (whose <c>protected</c> wrapper delegates to it, so an
+/// <c>ReactorComponent</c> or <c>Component</c> (whose <c>protected</c> wrapper delegates to it, so an
 /// unqualified <c>UsePersisted(...)</c> inside a component's <c>Render</c> is covered).
 /// The three-argument overload, or any call on a same-named method that is not one
 /// of those hook types, is left alone (spec 060 §4.8). The paired
@@ -36,6 +36,8 @@ public sealed class UsePersistedScopeAnalyzer : DiagnosticAnalyzer
     private const string MethodName = "UsePersisted";
     private const string RenderContextTypeName = "RenderContext";
     private const string ComponentTypeName = "Component";
+    // Declares the shared hook shortcuts since spec 067 (Component derives from it).
+    private const string ReactorComponentTypeName = "ReactorComponent";
     private const string ReactorNamespacePrefix = "Microsoft.UI.Reactor";
     private const string ScopeParameterName = "scope";
     private const string KeyParameterName = "key";
@@ -119,10 +121,10 @@ public sealed class UsePersistedScopeAnalyzer : DiagnosticAnalyzer
     /// True when <paramref name="method"/> is the two-argument default-scope
     /// <c>UsePersisted&lt;T&gt;(string key, T initialValue)</c> hook — the overload that
     /// silently resolves to <c>PersistedScope.Application</c>. Recognized both on
-    /// <c>RenderContext</c> (where it is declared) and on <c>Component</c> (whose
-    /// <c>protected</c> wrapper delegates to it, <c>Component.cs:260</c>), because an
-    /// unqualified <c>UsePersisted(...)</c> in a component's <c>Render</c> binds to the
-    /// Component-declared method.
+    /// <c>RenderContext</c> (where it is declared) and on <c>ReactorComponent</c> (whose
+    /// <c>protected</c> wrapper delegates to it, <c>ReactorComponent.cs</c>; before spec 067 the
+    /// wrapper was on <c>Component</c>, still accepted), because an unqualified
+    /// <c>UsePersisted(...)</c> in a component's <c>Render</c> binds to that wrapper.
     /// </summary>
     private static bool IsDefaultScopeUsePersistedOverload(IMethodSymbol method)
     {
@@ -132,7 +134,8 @@ public sealed class UsePersistedScopeAnalyzer : DiagnosticAnalyzer
         var containingType = method.ContainingType;
         if (containingType is null)
             return false;
-        if (containingType.Name != RenderContextTypeName && containingType.Name != ComponentTypeName)
+        if (containingType.Name != RenderContextTypeName && containingType.Name != ComponentTypeName
+            && containingType.Name != ReactorComponentTypeName)
             return false;
 
         if (!IsReactorNamespace(containingType.ContainingNamespace?.ToDisplayString()))

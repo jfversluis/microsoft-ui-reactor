@@ -199,6 +199,9 @@ public static class ApiIndexGenerator
             .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly))
             .Where(m => m.IsDefined(typeof(global::System.Runtime.CompilerServices.ExtensionAttribute), false))
             .Where(IsHookExtension)
+            // Same name gate as the instance hooks: WinUI's pickers are RenderContext extension
+            // members too (spec 067) but are not hooks — they run from event handlers, not Render.
+            .Where(m => m.Name.StartsWith("Use", StringComparison.Ordinal))
             .Where(m => !IsObsolete(m))
             .Select(FormatMethod);
 

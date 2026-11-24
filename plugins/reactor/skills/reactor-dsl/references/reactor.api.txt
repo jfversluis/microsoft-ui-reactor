@@ -899,11 +899,6 @@ ReactorBinding<TElement>.ReferenceList<TTarget>(Func<TElement, IReadOnlyList<Ele
 # Call from Render() / function-component body. Same order every render —
 # never inside if/for. Use the result conditionally, not the call.
 
-RenderContext.PickFileAsync(FilePickerOptions options) → Task<PickFileResult>
-RenderContext.PickFolderAsync(FolderPickerOptions options) → Task<PickFolderResult>
-RenderContext.PickMultipleFilesAsync(FilePickerOptions options) → Task<IReadOnlyList<PickFileResult>>
-RenderContext.PickMultipleFoldersAsync(FolderPickerOptions options) → Task<IReadOnlyList<PickFolderResult>>
-RenderContext.PickSaveFileAsync(SaveFilePickerOptions options) → Task<PickFileResult>
 RenderContext.UseAnnounce() → AnnounceHandle
 RenderContext.UseBreakpoint(Window window, double minWidth) → bool
 RenderContext.UseBreakpoint(double minWidth) → bool

@@ -149,21 +149,25 @@ public sealed class ReceiverRequiredHookDocTests
     /// <summary>
     /// Extension-only hooks: declared as <c>this RenderContext</c>/<c>this
     /// Component</c> extensions and <i>not</i> mirrored by a <c>protected</c>
-    /// member on <c>Component</c>.
+    /// member on <c>Component</c> or its base <c>ReactorComponent</c>.
     /// </summary>
     static List<string> ComputeReceiverRequiredHooks(string root)
     {
+        // Spec 067: the shared hooks and their protected shortcuts (ReactorComponent) live in the
+        // neutral core, WinUI's in src/Reactor (Component).
         var src = global::System.IO.Path.Combine(root, "src", "Reactor");
+        var core = global::System.IO.Path.Combine(root, "src", "Reactor.Core");
         var extensions = new HashSet<string>(global::System.StringComparer.Ordinal);
 
-        foreach (var file in global::System.IO.Directory.EnumerateFiles(src, "*.cs", global::System.IO.SearchOption.AllDirectories))
-            foreach (Match m in ExtensionHook.Matches(global::System.IO.File.ReadAllText(file)))
-                extensions.Add(m.Groups["name"].Value);
+        foreach (var dir in new[] { src, core })
+            foreach (var file in global::System.IO.Directory.EnumerateFiles(dir, "*.cs", global::System.IO.SearchOption.AllDirectories))
+                foreach (Match m in ExtensionHook.Matches(global::System.IO.File.ReadAllText(file)))
+                    extensions.Add(m.Groups["name"].Value);
 
-        var componentPath = global::System.IO.Path.Combine(src, "Core", "Component.cs");
-        var component = global::System.IO.File.Exists(componentPath)
-            ? global::System.IO.File.ReadAllText(componentPath)
-            : "";
+        var component = string.Concat(
+            new[] { global::System.IO.Path.Combine(src, "Core", "Component.cs"), global::System.IO.Path.Combine(core, "ReactorComponent.cs") }
+                .Where(global::System.IO.File.Exists)
+                .Select(global::System.IO.File.ReadAllText));
 
         // Matching the whole `protected ... Name(` line keeps tuple return types
         // like `(T, Action<T>) UseState<T>(` in scope; a type-shaped pattern

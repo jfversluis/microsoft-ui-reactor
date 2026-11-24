@@ -23,6 +23,12 @@ public sealed class ApplicationPersistedScope : IPersistedStateScope
     /// <summary>Default capacity for the singleton process-wide scope.</summary>
     public const int DefaultCapacity = 4096;
 
+    // Static initializers run in declaration order, and Default's constructor takes s_sourceSync,
+    // so these three must stay above Default.
+    private static readonly Lock s_sourceSync = new();
+    private static Func<Action, IDisposable?>? s_memoryPressureSource;
+    private static List<WeakReference<ApplicationPersistedScope>>? s_awaitingSource;
+
     /// <summary>Process-wide singleton instance.</summary>
     public static ApplicationPersistedScope Default { get; } = new(DefaultCapacity);
 
@@ -106,10 +112,8 @@ public sealed class ApplicationPersistedScope : IPersistedStateScope
     // The pressure signal is platform-specific (WinUI: Windows.System.MemoryManager), so the
     // renderer installs it as MemoryPressureSource (spec 067). A scope constructed before that
     // (the static Default can be) is remembered weakly and registered when the source arrives.
+    // The static fields it uses are declared above Default, whose initializer runs first.
 
-    private static readonly Lock s_sourceSync = new();
-    private static Func<Action, IDisposable?>? s_memoryPressureSource;
-    private static List<WeakReference<ApplicationPersistedScope>>? s_awaitingSource;
     private IDisposable? _memPressureRegistration;
 
     /// <summary>
@@ -146,7 +150,11 @@ public sealed class ApplicationPersistedScope : IPersistedStateScope
             source = s_memoryPressureSource;
             if (source is null)
             {
-                (s_awaitingSource ??= []).Add(new WeakReference<ApplicationPersistedScope>(this));
+                var awaiting = s_awaitingSource ??= [];
+                // A host that never installs a source would otherwise grow this list forever.
+                if (awaiting.Count >= 64 && (awaiting.Count & 63) == 0)
+                    awaiting.RemoveAll(static w => !w.TryGetTarget(out _));
+                awaiting.Add(new WeakReference<ApplicationPersistedScope>(this));
                 return;
             }
         }

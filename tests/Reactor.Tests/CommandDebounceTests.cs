@@ -5,7 +5,7 @@ namespace Microsoft.UI.Reactor.Tests;
 
 /// <summary>
 /// Tests for the leading-edge <see cref="Command.DebounceMs"/> debounce realized by
-/// <see cref="RenderContext.UseCommand(Command)"/> (issue #136). Timing is driven by an
+/// <see cref="WinUIHooks.extension(RenderContext).UseCommand(Command)"/> (issue #136). Timing is driven by an
 /// injected <see cref="FakeTimeProvider"/> so the window assertions aren't wall-clock-flaky.
 /// </summary>
 [Collection("UnobservedTaskException")]

@@ -5,7 +5,7 @@ using Xunit;
 namespace Microsoft.UI.Reactor.Tests;
 
 /// <summary>
-/// Spec 036 §4.3 — <see cref="RenderContext.UseOpenWindow"/> in a unit-test
+/// Spec 036 §4.3 — <see cref="WinUIHooks.extension(RenderContext).UseOpenWindow"/> in a unit-test
 /// context (no XAML Application). The fallback path must not crash and must
 /// keep the hook slot count stable across renders so a hook-order exception
 /// never surfaces from a parameterless probe. Live multi-window behavior is

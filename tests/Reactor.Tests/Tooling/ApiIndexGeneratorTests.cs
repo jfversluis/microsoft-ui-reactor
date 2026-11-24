@@ -150,6 +150,13 @@ public sealed class ApiIndexGeneratorTests
         Assert.Contains(renderContext, l => l.StartsWith("UseState<T>(", StringComparison.Ordinal));
         Assert.Contains("PersistedScope { Window, Application }", output.Split('\n').Select(l => l.TrimEnd('\r')));
         Assert.Contains("T DefaultValue { get; }", TypeBlock(output, "Context<T>").Split('\n').Select(l => l.TrimEnd('\r')));
+
+        // The pickers are RenderContext extension members too, but not hooks: listed on the type,
+        // kept out of ## Hooks, whose header says to call every entry from Render().
+        Assert.Contains(renderContext, l => l.StartsWith("PickFileAsync(", StringComparison.Ordinal));
+        var hooks = SectionLines(output, "## Hooks", "## Theme tokens").ToList();
+        Assert.Contains(hooks, l => l.StartsWith("RenderContext.UseWindow(", StringComparison.Ordinal));
+        Assert.DoesNotContain(hooks, l => l.Contains(".Pick", StringComparison.Ordinal));
     }
 
     // Spec 067 moved Key to ReactorElement in the neutral core, which is not indexed on its own.

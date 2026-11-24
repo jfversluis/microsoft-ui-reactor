@@ -89,9 +89,9 @@ public static partial class WinUIHooks
             var handle = ctx.UseContext(Navigation.NavigationContext<TRoute>.Instance);
             if (handle is null)
                 throw new InvalidOperationException(
-                    $"ctx.UseNavigation<{typeof(TRoute).Name}>() (child mode) found no ancestor NavigationHost " +
+                    $"UseNavigation<{typeof(TRoute).Name}>() (child mode) found no ancestor NavigationHost " +
                     $"providing NavigationContext<{typeof(TRoute).Name}>. " +
-                    "Ensure a parent component calls ctx.UseNavigation<T>(initialRoute) and renders a NavigationHost.");
+                    "Ensure a parent component calls UseNavigation<T>(initialRoute) and renders a NavigationHost.");
             return handle;
         }
 

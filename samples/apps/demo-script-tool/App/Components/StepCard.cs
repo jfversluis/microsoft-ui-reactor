@@ -381,7 +381,7 @@ public sealed class StepCard : Component<StepCardProps>
     /// Action-row button factory: SVG icon (16×16) on the left, label on the
     /// right, stretched to the column's full width so the buttons line up
     /// perfectly. Driven by a <see cref="Command"/> so callers can opt into
-    /// <see cref="RenderContext.UseCommand"/>'s IsExecuting tracking — async
+    /// <see cref="WinUIHooks.extension(RenderContext).UseCommand(Command)"/>'s IsExecuting tracking — async
     /// commands wrapped via UseCommand auto-disable the button while running,
     /// preventing rapid double-clicks from re-firing the action.
     /// </summary>

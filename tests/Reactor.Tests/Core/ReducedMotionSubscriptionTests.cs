@@ -46,7 +46,7 @@ public sealed class ReducedMotionSubscriptionTests
     const string AnimationsEvent = "AnimationsEnabledChanged";
     const string ColorEvent = "ColorValuesChanged";
 
-    const string HookFile = "Core/RenderContext.cs";
+    const string HookFile = "Core/RenderContext.WinUI.cs";
     const string HostFile = "Hosting/ReactorHost.cs";
 
     static SyntaxNode Source(string file)

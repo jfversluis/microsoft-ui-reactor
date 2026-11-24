@@ -32,6 +32,8 @@ public sealed class BlockingTaskAnalyzer : DiagnosticAnalyzer
     public const string DiagnosticId = "REACTOR_THREAD_002";
 
     private const string ComponentType = "Microsoft.UI.Reactor.Core.Component";
+    // Declares the shared hook shortcuts since spec 067 (Component derives from it).
+    private const string ReactorComponentType = "Microsoft.UI.Reactor.Core.ReactorComponent";
     private const string RenderContextType = "Microsoft.UI.Reactor.Core.RenderContext";
 
     private static readonly LocalizableString Title =
@@ -339,7 +341,8 @@ public sealed class BlockingTaskAnalyzer : DiagnosticAnalyzer
                 return false;
 
             if (symbol.ContainingType is INamedTypeSymbol containing &&
-                (IsOrDerivesFrom(containing, ComponentType) || IsOrDerivesFrom(containing, RenderContextType)))
+                (IsOrDerivesFrom(containing, ComponentType) || IsOrDerivesFrom(containing, ReactorComponentType)
+                    || IsOrDerivesFrom(containing, RenderContextType)))
             {
                 return true;
             }

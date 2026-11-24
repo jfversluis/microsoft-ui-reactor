@@ -73,8 +73,9 @@ public abstract class ReactorComponent
     protected internal virtual bool ShouldUpdate() => false;
 ```
 
-`Component` is the surface — a single `abstract Element Render()` plus
-the `ShouldUpdate()` hook that lets a propless component opt out of
+`ReactorComponent`, the framework-neutral base WinUI's `Component` derives
+from, is the surface — a single `abstract Render()` (which `Component`
+narrows to return an `Element`) plus the `ShouldUpdate()` hook that lets a propless component opt out of
 parent-driven renders. Everything else is convenience wiring around the
 [`RenderContext`](hooks-internals.md) that holds the hook slot table.
 Function components (`Memo(ctx => ...)`) skip the class declaration but
