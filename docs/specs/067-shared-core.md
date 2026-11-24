@@ -412,12 +412,13 @@ shaped each item's limits below.
    effect flush, and classifies a failure from inputs the renderer supplies (boundary depth,
    propagation identity). Construction, the subtree commit, registration and the perf span's
    lifetime (which covers the subtree) stay in the renderer.
-5. **The re-render wrapper**: the re-entrancy bound and the self-triggered marking, with WinUI's
-   dispatcher choice (`OwningDispatcher ?? ReactorApp.UIDispatcher`, inline when on it or when
-   neither exists, refusals ignored) supplied by the host unchanged, and `RenderPassRequests.InvokeAs`
-   still wrapping the synchronous ancestor chain after any marshal. Routing hook *writes* through a
-   per-root scheduler is a separate contract (the shared setters marshal through the process-wide
-   one); it lands with MAUI in phase 3, and the 2a follow-up on a per-owner dispatcher moves there too.
+5. **The re-render wrapper.** Only the re-entrancy bound (`RerenderReentrancy`) moves. The rest of
+   the wrapper is WinUI's invalidation rule, which MAUI doesn't share (§11.3): marking every
+   ancestor self-triggered, WinUI's dispatcher choice (`OwningDispatcher ?? ReactorApp.UIDispatcher`,
+   inline when on it or when neither exists, refusals ignored) and `RenderPassRequests.InvokeAs`
+   around the synchronous ancestor chain all stay put. Routing hook *writes* through a per-root
+   scheduler is a separate contract (the shared setters marshal through the process-wide one); it
+   lands with MAUI in phase 3, and the 2a follow-up on a per-owner dispatcher moves there too.
 6. **The render-loop gate**: the flag mechanics both WinUI hosts implement (one pending pass,
    request-before-check ordering, deferral during a pass, reset on exception, idle). The loops stay
    per host: `ReactorHost` renders its first mount synchronously and `ReactorHostControl` doesn't.
@@ -463,8 +464,15 @@ phase 3, recorded now so they are designed rather than discovered:
    attribution). They land and pass on the unchanged code before anything moves.
 1. Contracts, `ComponentNode` and the skip gate.
 2. The render kernel and the re-render wrapper.
-3. The render-loop gate.
-4. Diff hints and memo-cell caches.
+3. ~~The render-loop gate.~~ Dropped: measured against the code, the shared part is a volatile flag
+   and a compare-exchange per host, interleaved with host-only work (the perf request note, the
+   animation ambients, a test hook between the two checks, the synchronous first render, the
+   priority choice). Extracting it adds indirection and gives MAUI nothing; MAUI's scheduler
+   contract is defined in phase 3 with the invalidation rules (§11.3).
+4. ~~Diff hints and memo-cell caches.~~ Deferred to the phase that gives MAUI virtualized grids. The
+   hints' only producer is `UseMemoCellsByIndex`, so a core hint registry without the memo-cell
+   hooks would have no second writer, and the hooks are 524 lines on the StocksGrid hot path with
+   no MAUI consumer yet. They move with their first MAUI user.
 
 **Guards.** The characterization tests, unchanged, at every step; no behavioral assertion is
 weakened to fit the extraction. Neutral unit tests drive the gate and kernel through fake elements
