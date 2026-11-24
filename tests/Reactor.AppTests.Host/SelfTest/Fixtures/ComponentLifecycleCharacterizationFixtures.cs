@@ -103,7 +103,12 @@ internal static class ComponentLifecycleCharacterization
                     }
                     var key = $"{step}/{mode}";
                     var check = $"Lifecycle_{name}_{step}_{mode}";
-                    Check(h, check, goldens.TryGetValue(key, out var expected) ? expected : null, observed);
+                    // A NativeAOT build has its own golden where it legitimately differs ("@aot").
+                    string[]? expected = !global::System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported
+                        && goldens.TryGetValue(key + "@aot", out var aotGolden)
+                        ? aotGolden
+                        : goldens.TryGetValue(key, out var golden) ? golden : null;
+                    Check(h, check, expected, observed);
                 });
             }
             finally
@@ -438,8 +443,582 @@ internal static class ComponentLifecycleCharacterization
 
     // ── Goldens, captured on the unchanged reconciler (spec 067 phase 2b, step 0) ──
 
-    private static readonly Dictionary<string, string[]> KindsGoldens = new();
-    private static readonly Dictionary<string, string[]> ErrorsGoldens = new();
-    private static readonly Dictionary<string, string[]> HotReloadGoldens = new();
-    private static readonly Dictionary<string, string[]> RerenderGoldens = new();
+    private static readonly Dictionary<string, string[]> KindsGoldens = new()
+    {
+        ["final-output/traced"] =
+        [
+            "out:root 2;props 1;hidden;always;leaf in-func;memo 0",
+        ],
+        ["final-output/untraced"] =
+        [
+            "out:root 2;props 1;hidden;always;leaf in-func;memo 0",
+        ],
+        ["mount-output/traced"] =
+        [
+            "out:root 0;props 0;propless 0;leaf in-propless;always;leaf in-func;memo 0",
+        ],
+        ["mount-output/untraced"] =
+        [
+            "out:root 0;props 0;propless 0;leaf in-propless;always;leaf in-func;memo 0",
+        ],
+        ["mount/traced"] =
+        [
+            "R:Root(0,True)",
+            "ev:ComponentRendered(FuncElement,mount)",
+            "R:Props(0)",
+            "E:Props(0)",
+            "ev:ComponentRendered(LcProps,mount)",
+            "R:Propless(0)",
+            "E:Propless(0)",
+            "ev:ComponentRendered(LcPropless,mount)",
+            "R:Leaf(in-propless)",
+            "E:Leaf(in-propless)",
+            "ev:ComponentRendered(LcLeaf,mount)",
+            "R:Always",
+            "E:Always",
+            "ev:ComponentRendered(LcAlways,mount)",
+            "R:Func(7)",
+            "E:Func",
+            "ev:ComponentRendered(FuncElement,mount)",
+            "R:Leaf(in-func)",
+            "E:Leaf(in-func)",
+            "ev:ComponentRendered(LcLeaf,mount)",
+            "R:Memo(0)",
+            "E:Memo",
+            "ev:ComponentRendered(MemoElement,mount)",
+            "E:Root(0)",
+        ],
+        ["mount/untraced"] =
+        [
+            "R:Root(0,True)",
+            "R:Props(0)",
+            "E:Props(0)",
+            "R:Propless(0)",
+            "E:Propless(0)",
+            "R:Leaf(in-propless)",
+            "E:Leaf(in-propless)",
+            "R:Always",
+            "E:Always",
+            "R:Func(7)",
+            "E:Func",
+            "R:Leaf(in-func)",
+            "E:Leaf(in-func)",
+            "R:Memo(0)",
+            "E:Memo",
+            "E:Root(0)",
+        ],
+        ["propless-self/traced"] =
+        [
+            "ev:StateChange(UseState,Int32,changed)",
+            "R:Root(2,True)",
+            "ev:ComponentRendered(FuncElement,state)",
+            "ev:ComponentRenderStart(LcPropless,self)",
+            "R:Propless(5)",
+            "ev:EffectsFlushStart(LcPropless)",
+            "C:Propless",
+            "E:Propless(5)",
+            "ev:EffectsFlushStop(LcPropless)",
+            "ev:ComponentRenderStop(LcPropless)",
+            "ev:ComponentRendered(LcPropless,state)",
+            "ev:ComponentRenderStart(LcAlways,parent)",
+            "R:Always",
+            "ev:EffectsFlushStart(LcAlways)",
+            "ev:EffectsFlushStop(LcAlways)",
+            "ev:ComponentRenderStop(LcAlways)",
+            "ev:ComponentRendered(LcAlways,parent)",
+            "ev:ComponentRenderStart(FuncElement,parent)",
+            "R:Func(7)",
+            "ev:EffectsFlushStart(FuncElement)",
+            "ev:EffectsFlushStop(FuncElement)",
+            "ev:ComponentRenderStop(FuncElement)",
+            "ev:ComponentRendered(FuncElement,parent)",
+        ],
+        ["propless-self/untraced"] =
+        [
+            "R:Root(2,True)",
+            "R:Propless(5)",
+            "C:Propless",
+            "E:Propless(5)",
+            "R:Always",
+            "R:Func(7)",
+        ],
+        ["replace-root/traced"] =
+        [
+            "C:Root",
+            "ev:ComponentRendered(FuncElement,mount)",
+            "ev:ComponentUnmount(LcProps)",
+            "C:Props",
+            "ev:ComponentUnmount(LcAlways)",
+            "ev:ComponentUnmount(FuncElement)",
+            "ev:ComponentUnmount(LcLeaf)",
+            "C:Leaf(in-func)",
+            "ev:ComponentUnmount(MemoElement)",
+            "C:Memo",
+        ],
+        ["replace-root/untraced"] =
+        [
+            "C:Root",
+            "C:Props",
+            "C:Leaf(in-func)",
+            "C:Memo",
+        ],
+        ["root-1/traced"] =
+        [
+            "ev:StateChange(UseState,Int32,changed)",
+            "R:Root(1,True)",
+            "ev:ComponentRendered(FuncElement,state)",
+            "ev:ComponentRenderStart(LcAlways,parent)",
+            "R:Always",
+            "ev:EffectsFlushStart(LcAlways)",
+            "ev:EffectsFlushStop(LcAlways)",
+            "ev:ComponentRenderStop(LcAlways)",
+            "ev:ComponentRendered(LcAlways,parent)",
+            "ev:ComponentRenderStart(FuncElement,parent)",
+            "R:Func(7)",
+            "ev:EffectsFlushStart(FuncElement)",
+            "ev:EffectsFlushStop(FuncElement)",
+            "ev:ComponentRenderStop(FuncElement)",
+            "ev:ComponentRendered(FuncElement,parent)",
+            "ev:ComponentRenderStart(MemoElement,parent)",
+            "R:Memo(1)",
+            "ev:EffectsFlushStart(MemoElement)",
+            "C:Memo",
+            "E:Memo",
+            "ev:EffectsFlushStop(MemoElement)",
+            "ev:ComponentRenderStop(MemoElement)",
+            "ev:ComponentRendered(MemoElement,props)",
+            "C:Root",
+            "E:Root(1)",
+        ],
+        ["root-1/untraced"] =
+        [
+            "R:Root(1,True)",
+            "R:Always",
+            "R:Func(7)",
+            "R:Memo(1)",
+            "C:Memo",
+            "E:Memo",
+            "C:Root",
+            "E:Root(1)",
+        ],
+        ["root-2/traced"] =
+        [
+            "ev:StateChange(UseState,Int32,changed)",
+            "R:Root(2,True)",
+            "ev:ComponentRendered(FuncElement,state)",
+            "ev:ComponentRenderStart(LcProps,parent)",
+            "R:Props(1)",
+            "ev:EffectsFlushStart(LcProps)",
+            "C:Props",
+            "E:Props(1)",
+            "ev:EffectsFlushStop(LcProps)",
+            "ev:ComponentRenderStop(LcProps)",
+            "ev:ComponentRendered(LcProps,props)",
+            "ev:ComponentRenderStart(LcAlways,parent)",
+            "R:Always",
+            "ev:EffectsFlushStart(LcAlways)",
+            "ev:EffectsFlushStop(LcAlways)",
+            "ev:ComponentRenderStop(LcAlways)",
+            "ev:ComponentRendered(LcAlways,parent)",
+            "ev:ComponentRenderStart(FuncElement,parent)",
+            "R:Func(7)",
+            "ev:EffectsFlushStart(FuncElement)",
+            "ev:EffectsFlushStop(FuncElement)",
+            "ev:ComponentRenderStop(FuncElement)",
+            "ev:ComponentRendered(FuncElement,parent)",
+            "ev:ComponentRenderStart(MemoElement,parent)",
+            "R:Memo(0)",
+            "ev:EffectsFlushStart(MemoElement)",
+            "C:Memo",
+            "E:Memo",
+            "ev:EffectsFlushStop(MemoElement)",
+            "ev:ComponentRenderStop(MemoElement)",
+            "ev:ComponentRendered(MemoElement,props)",
+            "C:Root",
+            "E:Root(2)",
+        ],
+        ["root-2/untraced"] =
+        [
+            "R:Root(2,True)",
+            "R:Props(1)",
+            "C:Props",
+            "E:Props(1)",
+            "R:Always",
+            "R:Func(7)",
+            "R:Memo(0)",
+            "C:Memo",
+            "E:Memo",
+            "C:Root",
+            "E:Root(2)",
+        ],
+        ["unmount-propless/traced"] =
+        [
+            "ev:StateChange(UseState,Boolean,changed)",
+            "R:Root(2,False)",
+            "ev:ComponentRendered(FuncElement,state)",
+            "ev:ComponentUnmount(LcPropless)",
+            "C:Propless",
+            "ev:ComponentUnmount(LcLeaf)",
+            "C:Leaf(in-propless)",
+            "ev:ComponentRenderStart(LcAlways,parent)",
+            "R:Always",
+            "ev:EffectsFlushStart(LcAlways)",
+            "ev:EffectsFlushStop(LcAlways)",
+            "ev:ComponentRenderStop(LcAlways)",
+            "ev:ComponentRendered(LcAlways,parent)",
+            "ev:ComponentRenderStart(FuncElement,parent)",
+            "R:Func(7)",
+            "ev:EffectsFlushStart(FuncElement)",
+            "ev:EffectsFlushStop(FuncElement)",
+            "ev:ComponentRenderStop(FuncElement)",
+            "ev:ComponentRendered(FuncElement,parent)",
+        ],
+        ["unmount-propless/untraced"] =
+        [
+            "R:Root(2,False)",
+            "C:Propless",
+            "C:Leaf(in-propless)",
+            "R:Always",
+            "R:Func(7)",
+        ],
+    };
+
+    private static readonly Dictionary<string, string[]> ErrorsGoldens = new()
+    {
+        ["mount-fails-output/traced"] =
+        [
+            "out:? Render error: InvalidOperationException: render failed render-mount;? Render error: InvalidOperationException: effect failed effect-mount;? Render error: InvalidOperationException: func mount failed;? Render error: InvalidOperationException: memo mount failed;fallback render failed render-mount-bounded;fallback descendant failed",
+        ],
+        ["mount-fails-output/untraced"] =
+        [
+            "out:? Render error: InvalidOperationException: render failed render-mount;? Render error: InvalidOperationException: effect failed effect-mount;? Render error: InvalidOperationException: func mount failed;? Render error: InvalidOperationException: memo mount failed;fallback render failed render-mount-bounded;fallback descendant failed",
+        ],
+        ["mount-fails/traced"] =
+        [
+            "ev:ComponentRendered(FuncElement,mount)",
+            "ev:ComponentUnmount(LcThrower)",
+            "ev:ComponentRendered(FuncElement,mount)",
+            "ev:RenderError(FuncElement,InvalidOperationException,)",
+            "log:Warning:ErrorBoundary caught render error during update[InvalidOperationException]",
+            "ev:ComponentUnmount(FuncElement)",
+            "ev:ComponentUnmount(LcThrower)",
+            "ev:ComponentUnmount(MemoElement)",
+            "ev:ComponentUnmount(FuncElement)",
+            "ev:ComponentUnmount(LcThrower)",
+            "ev:ComponentUnmount(LcThrower)",
+            "R:Thrower(render-mount-bounded)",
+            "ev:ComponentRendered(LcThrower,mount)",
+            "ev:RenderError(LcThrower,InvalidOperationException,)",
+            "log:Warning:ErrorBoundary caught render error[InvalidOperationException]",
+            "ev:ComponentUnmount(LcThrower)",
+            "ev:ComponentRendered(MemoElement,mount)",
+            "log:Error:MemoComponent Render() threw during mount[InvalidOperationException]",
+            "ev:RenderError(MemoElement,InvalidOperationException,)",
+            "ev:ComponentRendered(FuncElement,mount)",
+            "log:Error:FuncComponent Render() threw during mount[InvalidOperationException]",
+            "ev:RenderError(FuncElement,InvalidOperationException,)",
+            "R:Thrower(effect-mount)",
+            "E:Thrower(effect-mount)",
+            "ev:ComponentRendered(LcThrower,mount)",
+            "log:Error:Component Render() threw during mount: LcThrower[InvalidOperationException]",
+            "ev:RenderError(LcThrower,InvalidOperationException,)",
+            "R:Thrower(render-mount)",
+            "ev:ComponentRendered(LcThrower,mount)",
+            "log:Error:Component Render() threw during mount: LcThrower[InvalidOperationException]",
+            "ev:RenderError(LcThrower,InvalidOperationException,)",
+        ],
+        ["mount-fails/untraced"] =
+        [
+            "log:Warning:ErrorBoundary caught render error during update[InvalidOperationException]",
+            "R:Thrower(render-mount-bounded)",
+            "log:Warning:ErrorBoundary caught render error[InvalidOperationException]",
+            "log:Error:MemoComponent Render() threw during mount[InvalidOperationException]",
+            "log:Error:FuncComponent Render() threw during mount[InvalidOperationException]",
+            "R:Thrower(effect-mount)",
+            "E:Thrower(effect-mount)",
+            "log:Error:Component Render() threw during mount: LcThrower[InvalidOperationException]",
+            "R:Thrower(render-mount)",
+            "log:Error:Component Render() threw during mount: LcThrower[InvalidOperationException]",
+        ],
+        ["mount/traced"] =
+        [
+            "R:Root(0)",
+            "ev:ComponentRendered(FuncElement,mount)",
+            "R:Thrower(render-loose 0)",
+            "E:Thrower(render-loose 0)",
+            "ev:ComponentRendered(LcThrower,mount)",
+            "R:Thrower(effect-loose 0)",
+            "E:Thrower(effect-loose 0)",
+            "ev:ComponentRendered(LcThrower,mount)",
+            "R:FuncThrower",
+            "ev:ComponentRendered(FuncElement,mount)",
+            "R:MemoThrower",
+            "ev:ComponentRendered(MemoElement,mount)",
+            "R:Thrower(render-bounded 0)",
+            "E:Thrower(render-bounded 0)",
+            "ev:ComponentRendered(LcThrower,mount)",
+            "R:Thrower(effect-bounded 0)",
+            "E:Thrower(effect-bounded 0)",
+            "ev:ComponentRendered(LcThrower,mount)",
+        ],
+        ["mount/untraced"] =
+        [
+            "R:Root(0)",
+            "R:Thrower(render-loose 0)",
+            "E:Thrower(render-loose 0)",
+            "R:Thrower(effect-loose 0)",
+            "E:Thrower(effect-loose 0)",
+            "R:FuncThrower",
+            "R:MemoThrower",
+            "R:Thrower(render-bounded 0)",
+            "E:Thrower(render-bounded 0)",
+            "R:Thrower(effect-bounded 0)",
+            "E:Thrower(effect-bounded 0)",
+        ],
+        ["recover-output/traced"] =
+        [
+            "out:thrower render-loose 2;thrower effect-loose 2;func ok;memo ok;bounded 2;thrower render-bounded 2;thrower effect-bounded 2",
+        ],
+        ["recover-output/untraced"] =
+        [
+            "out:thrower render-loose 2;thrower effect-loose 2;func ok;memo ok;bounded 2;thrower render-bounded 2;thrower effect-bounded 2",
+        ],
+        ["recover/traced"] =
+        [
+            "ev:StateChange(UseState,Int32,changed)",
+            "R:Root(2)",
+            "ev:ComponentRendered(FuncElement,state)",
+            "ev:ComponentRenderStart(LcThrower,parent)",
+            "R:Thrower(render-loose 2)",
+            "ev:EffectsFlushStart(LcThrower)",
+            "E:Thrower(render-loose 2)",
+            "ev:EffectsFlushStop(LcThrower)",
+            "ev:ComponentRenderStop(LcThrower)",
+            "ev:ComponentRendered(LcThrower,props)",
+            "ev:ComponentRenderStart(LcThrower,parent)",
+            "R:Thrower(effect-loose 2)",
+            "ev:EffectsFlushStart(LcThrower)",
+            "E:Thrower(effect-loose 2)",
+            "ev:EffectsFlushStop(LcThrower)",
+            "ev:ComponentRenderStop(LcThrower)",
+            "ev:ComponentRendered(LcThrower,props)",
+            "ev:ComponentRenderStart(FuncElement,parent)",
+            "R:FuncThrower",
+            "ev:EffectsFlushStart(FuncElement)",
+            "ev:EffectsFlushStop(FuncElement)",
+            "ev:ComponentRenderStop(FuncElement)",
+            "ev:ComponentRendered(FuncElement,parent)",
+            "ev:ComponentRenderStart(MemoElement,parent)",
+            "R:MemoThrower",
+            "ev:EffectsFlushStart(MemoElement)",
+            "ev:EffectsFlushStop(MemoElement)",
+            "ev:ComponentRenderStop(MemoElement)",
+            "ev:ComponentRendered(MemoElement,props)",
+            "R:Thrower(render-bounded 2)",
+            "E:Thrower(render-bounded 2)",
+            "ev:ComponentRendered(LcThrower,mount)",
+            "R:Thrower(effect-bounded 2)",
+            "E:Thrower(effect-bounded 2)",
+            "ev:ComponentRendered(LcThrower,mount)",
+        ],
+        ["recover/untraced"] =
+        [
+            "R:Root(2)",
+            "R:Thrower(render-loose 2)",
+            "E:Thrower(render-loose 2)",
+            "R:Thrower(effect-loose 2)",
+            "E:Thrower(effect-loose 2)",
+            "R:FuncThrower",
+            "R:MemoThrower",
+            "R:Thrower(render-bounded 2)",
+            "E:Thrower(render-bounded 2)",
+            "R:Thrower(effect-bounded 2)",
+            "E:Thrower(effect-bounded 2)",
+        ],
+        ["update-fails-output/traced"] =
+        [
+            "out:? Render error: InvalidOperationException: render failed render-loose 1;? Render error: InvalidOperationException: effect failed effect-loose 1;? Render error: InvalidOperationException: func failed;? Render error: InvalidOperationException: memo failed;fallback render failed render-bounded 1;fallback effect failed effect-bounded 1",
+        ],
+        ["update-fails-output/untraced"] =
+        [
+            "out:? Render error: InvalidOperationException: render failed render-loose 1;? Render error: InvalidOperationException: effect failed effect-loose 1;? Render error: InvalidOperationException: func failed;? Render error: InvalidOperationException: memo failed;fallback render failed render-bounded 1;fallback effect failed effect-bounded 1",
+        ],
+        ["update-fails/traced"] =
+        [
+            "ev:StateChange(UseState,Int32,changed)",
+            "R:Root(1)",
+            "ev:ComponentRendered(FuncElement,state)",
+            "ev:ComponentRenderStart(LcThrower,parent)",
+            "R:Thrower(render-loose 1)",
+            "ev:ComponentRendered(LcThrower,props)",
+            "log:Error:Component Render() threw: LcThrower[InvalidOperationException]",
+            "ev:RenderError(LcThrower,InvalidOperationException,)",
+            "ev:ComponentRenderStop(LcThrower)",
+            "ev:ComponentRenderStart(LcThrower,parent)",
+            "R:Thrower(effect-loose 1)",
+            "ev:EffectsFlushStart(LcThrower)",
+            "E:Thrower(effect-loose 1)",
+            "ev:EffectsFlushStop(LcThrower)",
+            "ev:ComponentRendered(LcThrower,props)",
+            "log:Error:Component Render() threw: LcThrower[InvalidOperationException]",
+            "ev:RenderError(LcThrower,InvalidOperationException,)",
+            "ev:ComponentRenderStop(LcThrower)",
+            "ev:ComponentRenderStart(FuncElement,parent)",
+            "R:FuncThrower",
+            "ev:ComponentRendered(FuncElement,parent)",
+            "log:Error:Component Render() threw: FuncElement[InvalidOperationException]",
+            "ev:RenderError(FuncElement,InvalidOperationException,)",
+            "ev:ComponentRenderStop(FuncElement)",
+            "ev:ComponentRenderStart(MemoElement,parent)",
+            "R:MemoThrower",
+            "ev:ComponentRendered(MemoElement,props)",
+            "log:Error:Component Render() threw: MemoElement[InvalidOperationException]",
+            "ev:RenderError(MemoElement,InvalidOperationException,)",
+            "ev:ComponentRenderStop(MemoElement)",
+            "ev:ComponentRenderStart(LcThrower,parent)",
+            "R:Thrower(render-bounded 1)",
+            "ev:ComponentRendered(LcThrower,props)",
+            "ev:RenderError(LcThrower,InvalidOperationException,)",
+            "log:Warning:ErrorBoundary caught render error during update[InvalidOperationException]",
+            "ev:ComponentUnmount(LcThrower)",
+            "ev:ComponentRenderStart(LcThrower,parent)",
+            "R:Thrower(effect-bounded 1)",
+            "ev:EffectsFlushStart(LcThrower)",
+            "E:Thrower(effect-bounded 1)",
+            "ev:EffectsFlushStop(LcThrower)",
+            "ev:ComponentRendered(LcThrower,props)",
+            "ev:RenderError(LcThrower,InvalidOperationException,)",
+            "log:Warning:ErrorBoundary caught render error during update[InvalidOperationException]",
+            "ev:ComponentUnmount(LcThrower)",
+        ],
+        ["update-fails/untraced"] =
+        [
+            "R:Root(1)",
+            "R:Thrower(render-loose 1)",
+            "log:Error:Component Render() threw: LcThrower[InvalidOperationException]",
+            "R:Thrower(effect-loose 1)",
+            "E:Thrower(effect-loose 1)",
+            "log:Error:Component Render() threw: LcThrower[InvalidOperationException]",
+            "R:FuncThrower",
+            "log:Error:Component Render() threw: FuncElement[InvalidOperationException]",
+            "R:MemoThrower",
+            "log:Error:Component Render() threw: MemoElement[InvalidOperationException]",
+            "R:Thrower(render-bounded 1)",
+            "log:Warning:ErrorBoundary caught render error during update[InvalidOperationException]",
+            "R:Thrower(effect-bounded 1)",
+            "E:Thrower(effect-bounded 1)",
+            "log:Warning:ErrorBoundary caught render error during update[InvalidOperationException]",
+        ],
+    };
+
+    private static readonly Dictionary<string, string[]> HotReloadGoldens = new()
+    {
+        ["hot-reload-output/traced"] =
+        [
+            "out:shape 1;leaf sibling",
+        ],
+        ["hot-reload-output/untraced"] =
+        [
+            "out:shape 1;leaf sibling",
+        ],
+        ["hot-reload/traced"] =
+        [
+            "ev:ComponentRendered(FuncElement,hotReload)",
+            "ev:ComponentRenderStart(LcReshaped,self)",
+            "R:Reshaped(1)",
+            "ev:ComponentRendered(LcReshaped,hotReload)",
+            "log:Warning:Hot reload: hook order/type changed in child component ? resetting state and re-rendering: LcReshaped[HookOrderException]",
+            "C:Reshaped0",
+            "R:Reshaped(1)",
+            "ev:EffectsFlushStart(LcReshaped)",
+            "E:Reshaped1",
+            "ev:EffectsFlushStop(LcReshaped)",
+            "ev:ComponentRenderStop(LcReshaped)",
+            "ev:ComponentRendered(LcReshaped,hotReload)",
+            "ev:ComponentRenderStart(LcLeaf,self)",
+            "R:Leaf(sibling)",
+            "ev:EffectsFlushStart(LcLeaf)",
+            "ev:EffectsFlushStop(LcLeaf)",
+            "ev:ComponentRenderStop(LcLeaf)",
+            "ev:ComponentRendered(LcLeaf,hotReload)",
+        ],
+        ["hot-reload/untraced"] =
+        [
+            "R:Reshaped(1)",
+            "log:Warning:Hot reload: hook order/type changed in child component ? resetting state and re-rendering: LcReshaped[HookOrderException]",
+            "C:Reshaped0",
+            "R:Reshaped(1)",
+            "E:Reshaped1",
+            "R:Leaf(sibling)",
+        ],
+        ["mount/traced"] =
+        [
+            "ev:ComponentRendered(FuncElement,mount)",
+            "R:Reshaped(0)",
+            "E:Reshaped0",
+            "ev:ComponentRendered(LcReshaped,mount)",
+            "R:Leaf(sibling)",
+            "E:Leaf(sibling)",
+            "ev:ComponentRendered(LcLeaf,mount)",
+        ],
+        ["mount/untraced"] =
+        [
+            "R:Reshaped(0)",
+            "E:Reshaped0",
+            "R:Leaf(sibling)",
+            "E:Leaf(sibling)",
+        ],
+    };
+
+    private static readonly Dictionary<string, string[]> RerenderGoldens = new()
+    {
+        ["batched-on-ui/traced"] =
+        [
+            "ev:StateChange(UseState,Int32,changed)",
+            "ev:StateChange(UseState,Int32,changed)",
+            "R:Root(3,ui)",
+            "ev:ComponentRendered(FuncElement,state)",
+            "ev:ComponentRenderStart(FuncElement,self)",
+            "R:Child(3,ui)",
+            "ev:EffectsFlushStart(FuncElement)",
+            "ev:EffectsFlushStop(FuncElement)",
+            "ev:ComponentRenderStop(FuncElement)",
+            "ev:ComponentRendered(FuncElement,state)",
+        ],
+        ["batched-on-ui/untraced"] =
+        [
+            "R:Root(3,ui)",
+            "R:Child(3,ui)",
+        ],
+        ["child-from-worker/traced"] =
+        [
+            "ev:StateChange(UseState,Int32,changed)",
+            "R:Root(0,ui)",
+            "ev:ComponentRendered(FuncElement,state)",
+            "ev:ComponentRenderStart(FuncElement,self)",
+            "R:Child(1,ui)",
+            "ev:EffectsFlushStart(FuncElement)",
+            "ev:EffectsFlushStop(FuncElement)",
+            "ev:ComponentRenderStop(FuncElement)",
+            "ev:ComponentRendered(FuncElement,state)",
+        ],
+        ["child-from-worker/untraced"] =
+        [
+            "R:Root(0,ui)",
+            "R:Child(1,ui)",
+        ],
+        ["mount/traced"] =
+        [
+            "R:Root(0,ui)",
+            "ev:ComponentRendered(FuncElement,mount)",
+            "R:Child(0,ui)",
+            "ev:ComponentRendered(FuncElement,mount)",
+        ],
+        ["mount/untraced"] =
+        [
+            "R:Root(0,ui)",
+            "R:Child(0,ui)",
+        ],
+    };
+
 }
