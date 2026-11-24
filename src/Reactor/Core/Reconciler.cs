@@ -3956,54 +3956,18 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
 
         if (!selfTriggered)
         {
-            bool skipRender = false;
-
-            if (node.Component is not null && newEl is ComponentElement newCompEl)
+            // Class (ShouldUpdate) and memo (dependencies) gates, in the core (spec 067 §11.2).
+            var gate = ComponentGate.Evaluate(node, newEl, _contextScope);
+            bool skipRender = gate.Skip;
+            if (gate.Gated)
             {
-                // Class component memo check
-                var oldProps = node.PreviousProps;
-                var newProps = newCompEl.Props;
-
-                bool propsChanged;
-                if (node.Component is IPropsReceiver)
-                {
-                    // Component<TProps>: delegate to ShouldUpdate(oldProps, newProps)
-                    propsChanged = ShouldUpdateWithProps(node.Component, oldProps, newProps);
-                }
-                else
-                {
-                    // Propless Component: delegate to ShouldUpdate()
-                    propsChanged = node.Component.ShouldUpdate();
-                }
-
-                bool contextChanged = HasConsumedContextChanged(node);
-                skipRender = !propsChanged && !contextChanged;
                 memoGated = true;
-                // Props components: a props change wins, else it was the context.
-                // Propless components (ShouldUpdate() true or a context change): the
-                // context wins, else nothing could skip it.
-                memoReason = node.Component is IPropsReceiver
-                    ? propsChanged
-                        ? Diagnostics.ComponentRenderTrace.Reasons.Props
-                        : Diagnostics.ComponentRenderTrace.Reasons.Context
-                    : contextChanged
-                        ? Diagnostics.ComponentRenderTrace.Reasons.Context
-                        : Diagnostics.ComponentRenderTrace.Reasons.Parent;
-            }
-            else if (node.Context is not null && newEl is MemoElement newMemo)
-            {
-                // MemoElement memo check
-                var oldDeps = node.MemoDependencies;
-                var newDeps = newMemo.Dependencies;
-                bool depsChanged = oldDeps is null && newDeps is null
-                    ? false // both null = render once, never re-render from parent
-                    : oldDeps is null || newDeps is null || !RenderContext.DepsEqual(oldDeps, newDeps);
-                bool contextChanged = HasConsumedContextChanged(node);
-                skipRender = !depsChanged && !contextChanged;
-                memoGated = true;
-                memoReason = depsChanged
-                    ? Diagnostics.ComponentRenderTrace.Reasons.Props
-                    : Diagnostics.ComponentRenderTrace.Reasons.Context;
+                memoReason = gate.Reason switch
+                {
+                    ComponentGateReason.Props => Diagnostics.ComponentRenderTrace.Reasons.Props,
+                    ComponentGateReason.Context => Diagnostics.ComponentRenderTrace.Reasons.Context,
+                    _ => Diagnostics.ComponentRenderTrace.Reasons.Parent,
+                };
             }
             else if (newEl is FuncElement
                 && ((traceEnabled = Diagnostics.ComponentRenderTrace.IsEnabled).Value
@@ -4024,22 +3988,10 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
                 // Still update the element reference (modifiers may have changed on the ComponentElement itself)
                 node.Element = newEl;
 
-                // Stale-delegate guard (issue #151): even though we skip re-rendering,
-                // refresh the live Props on the instance so any handler that reads
-                // Props.X at *dispatch* time invokes the CURRENT delegate rather than the
-                // one captured when the child last rendered. This is what makes an
-                // always-equal callbacks slot (Callbacks<T>) safe: data fields drive the
-                // memo decision, but the latest callbacks are still reachable off Props.
-                // Mirrors the leaf-level Tag-trampoline refresh (Element.cs HasCallbacks).
-                // The skipped data fields are equal by construction, so refreshing them is
-                // a no-op for the rendered subtree; only the excluded slots (callbacks)
-                // actually change. PreviousProps is kept in sync as the next baseline.
-                if (node.Component is IPropsReceiver skipReceiver
-                    && newEl is ComponentElement skipCompEl && skipCompEl.Props is not null)
-                {
-                    skipReceiver.SetProps(skipCompEl.Props);
-                    node.PreviousProps = skipCompEl.Props;
-                }
+                // Stale-delegate guard (issue #151): refresh the live props so a handler reading
+                // Props.X at dispatch time gets the current delegate. Mirrors the leaf-level
+                // Tag-trampoline refresh (Element.cs HasCallbacks).
+                ComponentGate.RefreshSkippedProps(node, newEl);
                 return;
             }
         }
@@ -4302,18 +4254,7 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
     /// Checks whether any context consumed by a component has changed since the last render.
     /// </summary>
     private bool HasConsumedContextChanged(ComponentNode node)
-    {
-        var renderCtx = node.Component?.Context ?? node.Context;
-        if (renderCtx is null) return false;
-
-        foreach (var ctxHook in renderCtx.ContextHooks)
-        {
-            var currentValue = _contextScope.Read(ctxHook.Context);
-            if (!Equals(currentValue, ctxHook.LastValue))
-                return true;
-        }
-        return false;
-    }
+        => ComponentGate.HasConsumedContextChanged(node, _contextScope);
 
     internal bool HasConsumedContextChangedInSubtree(UIElement control)
     {
@@ -4345,18 +4286,6 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
 
     internal bool ShouldDeclineSkip(UIElement control)
         => HasActiveContextValues && HasConsumedContextChangedInSubtree(control);
-
-    /// <summary>
-    /// Calls ShouldUpdate(oldProps, newProps) on a Component&lt;TProps&gt; via interface dispatch.
-    /// </summary>
-    private static bool ShouldUpdateWithProps(Component component, object? oldProps, object? newProps)
-    {
-        if (component is IPropsComparable comparable)
-            return comparable.CompareProps(oldProps, newProps);
-
-        // Fallback: always re-render
-        return true;
-    }
 
     // ════════════════════════════════════════════════════════════════════
     //  Children reconciliation (keyed LIS + positional)
@@ -9207,43 +9136,19 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
     // ── Enum conversions removed — Reactor now uses WinUI types directly ──
 
     /// <summary>
-    /// Tracks the state of a mounted component in the tree.
+    /// The core's <see cref="Core.ComponentNode"/> (spec 067) seen through WinUI's types: the
+    /// component, its element and its rendered output are WinUI's <see cref="Core.Component"/> and
+    /// <see cref="Core.Element"/>, which the reconciler mounts. Found through the component's anchor
+    /// (<c>_componentNodes</c>).
     /// </summary>
-    internal class ComponentNode
+    internal class ComponentNode : Core.ComponentNode
     {
         /// <summary>The class-based Component instance (null for function components).</summary>
-        public Component? Component { get; set; }
-        /// <summary>The RenderContext for function components (null for class components).</summary>
-        public RenderContext? Context { get; set; }
+        public new Component? Component { get => (Component?)base.Component; set => base.Component = value; }
         /// <summary>The element tree output from the last Render() call.</summary>
-        public Element? RenderedElement { get; set; }
+        public new Element? RenderedElement { get => (Element?)base.RenderedElement; set => base.RenderedElement = value; }
         /// <summary>The ComponentElement or FuncElement that created this node.</summary>
-        public Element? Element { get; set; }
-        /// <summary>Previous props for memo comparison (class components only).</summary>
-        public object? PreviousProps { get; set; }
-        /// <summary>Dependencies from the last MemoElement render (null = render once).</summary>
-        public object?[]? MemoDependencies { get; set; }
-        /// <summary>Set to true when a self-triggered re-render is queued (UseState setter).
-        /// Accessed from background threads (UseState callbacks) — use volatile field.</summary>
-        private volatile bool _selfTriggered;
-        public bool SelfTriggered { get => _selfTriggered; set => _selfTriggered = value; }
-        /// <summary>
-        /// <c>componentId</c> of this node in <c>ReactorEventSource.ComponentRendered</c> and the
-        /// <c>Microsoft-UI-Reactor-Perf</c> events; 0 until first assigned
-        /// (<see cref="EnsureDiagnosticId"/>). Lives on the node's <see cref="RenderContext"/>,
-        /// so a state change the component makes reports the same id.
-        /// </summary>
-        public long DiagnosticId => (Component?.Context ?? Context)?.DiagnosticId ?? 0;
-
-        /// <summary><see cref="DiagnosticId"/>, assigning it on first use.</summary>
-        public long EnsureDiagnosticId()
-            => (Component?.Context ?? Context)?.EnsureDiagnosticId() ?? 0;
-
-        /// <summary>
-        /// A function or memo component's name on the perf spans, resolved on its first traced
-        /// render (see <see cref="PerfComponentName"/>); null until then and for class components.
-        /// </summary>
-        public string? PerfName { get; set; }
+        public new Element? Element { get => (Element?)base.Element; set => base.Element = value; }
     }
 
     /// <summary>
@@ -9427,7 +9332,7 @@ public sealed partial class Reconciler : IDisposable, IDirtyPathProbe<UIElement>
     /// <summary>
     /// Hot Reload (spec 049 §6 step 3). Invokes <paramref name="action"/> once for
     /// every live <see cref="RenderContext"/> tracked by this reconciler — both
-    /// function-component contexts (<see cref="ComponentNode.Context"/>) and
+    /// function-component contexts (<see cref="Core.ComponentNode.Context"/>) and
     /// class-component contexts (<see cref="ReactorComponent.Context"/>). The host calls
     /// this at the start of a hot-reload pass to migrate hook state tree-wide
     /// before any component re-renders. The root component's context is NOT in
