@@ -155,12 +155,12 @@ public sealed class StaticInfoTests : IDisposable
         {
             var box = ctx.UseElementRef<Microsoft.UI.Xaml.Controls.TextBlock>(); // hook:box
             var size = ctx.UseWindowSize(); // hook:size
-            var (n, _) = ctx.UseState(0); // hook:after
+            var (n, _) = ctx.UseState(0); // hook:afterwindow
             return TextBlock($"{n} {size.Width} {box}");
         }, 2);
 
         Assert.Equal(
-            $"0:box@{LineOf("hook:box")};1:size@{LineOf("hook:size")};?:n@{LineOf("hook:after")}",
+            $"0:box@{LineOf("hook:box")};1:size@{LineOf("hook:size")};?:n@{LineOf("hook:afterwindow")}",
             ReactorSourceMap.GetRenderFunctionHooks(memo.CallSite!.Value));
     }
 
@@ -171,13 +171,13 @@ public sealed class StaticInfoTests : IDisposable
     {
         var memo = Memo(ctx =>
         {
-            var c = new CounterModel().UseCount(ctx); // hook:c
-            var (n, _) = ctx.UseState(0); // hook:after-c
+            var c = new CounterModel().UseCount(ctx); // hook:modelcount
+            var (n, _) = ctx.UseState(0); // hook:aftermodel
             return TextBlock($"{c} {n}");
         }, 3);
 
         Assert.Equal(
-            $"0:c@{LineOf("hook:c")};1:n@{LineOf("hook:after-c")}",
+            $"0:c@{LineOf("hook:modelcount")};1:n@{LineOf("hook:aftermodel")}",
             ReactorSourceMap.GetRenderFunctionHooks(memo.CallSite!.Value));
     }
 
