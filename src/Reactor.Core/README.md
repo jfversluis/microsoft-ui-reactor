@@ -8,6 +8,9 @@ framework. It holds:
 - components (`ReactorComponent`) and the hook table (`RenderContext`) with the framework-neutral
   hooks (`UseState`, `UseEffect`, `UseMemo`, `UseContext`, `UsePersisted`, …), plus `Context<T>`,
   `Ref<T>` and the persisted-state scopes;
+- the component runtime every renderer shares: whether a component re-renders when its parent does
+  (`ShouldUpdate`, memo dependencies, consumed context), and how one render runs and fails (effects,
+  the hot-reload hook-order retry, error boundaries versus the in-tree fallback);
 - the `Microsoft-UI-Reactor` ETW event source.
 
 The rest of the engine moves here in later stages of spec 067.

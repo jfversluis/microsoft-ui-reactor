@@ -96,6 +96,14 @@ Conventions for contributors:
   `ReactorComponent`, which declares `ShouldUpdate()` and the shared hooks' shortcuts, so a doc
   comment `cref="Component.UseState"` needs `cref="ReactorComponent.UseState"`.
 
+- **The component runtime moved into `Microsoft.UI.Reactor.Core` too (spec 067, phase 2b):**
+  - the skip gate (`ShouldUpdate`, memo dependencies, consumed context);
+  - the render kernel (effects, the hot-reload hook-order retry, error routing);
+  - the re-render re-entrancy cap.
+
+  No public API or behavior changes. Selftests pin the component lifecycle's observable sequence
+  (renders, effects, cleanups, logs, events and output) on every tier, captured before the move.
+
 - Opt-in Markdown text selection supports double-click to select a word and
   triple-click to select a text surface, including drag extension by either unit.
   Selection drags from inline links and release-mode custom link buttons do not
