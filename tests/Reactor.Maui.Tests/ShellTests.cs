@@ -958,12 +958,15 @@ public class ShellTests
         };
 
         Assert.True(h.Shell.SendBackButtonPressed());
-        // Nothing waits on the platform: the model moved at once, and the navigator pops as its own.
-        Assert.Equal("a1", h.Lab.A.CurrentRoute);
+        // No platform pop is preflighted: the navigator pops as its own operation, and the model
+        // follows once Shell has popped.
         Assert.False(h.Navigator("a").IsUserBackPending);
+        Assert.False(h.Navigator("a").IsIdle);
         h.Settle();
+        Assert.Equal("a2", h.Lab.A.CurrentRoute);
         deferral!.Complete();
         h.Settle();
+        Assert.Equal("a1", h.Lab.A.CurrentRoute);
 
         Assert.Equal("a0,a1", h.Pages("a"));
         Assert.Equal(
@@ -998,6 +1001,184 @@ public class ShellTests
         Assert.Equal("a1", h.Lab.A.CurrentRoute);
         Assert.Equal("a0,a1", h.Pages("a"));
         Assert.Equal(0, navigations);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AndroidBackKey_WhosePopAnotherHandlerCancels_LeavesTheModel(bool throughADeferral)
+    {
+        var h = new Harness();
+        h.Shell.BackKeyIsModelBack = true;
+        h.Lab.A.Navigate("a1");
+        h.Settle();
+        h.Lab.Log.Entries.Clear();
+        var offers = 0;
+        var refuse = true;
+        ShellNavigatingEventArgs? held = null;
+        ShellNavigatingDeferral? deferral = null;
+        h.Shell.Navigating += (_, e) =>
+        {
+            if (!refuse || e.Source is not (ShellNavigationSource.Pop or ShellNavigationSource.PopToRoot)) return;
+            offers++;
+            if (!throughADeferral) e.Cancel();
+            else if (deferral is null)
+            {
+                held = e;
+                deferral = e.GetDeferral();
+            }
+        };
+
+        Assert.True(h.Shell.SendBackButtonPressed());
+        h.Settle();
+        if (throughADeferral)
+        {
+            // The handler cancels while it holds the pop.
+            Assert.Equal("a1", h.Lab.A.CurrentRoute);
+            held!.Cancel();
+            deferral!.Complete();
+        }
+        h.Settle();
+
+        Assert.Equal(1, offers);
+        Assert.Equal("a1", h.Lab.A.CurrentRoute);
+        Assert.Equal("a0,a1", h.Pages("a"));
+        Assert.True(h.Navigator("a").IsIdle);
+        Assert.Equal("a1:navigatingFrom:Pop a0:navigatingTo:Pop", string.Join(" ", h.Lab.Log.Entries));
+        Assert.Empty(h.Errors);
+
+        // Nothing is stuck: the key works once nothing cancels it.
+        refuse = false;
+        Assert.True(h.Shell.SendBackButtonPressed());
+        h.Settle();
+        Assert.Equal("a0", h.Lab.A.CurrentRoute);
+        Assert.Equal("a0", h.Pages("a"));
+    }
+
+    [Theory]
+    [InlineData(ShellNavigationSource.Push, false)]
+    [InlineData(ShellNavigationSource.Push, true)]
+    [InlineData(ShellNavigationSource.Pop, false)]
+    public void AnOwnOperationAnotherHandlerCancels_IsNotRetried_UntilTheAppNavigatesAgain(ShellNavigationSource refused, bool throughADeferral)
+    {
+        var h = new Harness();
+        if (refused == ShellNavigationSource.Pop)
+        {
+            h.Lab.A.Navigate("a1");
+            h.Settle();
+        }
+        var refuse = true;
+        var offers = 0;
+        ShellNavigatingEventArgs? held = null;
+        ShellNavigatingDeferral? deferral = null;
+        h.Shell.Navigating += (_, e) =>
+        {
+            var source = e.Source is ShellNavigationSource.PopToRoot ? ShellNavigationSource.Pop : e.Source;
+            if (!refuse || source != refused) return;
+            offers++;
+            if (!throughADeferral) e.Cancel();
+            else if (deferral is null)
+            {
+                held = e;
+                deferral = e.GetDeferral();
+            }
+        };
+
+        if (refused == ShellNavigationSource.Push) h.Lab.A.Navigate("a1");
+        else h.Lab.A.GoBack();
+        h.Settle();
+        if (throughADeferral)
+        {
+            held!.Cancel();
+            deferral!.Complete();
+            h.Settle();
+        }
+
+        Assert.Equal(1, offers);
+        Assert.Equal(refused == ShellNavigationSource.Push ? "a0" : "a0,a1", h.Pages("a"));
+        Assert.True(h.Navigator("a").IsIdle);
+        Assert.True(h.Navigator("a").IsHolding);
+        Assert.Empty(h.Errors);
+
+        // A new declaration is tried again.
+        refuse = false;
+        h.Lab.A.Navigate("a2");
+        h.Settle();
+        Assert.Equal(refused == ShellNavigationSource.Push ? "a0,a1,a2" : "a0,a2", h.Pages("a"));
+        Assert.False(h.Navigator("a").IsHolding);
+        Assert.Empty(h.Errors);
+    }
+
+    [Fact]
+    public void ASwappedHost_TakesOverTheSection_WithOnePopToRoot()
+    {
+        var useB = false;
+        var h = new Harness(lab => lab.Build = l => Shell(l.Tab, l.OnSelected, TabBar(
+            ShellTab("a", "A", useB ? l.Host(l.B).WithKey("host-b") : l.Host(l.A)))));
+        h.Lab.A.Navigate("a1");
+        h.Lab.A.Navigate("a2");
+        h.Settle();
+        var old = h.Navigator("a");
+        var popsToRoot = 0;
+        ShellNavigatingDeferral? deferral = null;
+        h.Shell.Navigating += (_, e) =>
+        {
+            if (e.Source is not (ShellNavigationSource.PopToRoot or ShellNavigationSource.Pop)) return;
+            popsToRoot++;
+            deferral ??= e.GetDeferral();
+        };
+
+        useB = true;
+        h.RenderAgain();
+        // The replaced host doesn't pop; the new one does, once.
+        Assert.True(old.IsIdle);
+        var replacement = h.Navigator("a");
+        Assert.NotSame(old, replacement);
+        Assert.False(replacement.IsIdle);
+        Assert.Equal(1, popsToRoot);
+
+        deferral!.Complete();
+        h.Settle();
+        var section = h.Section("a");
+        Assert.Single(section.Stack);
+        Assert.Equal("b0", ((Page)section.CurrentItem.Content).Title);
+        Assert.Equal(1, popsToRoot);
+        Assert.Empty(h.Errors);
+    }
+
+    [Fact]
+    public void ASwappedHost_WaitsForTheOneItReplaces()
+    {
+        var useB = false;
+        var h = new Harness(lab => lab.Build = l => Shell(l.Tab, l.OnSelected, TabBar(
+            ShellTab("a", "A", useB ? l.Host(l.B).WithKey("host-b") : l.Host(l.A)))));
+        h.Lab.A.Navigate("a1");
+        h.Settle();
+        ShellNavigatingDeferral? deferral = null;
+        var sources = new List<ShellNavigationSource>();
+        h.Shell.Navigating += (_, e) =>
+        {
+            sources.Add(e.Source);
+            if (e.Source == ShellNavigationSource.Push) deferral ??= e.GetDeferral();
+        };
+        h.Lab.A.Navigate("a2");
+        h.Settle();
+        var old = h.Navigator("a");
+        Assert.False(old.IsIdle);
+
+        useB = true;
+        h.RenderAgain();
+        // The old host's push is still running: the new host starts nothing until it ends.
+        Assert.Equal([ShellNavigationSource.Push], sources);
+
+        deferral!.Complete();
+        h.Settle();
+        Assert.True(old.IsIdle);
+        Assert.Equal([ShellNavigationSource.Push, ShellNavigationSource.PopToRoot], sources);
+        var section = h.Section("a");
+        Assert.Single(section.Stack);
+        Assert.Equal("b0", ((Page)section.CurrentItem.Content).Title);
+        Assert.Empty(h.Errors);
     }
 
     [Fact]

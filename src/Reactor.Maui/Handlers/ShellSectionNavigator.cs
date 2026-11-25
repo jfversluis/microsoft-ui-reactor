@@ -40,6 +40,13 @@ internal sealed class ShellSectionNavigator : INativeStack
     private bool _modalsDismissed;
     private OwnOperation? _own;
     private UserBack? _userBack;
+    private KeyBack? _keyBack;
+    private ShellSectionNavigator? _predecessor;
+
+    // A declaration whose operation Shell refused (another Navigating handler cancelled it): not
+    // retried until the app declares something else.
+    private IReadOnlyList<Page>? _refusedPages;
+    private IReadOnlyList<Page>? _refusedModals;
     private ReactorShell? _lingeringIn;
 
     // The window's modal stack is shared; this navigator manages only the modals it presented.
@@ -55,14 +62,19 @@ internal sealed class ShellSectionNavigator : INativeStack
 
     public ShellSection? Section => _section;
 
-    public bool IsIdle => !_running && _userBack is null;
+    public bool IsIdle => !_running && _userBack is null && _keyBack is null;
 
     public event Action? BecameIdle;
 
     public bool HasPendingPlatformPops => false;
 
-    /// <summary>A page change waits while one of this stack's modals is shown: Shell would dismiss it.</summary>
-    public bool IsHolding => _holding;
+    /// <summary>
+    /// A page change waits while one of this stack's modals is shown (Shell would dismiss it), or the
+    /// declaration was refused by another <c>Navigating</c> handler.
+    /// </summary>
+    public bool IsHolding => _holding || IsRefused;
+
+    private bool IsRefused => _refusedPages is not null && ReferenceEquals(_pages, _refusedPages) && ReferenceEquals(_modals, _refusedModals);
 
     public bool? LastOperationAnimated { get; private set; }
 
@@ -71,9 +83,18 @@ internal sealed class ShellSectionNavigator : INativeStack
 
     // ── Attaching ────────────────────────────────────────────────────────────
 
-    /// <summary>Makes this the stack of <paramref name="section"/>, whose content is <paramref name="content"/>.</summary>
-    public void Attach(ShellSection section, ShellContent content)
+    /// <summary>
+    /// Makes this the stack of <paramref name="section"/>, whose content is <paramref name="content"/>.
+    /// A <paramref name="predecessor"/> still running an operation on the section (the host this one
+    /// replaced) finishes first, so their operations never overlap.
+    /// </summary>
+    public void Attach(ShellSection section, ShellContent content, ShellSectionNavigator? predecessor = null)
     {
+        if (predecessor is { IsIdle: false } && !ReferenceEquals(predecessor, this) && _predecessor is null)
+        {
+            _predecessor = predecessor;
+            predecessor.BecameIdle += OnPredecessorIdle;
+        }
         if (ReferenceEquals(_section, section) && ReferenceEquals(_content, content) && !_detached) return;
         if (_section is { } previous && ReferenceEquals(ShellNatives.GetNavigator(previous), this)) ShellNatives.SetNavigator(previous, null);
         _section = section;
@@ -99,6 +120,14 @@ internal sealed class ShellSectionNavigator : INativeStack
         Run();
     }
 
+    private void OnPredecessorIdle()
+    {
+        if (_predecessor is not { } predecessor) return;
+        predecessor.BecameIdle -= OnPredecessorIdle;
+        _predecessor = null;
+        Run();
+    }
+
     public void SetDesired(IReadOnlyList<Page> pages, IReadOnlyList<Page> modals, bool animated)
     {
         if (_stopped) return;
@@ -111,7 +140,7 @@ internal sealed class ShellSectionNavigator : INativeStack
     public void Run()
     {
         // While a user's back is busy, app navigations are held; they run when it settles.
-        if (_running || _userBack is not null || _section is null) return;
+        if (_running || _userBack is not null || _section is null || _predecessor is not null) return;
         _ = RunAsync();
     }
 
@@ -163,6 +192,11 @@ internal sealed class ShellSectionNavigator : INativeStack
     private void Finish()
     {
         if (!IsIdle) return;
+        if (_keyBack is { } pendingKeyBack && (_stopped || _detached))
+        {
+            _keyBack = null;
+            Binding?.DiscardBack(pendingKeyBack.Approval);
+        }
         if (_stopped && !_modalsDismissed)
         {
             _modalsDismissed = true;
@@ -207,6 +241,13 @@ internal sealed class ShellSectionNavigator : INativeStack
     {
         var section = _section!;
         var navigation = section.Navigation;
+
+        if (_keyBack is { } keyBack)
+        {
+            _keyBack = null;
+            return KeyBackOperation(section, keyBack);
+        }
+        if (IsRefused) return null;
 
         // A modal the app dropped goes first.
         if (NextModalPop(navigation) is { } modalPop) return modalPop;
@@ -298,9 +339,11 @@ internal sealed class ShellSectionNavigator : INativeStack
     /// navigation of the section, if there is one), and the first matching event clears the tag, so it
     /// never covers the platform animation.
     /// </summary>
-    private Func<Task> Own(OperationKind kind, bool animated, Func<Task> operation) => async () =>
+    private Func<Task> Own(OperationKind kind, bool animated, Func<Task> operation, Action<bool>? completed = null) => async () =>
     {
         LastOperationAnimated = animated;
+        var section = _section!;
+        var before = Snapshot(section);
         _own = new OwnOperation(kind);
         try
         {
@@ -310,7 +353,54 @@ internal sealed class ShellSectionNavigator : INativeStack
         {
             _own = null;
         }
+        // Shell didn't move: another Navigating handler cancelled the operation (at once or through a
+        // deferral). Retrying would loop, so the declaration is left until the app declares another.
+        var progressed = !Snapshot(section).Equals(before);
+        if (completed is not null) completed(progressed);
+        else if (!progressed) Refuse(kind);
     };
+
+    private static (int Pages, Page? Top, int Modals, Page? TopModal) Snapshot(ShellSection section)
+    {
+        var modals = section.Navigation.ModalStack;
+        return (section.Stack.Count, section.Stack[^1], modals.Count, modals.Count > 0 ? modals[^1] : null);
+    }
+
+    private void Refuse(OperationKind kind)
+    {
+        if (_stopped || _detached) return;
+        _refusedPages = _pages;
+        _refusedModals = _modals;
+        DiagnosticLog.Warning(LogCategory.Navigation, "ShellSection.OwnOperation",
+            $"A {kind.ToString().ToLowerInvariant()} in a Shell section was cancelled by another Navigating handler; the section keeps its pages until the app navigates again.");
+    }
+
+    private sealed record KeyBack(NavigationHostBinding.BackApproval Approval, int Depth, Page Departing);
+
+    /// <summary>
+    /// The back key's pop: the model moves to the approved entry once Shell has popped the page. If
+    /// another Navigating handler cancels the pop, the approval is discarded and the model is unchanged.
+    /// </summary>
+    private Func<Task> KeyBackOperation(ShellSection section, KeyBack back)
+    {
+        var animated = _animated;
+        return Own(OperationKind.Pop, animated, () => section.Navigation.PopAsync(animated), _ =>
+        {
+            if (section.Stack.Count == back.Depth && !section.Stack.Contains(back.Departing) && !_stopped && !_detached)
+            {
+                // The declaration follows the platform at once, so nothing pushes the page back.
+                _pages = [.. _pages.Take(back.Depth)];
+                Binding?.CommitBack(back.Approval);
+            }
+            else
+            {
+                Binding?.DiscardBack(back.Approval);
+                if (!_stopped && !_detached)
+                    DiagnosticLog.Warning(LogCategory.Navigation, "ShellSection.BackKey",
+                        "The back key's pop in a Shell section was cancelled by another Navigating handler; the model is unchanged.");
+            }
+        });
+    }
 
     private enum OperationKind { Push, Pop }
 
@@ -431,16 +521,15 @@ internal sealed class ShellSectionNavigator : INativeStack
     public bool OnBackKey()
     {
         if (_section is not { } section || _content is not { } content || _stopped || _detached || Binding is not { } binding) return false;
-        if (_userBack is not null) return true;
+        if (_userBack is not null || _keyBack is not null) return true;
         var stack = section.Stack;
         if (stack.Count > 1 && CanPreflight(stack, content, binding))
         {
             var depth = stack.Count - 1;
             if (binding.PreflightBack(depth) is { } approval)
             {
-                // The declaration follows at once, so the pop starts now, as the navigator's own.
-                _pages = [.. _pages.Take(depth)];
-                binding.CommitBack(approval);
+                // The navigator pops now, as its own operation; the model follows once Shell has popped.
+                _keyBack = new KeyBack(approval, depth, stack[^1]);
                 Run();
             }
             return true;
@@ -449,7 +538,7 @@ internal sealed class ShellSectionNavigator : INativeStack
     }
 
     private bool CanPreflight(IReadOnlyList<Page> stack, ShellContent content, NavigationHostBinding binding) =>
-        !_running && !_holding && ShowsDeclaration(stack, content) && binding.ShowsModel;
+        !_running && !_holding && _predecessor is null && ShowsDeclaration(stack, content) && binding.ShowsModel;
 
     private bool ShowsDeclaration(IReadOnlyList<Page> stack, ShellContent content)
     {

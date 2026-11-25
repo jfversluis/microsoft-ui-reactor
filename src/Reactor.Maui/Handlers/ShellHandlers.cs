@@ -550,10 +550,12 @@ internal sealed class ShellTabHandler : Reactor.Hosting.IElementHandler<ShellTab
             switch (native)
             {
                 case ShellSectionNavigator stack:
-                    if (!ReferenceEquals(navigator, stack)) navigator?.DetachSection(tab, popToRoot: true);
-                    // The navigator sets the root page as it reconciles.
+                    // A new host reconciles the section to its own pages (popping to its root itself):
+                    // the one it replaces doesn't pop, and finishes any operation before the new one starts.
+                    var predecessor = ReferenceEquals(navigator, stack) ? null : navigator;
+                    predecessor?.DetachSection(tab, popToRoot: false);
                     ReactorShell.Stage(tab.Items, [owned], shell, () => tab.CurrentItem);
-                    stack.Attach(tab, owned);
+                    stack.Attach(tab, owned, predecessor);
                     break;
                 case null or Page:
                     navigator?.DetachSection(tab, popToRoot: true);
