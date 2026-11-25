@@ -42,7 +42,9 @@ Conventions for contributors:
   descriptors (spec 067 §16). Custom handlers invoke callbacks through `HandlerContext.Live`, which is `null` once the
   element is unmounted, so input a control raises after teardown reaches no callback; a page the app
   removes doesn't report `OnDisappearing` (use an effect's cleanup) (spec 067 §14). Views Reactor
-  removes have their MAUI handlers disconnected (spec 067 §16).
+  removes have their MAUI handlers disconnected (spec 067 §16). On Android, a `ReactorWindow` whose
+  root switches away from a `NavigationStack` mid-navigation waits for the running push or pop before
+  replacing the window's page, which works around a MAUI crash (spec 065 §7).
   Built with `Reactor.Maui.slnx` and tested in `.github/workflows/maui.yml`, including a
   device tier that runs on the real platform controls. It doesn't change the WinUI packages.
 

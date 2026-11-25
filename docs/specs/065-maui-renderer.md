@@ -199,7 +199,7 @@ Design choices that differ from today's WinUI Reactor, and why:
 
 ## 6. What has been proven
 
-**Engine, headless** (`tests/Reactor.Maui.Engine.Tests`, 62 tests). It runs the renderer conformance
+**Engine, headless** (`tests/Reactor.Maui.Engine.Tests`, 63 tests). It runs the renderer conformance
 scenarios WinUI runs, with the same expected results (spec 067 §13.6–13.7). Mounting through components and
 groups. A keyed reorder keeps component state *and* the same native controls. Removal unmounts
 and runs effect cleanups. Duplicate keys fail loudly, and changing the root's key remounts it.
@@ -218,7 +218,7 @@ fallback and mixed trees, `CollectionView` cells as child roots, pages, toolbar 
 navigation stack's reconcile, the user-pop rule (below), tabs and flyout (including swapping the
 two flyout pages between slots).
 
-**Device tier** (`tests/Reactor.Maui.DeviceTests`, 39 fixtures). All pass on Mac Catalyst (macOS 26,
+**Device tier** (`tests/Reactor.Maui.DeviceTests`, 42 fixtures). All pass on Mac Catalyst (macOS 26,
 Apple silicon), an iPhone 18 Pro simulator (iOS 27) and the Android API 37 emulator; the 25 earlier
 ones also ran on a Pixel 10 (Android 16). They check what the
 native views show, not the virtual tree:
@@ -242,7 +242,9 @@ native views show, not the virtual tree:
   the page; the navigator's own pops are never reported as the user's; a modal dismissal is
   reported; unmounting mid-navigation stops further pushes; two stacks in tabs share the window's
   modal stack without dismissing each other's modals; an unmounted stack's modal that is buried
-  under another stack's modal is dismissed once it is uncovered. Also: tab selection accepted and refused, `CollectionView` virtualizes
+  under another stack's modal is dismissed once it is uncovered; replacing the window's content while a
+  stack pushes or pops shows the new content and survives the interrupted operation, which on Android
+  needs the window-page wait (§7). Also: tab selection accepted and refused, `CollectionView` virtualizes
   (a few of 200 cells realized) and reports selection, `UseWindowSize` and `UseAppTheme` follow the
   window and the theme, an `ErrorBoundary` catches an event-handler failure, and effects clean up on
   unmount.
@@ -296,8 +298,7 @@ and the direct-renderer todos page were checked on the iPhone simulator.
 - **Hot reload is verified headlessly only**, by invoking the metadata-update handler. It has not
   been exercised from an IDE session.
 - **CI device runs.** `.github/workflows/maui.yml` runs the device tier on Mac Catalyst and an iOS
-  simulator. Android runs locally only (an emulator on a hosted macOS runner is too slow). The
-  workflow has not run on GitHub yet.
+  simulator on every PR and push to `main` that touches the MAUI paths it lists. Android runs locally only (an emulator on a hosted macOS runner is too slow).
 - **App projects must not be trimmable.** The repo enables `IsAotCompatible` everywhere, which marks
   app assemblies trimmable. Apple builds then trim them even in Debug, and drop `SceneDelegate`,
   which only `Info.plist` names. The result is a blank window. The sample sets
@@ -308,7 +309,15 @@ and the direct-renderer todos page were checked on the iPhone simulator.
 - **MAUI bug on Android: replacing `Window.Page` while a `NavigationPage` push is in flight**
   crashes the app ("NavigationManager cannot be null here", from
   `NavigationViewFragment.OnCreateView`). Reproduced with plain MAUI, no Reactor involved. A
-  `ReactorWindow` hits it when its root switches away from a `NavigationStack` mid-push. Worth
-  filing in dotnet/maui; a workaround would defer the window page swap until navigation settles.
+  `ReactorWindow` hit it when its root switched away from a `NavigationStack` mid-push. **Worked
+  around (phase 4a):** on Android, `WindowPageSetter` (used by `ReactorWindow`) replaces the page
+  only once every navigation stack in the outgoing page (the page itself, or one in its tabs or
+  flyout) has finished its platform operation. The device fixture
+  `Window_ReplacingThePageDuringRepeatedPushesAndPops_DoesNotCrash` crashed in 5 of 10 runs without
+  the wait and 0 of 18 with it. A stack inside `Tabs` didn't crash without the wait (0 of 6); the
+  setter waits for it anyway, and a fixture covers it. Phase 3e also hit "CurrentPage cannot be null", from the same frame,
+  during a pop; that variant hasn't been reproduced since, with or without Reactor. Still worth
+  filing in dotnet/maui. The wait covers navigation Reactor's navigator runs, not a platform back
+  gesture in flight at the moment of the swap.
 - **About 46,000 outstanding JNI global references** were logged during the Android benchmark;
   worth investigating for leaks (§4.1).

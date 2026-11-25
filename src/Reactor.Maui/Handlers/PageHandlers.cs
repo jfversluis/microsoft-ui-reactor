@@ -129,8 +129,11 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
     /// <summary>A modal left the window's stack, whoever popped it.</summary>
     public void ForgetModal(Page modal) => _ownedModals.Remove(modal);
 
-    /// <summary>True when no reconcile is running (for tests that need a settled navigator).</summary>
+    /// <summary>True when no reconcile is running, including a platform operation started before <see cref="Stop"/>.</summary>
     internal bool IsIdle => !_running;
+
+    /// <summary>Raised when a reconcile, and the platform operation it was awaiting, has finished.</summary>
+    internal event Action? BecameIdle;
 
     public void SetDesired(IReadOnlyList<Page> pages, IReadOnlyList<Page> modals)
     {
@@ -188,6 +191,7 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
         {
             _running = false;
             if (_stopped) CleanUpOwnedModals();
+            BecameIdle?.Invoke();
         }
     }
 

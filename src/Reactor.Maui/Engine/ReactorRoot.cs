@@ -867,6 +867,12 @@ public sealed class ReactorRoot
         }
     }
 
+    /// <summary>
+    /// Reports a failure of the host's own work outside a render (such as a deferred window-page swap)
+    /// like an error that escaped every boundary: the tree is unmounted, then the error is reported.
+    /// </summary>
+    internal void ReportHostError(Exception error) => FailRoot(error);
+
     /// <summary>An error escaped every boundary: unmount the whole tree, then report it.</summary>
     private void FailRoot(Exception error)
     {

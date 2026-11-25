@@ -22,14 +22,20 @@ public static class MauiContexts
 public class ReactorWindow : Window
 {
     private readonly ReactorRoot _root;
+    private readonly WindowPageSetter _pages;
     private ContentPage? _viewHost;
 
     public ReactorWindow(Element root, ElementHandlerRegistry? registry = null)
     {
         Page = new ContentPage();
         _root = new ReactorRoot(registry ?? MauiHandlers.CreateRegistry(), new MauiRenderScheduler(Dispatcher), SetRootNative);
+        _pages = new WindowPageSetter(this, _root.ReportHostError);
         Render(root);
-        Destroying += (_, _) => _root.Unmount();
+        Destroying += (_, _) =>
+        {
+            _root.Unmount();
+            _pages.Cancel();
+        };
     }
 
     /// <summary>Raised for errors no error boundary caught, after the tree has been unmounted.</summary>
@@ -46,12 +52,12 @@ public class ReactorWindow : Window
     {
         if (native is Page page)
         {
-            Page = page;
+            _pages.Set(page);
             return;
         }
         _viewHost ??= new ContentPage();
         _viewHost.Content = native is null ? null : Props.AsView(native);
-        Page = _viewHost;
+        _pages.Set(_viewHost);
     }
 }
 
