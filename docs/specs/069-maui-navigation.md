@@ -390,13 +390,21 @@ return Shell(tab, setTab,
     - If both accept, the adapter records a **single-use approval**: the section, the identities of
       the departing and destination pages, the depth, and the model's version. The approval is
       checked against the model after the callbacks run, since a callback can navigate.
-  - **The native operation is then busy** until it settles:
-    - **Completed:** `Navigated` for that section reaches the approved depth.
-    - **Cancelled:** an interactive swipe the user abandons. On iOS and Mac Catalyst the adapter
-      watches the navigation controller's transition coordinator (`NotifyWhenInteractionChanges`),
-      which reports a cancel, as MAUI's renderer does. Android's back is not interactive.
-    - **Fallback:** if neither arrives within a few seconds, the operation is treated as settled.
-      The adapter never waits on a later `Navigating`.
+  - **The native operation is then busy** until the platform has finished the transition, whether
+    the back completed or was cancelled:
+    - **iOS and Mac Catalyst.** The adapter registers on the navigation controller's transition
+      coordinator.
+      - A cancelled interaction is noted at the interaction-changed callback.
+      - Settlement waits for the transition-completed callback (`NotifyWhenTransitionCompleted`),
+        after UIKit's rollback or completion animation. A swipe the user still holds is a transition
+        in progress, so it stays busy.
+    - **Android.** Back isn't interactive. The operation settles at `Navigated` for that section, or,
+      if `Navigating` was raised but no pop follows, when the section's stack is unchanged after the
+      next frame.
+    - **No timeout releases the busy state.** If settlement hasn't arrived after a few seconds,
+      Reactor logs a warning through `DiagnosticLog`. It then keeps waiting until the platform
+      reports no transition in progress (the navigation controller's `TransitionCoordinator` is null
+      on iOS) before it treats the operation as settled.
 
     While the operation is busy, app navigations are held and reconciled when it settles.
     `WindowPageSetter` waits on the same busy state.
