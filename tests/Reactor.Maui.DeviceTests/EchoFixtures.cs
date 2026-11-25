@@ -196,53 +196,58 @@ public static partial class Fixtures
         Check(c.UnhandledErrors.Count == 0, $"no unhandled errors, got {string.Join("; ", c.UnhandledErrors.Select(e => e.Message))}");
     }
 
-    private sealed record LifecycleProps(List<string> Log, Action<Action<bool>> Publish);
+    private sealed record LifecycleProps(List<string> Log, Action<Action<int>> Publish);
 
+    // A navigation stack of 1-3 declared pages; the detail page logs its lifecycle.
     private sealed class LifecycleStack : Component<LifecycleProps>
     {
         public override Element Render()
         {
-            var (detail, setDetail) = UseState(false);
-            Props.Publish(setDetail);
+            var (depth, setDepth) = UseState(1);
+            Props.Publish(setDepth);
             var log = Props.Log;
-            var home = Page("home", Label("home")).WithKey("home");
-            var page = Page("detail", Label("detail")).WithKey("detail") with
-            {
-                OnAppearing = () => log.Add("appearing"),
-                OnDisappearing = () => log.Add("disappearing"),
-            };
-            return detail ? NavigationStack([home, page]) : NavigationStack([home]);
+            Element[] pages =
+            [
+                Page("home", Label("home")).WithKey("home"),
+                Page("detail", Label("detail")).WithKey("detail") with
+                {
+                    OnAppearing = () => log.Add("appearing"),
+                    OnDisappearing = () => log.Add("disappearing"),
+                },
+                Page("more", Label("more")).WithKey("more"),
+            ];
+            return NavigationStack(pages[..depth]);
         }
     }
 
     // A page the app removes is unmounted before the platform pops it, so its Disappearing is not
-    // reported; a page that is only covered still reports it (spec 067 §14, PageElement.OnDisappearing).
+    // reported; a page that is covered while still declared reports it (spec 067 §14).
     private static async Task PageRemovedByTheApp(FixtureContext c)
     {
         var log = new List<string>();
-        Action<bool>? setDetail = null;
-        c.Show(Component<LifecycleStack, LifecycleProps>(new(log, s => setDetail = s)));
+        Action<int>? setDepth = null;
+        c.Show(Component<LifecycleStack, LifecycleProps>(new(log, s => setDepth = s)));
         var navigation = await LoadedPage<NavigationPage>(c);
         await c.Settle();
 
-        setDetail!(true);
-        await c.WaitFor(() => navigation.CurrentPage?.Title == "detail" && navigation.CurrentPage.IsLoaded, "detail to be shown");
-        await c.WaitFor(() => log.Contains("appearing"), "detail to report its appearance");
-        await c.Settle();
-        Equal("appearing", string.Join(", ", log), "while mounted");
+        async Task Show(int depth, string title)
+        {
+            setDepth!(depth);
+            await c.WaitFor(() => navigation.Navigation.NavigationStack.Count == depth
+                && navigation.CurrentPage?.Title == title && navigation.CurrentPage.IsLoaded, $"{title} to be shown", 20000);
+            await c.Settle(800);
+        }
 
-        // Positive control: covering the page with a modal reports its disappearance while declared.
-        var modal = new ContentPage { Title = "modal" };
-        await navigation.Navigation.PushModalAsync(modal, false);
-        await c.WaitFor(() => log.Contains("disappearing"), "the covered page to report its disappearance");
-        await navigation.Navigation.PopModalAsync(false);
-        await c.WaitFor(() => log.Count(e => e == "appearing") == 2, "the uncovered page to report its appearance");
-        await c.Settle();
+        await Show(2, "detail");
+        Equal("appearing", string.Join(", ", log), "the detail page is shown");
+
+        // Positive control: covered by a declared page, then uncovered, while still declared.
+        await Show(3, "more");
+        await Show(2, "detail");
+        Equal("appearing, disappearing, appearing", string.Join(", ", log), "covered and uncovered while declared");
         log.Clear();
 
-        setDetail(false);
-        await c.WaitFor(() => navigation.Navigation.NavigationStack.Count == 1, "MAUI's stack to drop the page");
-        await c.Settle(800);
+        await Show(1, "home");
         Equal("", string.Join(", ", log), "after the app pops the page");
     }
 }
