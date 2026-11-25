@@ -239,9 +239,11 @@ return NavigationHost(nav, route => route switch
   refused) and still holds the declared pages below that depth; otherwise the pop is refused, the
   page restored, and the host goes on to show the model.
 - **The back key** (`ReactorNavigationPage.OnBackButtonPressed`) gives a nested current page the key
-  first, as `NavigationPage` does; under a `NavigationHost` it then decides from the pages the host
-  shows: at the shown root it is not consumed, otherwise it is one guarded back to the page below.
-  A plain `NavigationStack` keeps MAUI's behaviour.
+  first, as `NavigationPage` does. Under a `NavigationHost` it is consumed when the host shows more
+  than one page (one guarded back to the page below, or, for a refused destination, another attempt
+  to arrive) or when the model can go back (a push the host hasn't shown yet: the guarded
+  `GoBack` supersedes it, so the pushed page never appears). Only when neither has anywhere to go
+  is it passed on to the app or the OS. A plain `NavigationStack` keeps MAUI's behaviour.
 - **Errors in lifecycle callbacks** go to the error boundaries above the component that registered
   them, posted like a handler's asynchronous failure (`ReactorRoot.ReportCallbackError`); a
   component unmounted by then (a page just left) hands it to its nearest mounted ancestor. A

@@ -390,15 +390,25 @@ internal sealed class NavigationHostBinding
     }
 
     /// <summary>
-    /// The system back button (Android): one guarded back navigation from the page shown, consuming
-    /// the key whether it is accepted or refused, so MAUI doesn't pop as well. When the host shows its
-    /// root the key is not consumed, so the app or the OS handles it.
+    /// The system back button (Android): one guarded back navigation, consuming the key whether it is
+    /// accepted or refused, so MAUI doesn't pop as well. With pages shown above the root it goes back
+    /// from the page shown; with a push the host hasn't shown yet it is the handle's <c>GoBack</c>,
+    /// which supersedes that push. Only when neither has anywhere to go is the key passed on, so the
+    /// app or the OS handles it.
     /// </summary>
     public bool OnBackButton()
     {
-        if (_rendered.Length <= 1) return false;
-        BackTo(_rendered.Length - 1);
-        return true;
+        if (_rendered.Length > 1)
+        {
+            BackTo(_rendered.Length - 1);
+            return true;
+        }
+        if (_handle is { CanGoBack: true } handle)
+        {
+            handle.GoBack();
+            return true;
+        }
+        return false;
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────

@@ -795,17 +795,23 @@ public class NavigationHostTests
     }
 
     [Fact]
-    public void TheBackKey_BeforeAPushIsShown_IsNotConsumed()
+    public void TheBackKey_BeforeAPushIsShown_IsConsumed_AndSupersedesThePush()
     {
         var h = new Harness();
+        var pushes = 0;
+        h.Page.Pushed += (_, _) => pushes++;
         h.Nav.Navigate("detail");
 
-        // The host still shows its root: the key is the app's or the OS's.
-        Assert.False(h.Page.SendBackButtonPressed());
+        // The host still shows its root, but the model can go back: the key must not close the app.
+        Assert.True(h.Page.SendBackButtonPressed());
         h.Settle();
 
-        Assert.Equal("home,detail", h.Titles);
-        Assert.Equal("home:navigatingFrom:Push detail:navigatingTo:Push detail:navigatedTo:Push home:navigatedFrom:Push", h.TakeLog());
+        Assert.Equal("home", h.Nav.CurrentRoute);
+        Assert.False(h.Nav.CanGoBack);
+        Assert.Equal("home", h.Titles);
+        Assert.Equal(0, pushes);
+        Assert.Equal(0, h.Log.Mounts.GetValueOrDefault("detail"));
+        Assert.Equal("home:navigatingFrom:Push home:navigatingFrom:Pop", h.TakeLog());
     }
 
     [Fact]
