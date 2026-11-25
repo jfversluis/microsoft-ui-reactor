@@ -510,6 +510,80 @@ return Shell(tab, setTab,
 - Validation is pinned to the MAUI version the workload ships.
 - **WinUI tiers** green (no WinUI change is expected), and `/perf` within noise.
 
+### 4.7 As built (4b-2)
+
+Built against `Microsoft.Maui.Controls` 11.0.0, the version the workload ships. Where the build
+differs from §4.1–4.6, or §4 left a choice open:
+
+- **Where the events are handled.** Reactor renders a `Shell` subclass, `ReactorShell`, and handles
+  navigation in its `OnNavigating` and `OnNavigated` overrides, which run after every `Navigating` and
+  `Navigated` subscriber, so a cancel by another handler is already visible.
+- **Origin tagging** is by kind (push or pop) and section, not by depth: a pop's target is `..`, which
+  carries no depth. A relative target (`..`, or a pushed page's route) belongs to the section shown;
+  an absolute one names the section's route or, since Shell trims implicit item and section routes from
+  the location, its content's route. Each of the navigator's operations claims one event. A user's back
+  must target the shown section too.
+- **The iOS and Mac Catalyst coordinator.** UIKit has no `NotifyWhenTransitionCompleted`; the
+  navigator registers `AnimateAlongsideTransition` with an empty animation, whose completion UIKit
+  runs after the completion or rollback animation, and `NotifyWhenInteractionChanges`, which logs a
+  cancelled swipe. A cancelled transition settles the back as cancelled; a completed one settles at
+  `Navigated` for the section, when MAUI has removed the page. After 3 s without either, Reactor logs a
+  warning through `DiagnosticLog` and settles once the departing page's navigation controller has no
+  transition coordinator, by whether the page is still in the section's stack. On MAUI 11.0.0 the
+  iOS back button also arrives as `Navigating`: `ShellSectionRenderer.SendPop` goes through
+  `Shell.OnBackButtonPressed`, which pops through `ShellSection.Navigation`.
+- **Android settlement.** MAUI's deferral state isn't public, so the navigator re-reads the same
+  `ShellNavigatingEventArgs.Cancelled` every dispatcher turn (16 ms) until the back settles: a cancel
+  by a later handler, or a deferral that ends cancelled, is seen on the next turn; otherwise the back
+  settles at `Navigated`.
+- **A back that can't be preflighted** (the host isn't showing the model, or the navigator is in the
+  middle of its own operation) is cancelled and becomes a guarded back of the model, which the
+  navigator then shows, as the back key does for a `NavigationPage` (§2.6).
+- **Approval.** `NavigationHostBinding.PreflightBack` runs the handle's guards without navigating
+  (`NavigationStack.CanPopToIndex`, a new internal core method), then the destination's
+  `onNavigatingTo`; the version is checked after each. The navigator checks the page identities and
+  depth when the platform finishes, and `CommitBack` moves the model through
+  `NavigationStack.PopToIndex(index, approved: true)`, an internal overload that skips the guards.
+  The host's next declaration takes the transition the preflight built, so the destination isn't
+  asked again. A cancel, or a commit after the model moved, re-renders the host, which shows the model.
+- **Selection** is detected by object, not by key: a `Navigated` after which Shell shows a section or
+  top tab other than the one Reactor last selected is the user's switch. Reactor's own writes need no
+  tag. A tab key with top tabs keeps the section's current top tab; the key reported for a section
+  with several top tabs is the top tab's.
+- **Staged changes** run in one pass: new items are added, the selection applied (skipping the items
+  about to go), old items removed, then the order fixed by removing and re-inserting every item but
+  the current one. Inner syncs (a tab's content) apply the selection too, so a removed current item
+  is replaced before it goes even when the tab bar itself didn't change. MAUI's model applies the
+  selection synchronously, so "let the selection settle" needed no extra wait on the three platforms.
+- **A new root** (`Reset`, `Replace` at the root) pops the section to its root without animation and
+  then sets `ShellContent.Content`; the device fixtures check the platform shows the new page.
+- **`TitleView`** is an element in a second slot of the page; `SearchHandler` is the app's object.
+  Page properties are applied whether or not the page is in a Shell (nothing else reads them), and
+  `PresentationMode` is set at mount, before the page can be pushed.
+- **`MenuItem`** is built: Reactor wraps the `MenuItem` into MAUI's `MenuShellItem` itself.
+- **Naming.** With `using static Microsoft.UI.Reactor.Maui.Factories;`, `Shell` names the factory, as
+  `Label` and `Button` do, so MAUI's type needs `Microsoft.Maui.Controls.Shell` (or an alias).
+- **Tests.** Headless Shell raises `Navigated` only for a window that belongs to an app, and only once
+  the destination page has appeared, so the headless tests put the window in an `Application` and make
+  the shown page appear each turn, as the platform does. The iOS swipe's state machine is driven
+  headlessly through the calls MAUI's renderer makes (`ProposeNavigation` from the gesture's
+  `ShouldBegin`, `SendPopping` on completion) and a fake coordinator. On device, a tab tap goes through
+  `IShellItemController.ProposeSection`, which the tab bars call; the native back is
+  `ShellSectionRenderer.ShouldPopItem` (the back button's path; a direct `PopViewController` bypasses
+  Shell) on iOS and Mac Catalyst, and the activity's back dispatcher on Android.
+- **Gate evidence.** Headless: `tests/Reactor.Maui.Tests/ShellTests.cs` (28 tests). Device: the 17
+  `Shell_*` fixtures pass on Mac Catalyst, the iOS simulator and the Android emulator, with the rest
+  of the suite. Each key oracle was mutation-checked (the code broken, the test seen to fail).
+- **The real iOS edge swipe** was driven through Appium (XCUITest, iPhone 18 Pro simulator, iOS 27)
+  against opt-in `ManualSwipe_*` fixtures, which run only when the filter names them and wait for the
+  gesture. A completed swipe passed, with and without an app navigation made while it was in flight:
+  the guard ran once, the page left, the model followed, and the held navigation was shown after the
+  gesture (with a window swap after it). A swipe released early could not be produced: every
+  synthesized edge drag, even 38 pt over 3 s, completed, so the cancelled path is covered headlessly
+  only (the coordinator's cancelled completion), and those two fixtures wait for a human release.
+- **Not done in 4b-2:** a declarative search element and top tabs with their own stacks, which wait
+  for a port that needs them (§4.1, §4.5).
+
 ## 5. Outline: 4b-3, dialogs, back button, lifecycle
 
 - **Page dialogs** are declarative, like WinUI's `ContentDialog`: `Alert(...)`, `ActionSheet(...)`
