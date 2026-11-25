@@ -9,7 +9,8 @@ public sealed record NavAppProps(
     Action<NavigationHandle<string>> Report,
     Func<string, Element?> Map,
     Func<NavigationStackElement, NavigationStackElement>? Stack = null,
-    Action? Rendered = null);
+    Action? Rendered = null,
+    int Generation = 0);
 
 public sealed class NavApp : Component<NavAppProps>
 {
@@ -178,10 +179,26 @@ public class NavigationHostTests
             bool reportErrors = true)
         {
             if (reportErrors) Host.Root.UnhandledException += Errors.Add;
-            map ??= static (route, log) => Component<LogPage, LogPageProps>(new(route, log));
-            Host.Render(Component<NavApp, NavAppProps>(new(nav => Nav = nav, route => map(route, Log), stack, () => AppRenders++)));
+            _map = map ?? (static (route, log) => Component<LogPage, LogPageProps>(new(route, log)));
+            _stack = stack;
+            RenderAgain();
             Settle();
         }
+
+        private readonly Func<string, NavLog, Element?> _map;
+        private readonly Func<NavigationStackElement, NavigationStackElement>? _stack;
+
+        /// <summary>Renders the root again, synchronously, with new props, so the host maps its routes again.</summary>
+        public void RenderAgain()
+        {
+            // Delegates over the same method and target compare equal; a closure per call makes the
+            // route map, and so the host's props, differ.
+            var generation = ++_generation;
+            Host.Render(Component<NavApp, NavAppProps>(new(
+                nav => Nav = nav, route => generation > 0 ? _map(route, Log) : null, _stack, () => AppRenders++, generation)));
+        }
+
+        private int _generation;
 
         public ReactorNavigationPage Page => Host.View<ReactorNavigationPage>();
         public IReadOnlyList<Page> Stack => Page.Navigation.NavigationStack;
@@ -526,6 +543,23 @@ public class NavigationHostTests
     }
 
     [Fact]
+    public void ANavigationsAnimationOption_EndsWithIt()
+    {
+        var setters = new Dictionary<string, Action<int>>();
+        var h = new Harness(map: (route, _) => Component<SwapPage, SwapPageProps>(new(route, setters)));
+        h.Nav.Navigate("a", new NavigateOptions { Animated = false });
+        h.Settle();
+        Assert.False(h.Page.Navigator.LastOperationAnimated);
+
+        // A later change that isn't a navigation: the page replaces its native page.
+        setters["a"](1);
+        h.Settle();
+
+        Assert.Equal("home 0,a 1", h.Titles);
+        Assert.True(h.Page.Navigator.LastOperationAnimated);
+    }
+
+    [Fact]
     public void AHostInTabs_ShowsTheConfiguredTabTitle()
     {
         var host = new TestHost(MauiHandlers.CreateRegistry()).Render(RenderEachTime(ctx =>
@@ -708,6 +742,27 @@ public class NavigationHostTests
     }
 
     [Fact]
+    public void AThrowingOnNavigatedFrom_OfAReplacedComponent_ReachesTheBoundaryThatSurvived()
+    {
+        var replaced = false;
+        var h = new Harness(map: (route, log) => ErrorBoundary(
+            Component<LogPage, LogPageProps>(new(route, log)).WithKey(route == "home" && replaced ? "v2" : "v1"),
+            error => Page($"fallback {error.Message}", null)));
+        h.Log.Throw.Add("home:navigatedFrom");
+        h.Nav.Navigate("detail");
+        h.Host.Scheduler.RunOne();
+
+        // Before the push completes, home's component is replaced beneath its boundary.
+        replaced = true;
+        h.RenderAgain();
+        Assert.Equal(2, h.Log.Mounts["home"]);
+        h.Settle();
+
+        Assert.Equal("fallback boom home:navigatedFrom,detail", h.Titles);
+        Assert.Empty(h.Errors);
+    }
+
+    [Fact]
     public void AThrowingOnNavigatingFrom_CancelsTheNavigation_AndReachesThePagesBoundary()
     {
         var h = new Harness(map: WithBoundaries);
@@ -812,6 +867,28 @@ public class NavigationHostTests
         Assert.Equal(0, pushes);
         Assert.Equal(0, h.Log.Mounts.GetValueOrDefault("detail"));
         Assert.Equal("home:navigatingFrom:Push home:navigatingFrom:Pop", h.TakeLog());
+    }
+
+    [Fact]
+    public void TheBackKey_BeforeAPushIsShown_AboveTheRoot_SupersedesThePush()
+    {
+        var h = new Harness();
+        h.Nav.Navigate("a");
+        h.Settle();
+        h.TakeLog();
+        var pushes = 0;
+        h.Page.Pushed += (_, _) => pushes++;
+        h.Nav.Navigate("b");
+
+        Assert.True(h.Page.SendBackButtonPressed());
+        h.Settle();
+
+        Assert.Equal("a", h.Nav.CurrentRoute);
+        Assert.Equal(["home"], h.Nav.BackStack);
+        Assert.Equal("home,a", h.Titles);
+        Assert.Equal(0, pushes);
+        Assert.Equal(0, h.Log.Mounts.GetValueOrDefault("b"));
+        Assert.Equal("a:navigatingFrom:Push a:navigatingFrom:Pop", h.TakeLog());
     }
 
     [Fact]

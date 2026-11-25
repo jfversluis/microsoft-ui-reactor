@@ -66,7 +66,7 @@ public static partial class Fixtures
         }
     }
 
-    private sealed record HostAppProps(HostLog Log, Action<NavigationHandle<string>> Report, Action<Action<bool>>? ReportModal = null);
+    private sealed record HostAppProps(HostLog Log, Action<NavigationHandle<string>> Report, Action<Action<bool>>? ReportModal = null, bool HostAnimated = false);
 
     private sealed class HostApp : Component<HostAppProps>
     {
@@ -78,7 +78,7 @@ public static partial class Fixtures
             Props.ReportModal?.Invoke(setModal);
             Func<NavigationStackElement, NavigationStackElement>? stack = Props.ReportModal is null ? null : s => s with
             {
-                Animated = false,
+                Animated = Props.HostAnimated,
                 Modals = modal ? [Page("sheet", Label("sheet"))] : [],
                 OnModalDismissed = remaining => setModal(remaining > 0),
             };
@@ -87,11 +87,11 @@ public static partial class Fixtures
     }
 
     private static async Task<(NavigationHandle<string> Nav, NavigationPage Page, HostLog Log)> ShowHost(
-        FixtureContext c, Action<Action<bool>>? reportModal = null)
+        FixtureContext c, Action<Action<bool>>? reportModal = null, bool hostAnimated = false)
     {
         NavigationHandle<string>? nav = null;
         var log = new HostLog();
-        c.Show(Component<HostApp, HostAppProps>(new(log, n => nav = n, reportModal)));
+        c.Show(Component<HostApp, HostAppProps>(new(log, n => nav = n, reportModal, hostAnimated)));
         var page = await LoadedPage<NavigationPage>(c);
         log.PlatformDepth = () => $"{page.Navigation.NavigationStack.Count}{(Probe(page).Idle ? "" : " (busy)")}";
         await c.WaitFor(() => page.CurrentPage is { IsLoaded: true }, "the root page");
@@ -267,7 +267,8 @@ public static partial class Fixtures
 
     private static async Task HostNotAnimated(FixtureContext c)
     {
-        var (nav, page, _) = await ShowHost(c);
+        Action<bool>? setModal = null;
+        var (nav, page, _) = await ShowHost(c, set => setModal = set, hostAnimated: true);
         var navigator = Probe(page);
         await c.Settle();
 
@@ -276,6 +277,13 @@ public static partial class Fixtures
         await Settled(c, page, "home,detail", "the push without animation");
         Console.WriteLine($"#   push without animation settled in {clock.ElapsedMilliseconds} ms");
         Equal(false, ((ReactorNavigationPage)page).Navigator.LastOperationAnimated, "the push's animation argument");
+
+        // The option ended with that navigation: a later modal uses the host's default.
+        setModal!(true);
+        await c.WaitFor(() => page.Navigation.ModalStack.Count == 1 && navigator.Idle, "the modal");
+        Equal(true, ((ReactorNavigationPage)page).Navigator.LastOperationAnimated, "the later modal's animation argument");
+        setModal(false);
+        await c.WaitFor(() => page.Navigation.ModalStack.Count == 0 && navigator.Idle, "the modal's dismissal");
 
         nav.GoBack();
         await Settled(c, page, "home", "the animated pop");

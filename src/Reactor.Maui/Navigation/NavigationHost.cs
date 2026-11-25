@@ -391,24 +391,28 @@ internal sealed class NavigationHostBinding
 
     /// <summary>
     /// The system back button (Android): one guarded back navigation, consuming the key whether it is
-    /// accepted or refused, so MAUI doesn't pop as well. With pages shown above the root it goes back
-    /// from the page shown; with a push the host hasn't shown yet it is the handle's <c>GoBack</c>,
-    /// which supersedes that push. Only when neither has anywhere to go is the key passed on, so the
-    /// app or the OS handles it.
+    /// accepted or refused, so MAUI doesn't pop as well. While the host shows the model's stack (or a
+    /// refused destination's) it goes back from the page shown; while the model holds a change the host
+    /// hasn't shown yet (a pending push), it is the handle's <c>GoBack</c>, which supersedes that change.
+    /// Only when neither the pages shown nor the model have anywhere to go is the key passed on, so
+    /// the app or the OS handles it.
     /// </summary>
     public bool OnBackButton()
     {
-        if (_rendered.Length > 1)
+        if (_handle is not { } handle) return _rendered.Length > 1;
+        var shown = handle.Version == _renderedVersion || handle.Version == _refusedVersion;
+        if (shown && _rendered.Length > 1)
         {
             BackTo(_rendered.Length - 1);
             return true;
         }
-        if (_handle is { CanGoBack: true } handle)
+        // The model holds a change the host hasn't shown yet: going back in the model supersedes it.
+        if (handle.CanGoBack)
         {
             handle.GoBack();
             return true;
         }
-        return false;
+        return _rendered.Length > 1;
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -523,6 +527,10 @@ internal sealed class NavigationHostBinding
                     Invoke(owner, hook.OnNavigatedFrom, from);
             }
         }
+
+        // A navigation's own animation option ends with it: later changes (a modal, a page replacing
+        // its native page) use the host's default.
+        if (_inFlight.Count == 0 && _committed is not null) _committed.Animated = null;
 
         static void Invoke<T>(Node owner, Action<T>? callback, T context)
         {

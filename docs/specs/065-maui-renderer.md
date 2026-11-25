@@ -225,7 +225,7 @@ shared navigation model (spec 069): the stack's operations and guard order, `Pop
 state restored without guards, the lifecycle hook's order and lookup, and a handle over an injected
 scheduler (including one that refuses).
 
-**Renderer, headless** (`tests/Reactor.Maui.Tests`, 93 tests). Real Controls objects and direct
+**Renderer, headless** (`tests/Reactor.Maui.Tests`, 96 tests). Real Controls objects and direct
 views, no platform handlers: modifiers, every control's props and echo-free events, the hybrid
 fallback and mixed trees, `CollectionView` cells as child roots, pages, toolbar items, the
 navigation stack's reconcile, the user-pop rule (below), tabs and flyout (including swapping the
@@ -235,9 +235,10 @@ pages below a push or pop kept mounted), a refusing guard, WinUI's lifecycle ord
 destination (the previous page stays mounted), a superseded navigation (every page left is told,
 only the latest destination arrives, including a back key right after a push), a user's back
 accepted, refused, several levels deep and while the model has moved on, a refused destination asked
-again by the user's back or the back key, the back key before a push is shown (consumed, superseding it), a nested host owning its
+again by the user's back or the back key, the back key before a push is shown, at the root or above it (consumed, superseding it), a nested host owning its
 pages, unmounting and re-binding the host, a page replacing its own native page after a push,
-throwing callbacks reaching error boundaries, `Animated` from the options and the host's configured
+throwing callbacks reaching error boundaries (including one that survived its component's
+replacement), `Animated` from the options (ending with that navigation) and the host's configured
 default (and the stack's title in tabs), `SetState` into a mounted host and off the render thread,
 context for descendants, off-thread calls on two roots and a refusing scheduler, hot reload keeping
 the history, allocation-free mutators, and the README snippet.

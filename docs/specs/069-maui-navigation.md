@@ -220,8 +220,9 @@ return NavigationHost(nav, route => route switch
   `OnPopped`.
 - **Animation.** The configured stack's `Animated` is the host's default. `NavigateOptions.Animated`
   is a `bool?`: `null` (the default) uses the host's, and a value overrides it for that `Navigate`
-  call only. Every other change (`GoBack`, `GoForward`, `Replace`, `Reset`, `PopTo`, `SetState`, the
-  user's back) uses the host's default. It applies to pushes, pops and modal presentations.
+  call only, and ends when that navigation completes. Every other change (`GoBack`, `GoForward`,
+  `Replace`, `Reset`, `PopTo`, `SetState`, the user's back, a later modal or page replacement) uses
+  the host's default. It applies to pushes, pops and modal presentations.
 - **Keys use a prefix rule**: an entry keeps its key while it *and every entry below it* equal the
   declared ones. Keeping a page above a replaced one would make MAUI reorder pages; the cases §2.4
   lists behave as specified.
@@ -239,14 +240,17 @@ return NavigationHost(nav, route => route switch
   refused) and still holds the declared pages below that depth; otherwise the pop is refused, the
   page restored, and the host goes on to show the model.
 - **The back key** (`ReactorNavigationPage.OnBackButtonPressed`) gives a nested current page the key
-  first, as `NavigationPage` does. Under a `NavigationHost` it is consumed when the host shows more
-  than one page (one guarded back to the page below, or, for a refused destination, another attempt
-  to arrive) or when the model can go back (a push the host hasn't shown yet: the guarded
-  `GoBack` supersedes it, so the pushed page never appears). Only when neither has anywhere to go
-  is it passed on to the app or the OS. A plain `NavigationStack` keeps MAUI's behaviour.
+  first, as `NavigationPage` does. Under a `NavigationHost`, when the model holds a change the host
+  hasn't shown yet (a pending push, at any depth) and can go back, the key is the guarded `GoBack`,
+  which supersedes that change, so the pushed page never appears. Otherwise, with more than one page
+  shown, it is one guarded back to the page below (or, for a refused destination, another attempt to
+  arrive). Either way it is consumed; only when neither the model nor the pages shown have anywhere
+  to go is it passed on to the app or the OS. A plain `NavigationStack` keeps MAUI's behaviour.
 - **Errors in lifecycle callbacks** go to the error boundaries above the component that registered
-  them, posted like a handler's asynchronous failure (`ReactorRoot.ReportCallbackError`); a
-  component unmounted by then (a page just left) hands it to its nearest mounted ancestor. A
+  them, posted like a handler's asynchronous failure (`ReactorRoot.ReportCallbackError`). For a
+  component unmounted by then (a page just left, or a component replaced) the search still starts at
+  the component and skips unmounted ancestors, so a boundary that survived catches it; with no
+  mounted ancestor the error goes to `UnhandledException`. A
   throwing `onNavigatingFrom` or `onNavigatingTo` cancels the navigation. (On WinUI the exception
   propagates to the caller of `Navigate` or to the reconciler.)
 - **Lifecycle divergences from WinUI's policy**, which stays in `NavigationHostLifecycle` (§2.3):
