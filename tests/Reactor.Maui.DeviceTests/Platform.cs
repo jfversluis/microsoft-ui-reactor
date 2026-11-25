@@ -39,6 +39,37 @@ public static class Platform
         }
     }
 
+    /// <summary>Flips a switch the way a tap does, so the handler's change path runs.</summary>
+    public static void Toggle(ISwitch view, bool on)
+    {
+        switch (View(view))
+        {
+#if IOS || MACCATALYST
+            case UIKit.UISwitch native:
+                native.SetState(on, false);
+                native.SendActionForControlEvents(UIKit.UIControlEvent.ValueChanged);
+                break;
+#elif ANDROID
+            case Android.Widget.CompoundButton native:
+                native.Checked = on;
+                break;
+#endif
+            default:
+                throw new CheckFailedException($"cannot toggle a {view.GetType().Name}");
+        }
+    }
+
+    /// <summary>Whether the platform switch shows on.</summary>
+    public static bool IsOn(ISwitch view) => View(view) switch
+    {
+#if IOS || MACCATALYST
+        UIKit.UISwitch native => native.On,
+#elif ANDROID
+        Android.Widget.CompoundButton native => native.Checked,
+#endif
+        var other => throw new CheckFailedException($"cannot read a {other?.GetType().Name ?? "missing"} switch"),
+    };
+
     /// <summary>The platform's own navigation depth, where the platform exposes it.</summary>
     public static int? NavigationDepth(NavigationPage page)
     {

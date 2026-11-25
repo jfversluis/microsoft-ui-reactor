@@ -31,8 +31,10 @@ public interface IElementHandler<TElement, TControl>
 }
 
 /// <summary>
-/// Passed to a handler so it can wire native events once at mount and still reach
-/// the element that is current when the event fires.
+/// Passed to a handler so it can wire native events once at mount and still reach the element
+/// that is current when the event fires. In an event handler, invoke callbacks through
+/// <see cref="Live"/>; for a change event, return first when <see cref="IsEchoing"/> is true, and
+/// call <see cref="RestoreAfterEvent"/> after reporting.
 /// </summary>
 public readonly struct HandlerContext<TElement> where TElement : Element
 {
@@ -46,20 +48,37 @@ public readonly struct HandlerContext<TElement> where TElement : Element
     }
 
     /// <summary>
-    /// The element this control currently renders. Read it inside event handlers
-    /// rather than capturing the element passed to <c>Mount</c>, which goes stale.
+    /// The element this control last rendered, even after it has been unmounted. To invoke a
+    /// callback from an event handler use <see cref="Live"/>, which is <see langword="null"/> once the
+    /// element is unmounted. Read <see cref="Current"/> in <c>Update</c>-time work, not to invoke callbacks.
     /// </summary>
     public TElement Current => (TElement)_live.Element;
 
     /// <summary>
-    /// Writes a value to <paramref name="control"/> without the change event that
-    /// write raises reaching the element's callback. Check <see cref="IsEchoing"/>
-    /// in the event handler.
+    /// <see cref="Current"/> while the element is mounted, and <see langword="null"/> once it has
+    /// been unmounted. Invoke callbacks through it in event handlers
+    /// (<c>context.Live?.OnClick?.Invoke()</c>): a control can still raise events after Reactor
+    /// unmounts it (the platform tears it down, or something else holds it), and an unmounted
+    /// component's callbacks must not run.
+    /// </summary>
+    public TElement? Live => IsMounted ? Current : null;
+
+    /// <summary>Whether the element is still mounted. False once Reactor has unmounted it.</summary>
+    public bool IsMounted => !((Node)_live).Unmounted;
+
+    /// <summary>
+    /// Writes a value to <paramref name="control"/> without the change event that write raises
+    /// reaching the element's callback. Check <see cref="IsEchoing"/> in the event handler. The
+    /// control must raise that event inside the write: an event raised later is reported.
     /// </summary>
     public void WriteSuppressed(object control, Action write) => _echo.WriteSuppressed(control, write);
 
-    /// <summary>Whether <paramref name="control"/> is inside a <see cref="WriteSuppressed"/> write.</summary>
-    public bool IsEchoing(object control) => _echo.IsSuppressed(control);
+    /// <summary>
+    /// Whether a change event on <paramref name="control"/> must not be reported: it is raised
+    /// inside a <see cref="WriteSuppressed"/> write, or the element has been unmounted. The second
+    /// case also covers a handler that then reads <see cref="Current"/> instead of <see cref="Live"/>.
+    /// </summary>
+    public bool IsEchoing(object control) => !IsMounted || _echo.IsSuppressed(control);
 
     /// <summary>
     /// Creates a separate tree that renders through the same renderer and inherits this element's

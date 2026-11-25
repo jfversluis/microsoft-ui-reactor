@@ -31,7 +31,16 @@ internal sealed class ItemsHost
 
     public DataTemplate CreateDataTemplate() => new(() => new ReactorCell(this));
 
-    internal void Register(ReactorCell cell) => _cells.Add(cell);
+    /// <summary>
+    /// True once the list's element is unmounted. The platform can still create or bind cells after
+    /// that (a page animating out keeps its content); they must not start new Reactor trees.
+    /// </summary>
+    public bool Stopped { get; private set; }
+
+    internal void Register(ReactorCell cell)
+    {
+        if (!Stopped) _cells.Add(cell);
+    }
 
     /// <summary>
     /// Brings <see cref="Items"/> to <paramref name="items"/> with the fewest moves, inserts and
@@ -106,6 +115,7 @@ internal sealed class ItemsHost
 
     public void UnmountAll()
     {
+        Stopped = true;
         foreach (var cell in _cells) cell.Unmount();
         _cells.Clear();
     }
@@ -131,7 +141,7 @@ internal sealed class ReactorCell : ContentView
 
     public void Render()
     {
-        if (BindingContext is not ItemBox box) return;
+        if (_host.Stopped || BindingContext is not ItemBox box) return;
         _root ??= _host.CreateRoot(native => Content = native is null ? null : Props.AsView(native));
         var element = _host.Template(box.Item) ?? EmptyElement.Instance;
         // Keyed by item, so a cell recycled for another item remounts instead of keeping that
@@ -162,6 +172,7 @@ internal sealed class SlotRoot(ItemsHost host, Action<View?> assign)
             assign(null);
             return;
         }
+        if (host.Stopped) return;
         _root ??= host.CreateRoot(native => assign(native is null ? null : Props.AsView(native)));
         _root.Render(element);
     }
@@ -196,10 +207,10 @@ internal sealed class CollectionViewHandler : ViewHandler<CollectionViewElement,
         {
             if (context.IsEchoing(view)) return;
             var keys = e.CurrentSelection.OfType<ItemBox>().Select(static b => b.Key).ToArray();
-            context.Current.OnSelectionChanged?.Invoke(keys);
+            context.Live?.OnSelectionChanged?.Invoke(keys);
             context.RestoreAfterEvent();
         };
-        view.RemainingItemsThresholdReached += (_, _) => context.Current.OnRemainingItemsThresholdReached?.Invoke();
+        view.RemainingItemsThresholdReached += (_, _) => context.Live?.OnRemainingItemsThresholdReached?.Invoke();
         return view;
     }
 
@@ -289,7 +300,7 @@ internal sealed class CarouselViewHandler : ViewHandler<CarouselViewElement, Rea
         view.PositionChanged += (_, e) =>
         {
             if (context.IsEchoing(view)) return;
-            context.Current.OnPositionChanged?.Invoke(e.CurrentPosition);
+            context.Live?.OnPositionChanged?.Invoke(e.CurrentPosition);
             context.RestoreAfterEvent();
         };
         return view;

@@ -755,3 +755,61 @@ unhandled error does, depends on its renderer. Duplicate keys throw on MAUI beca
 would otherwise move one child's state to another silently; WinUI keeps reporting them, since
 throwing would break apps that render with them today. The hook-count check (§13.3) is MAUI-only for the
 same reason: turning it on for WinUI would throw in apps that call hooks conditionally today.
+
+## 14. Phase 3c: echo
+
+Spec §12.3 asks for echo to be characterized before anything is shared. The MAUI device tier now
+does that for the eleven controlled form controls (`Entry`, `Editor`, `SearchBar`, `CheckBox`,
+`Switch`, `RadioButton`, `Slider`, `Stepper`, `Picker`, `DatePicker`, `TimePicker`), on Mac
+Catalyst, the iOS simulator and the Android emulator, for both renderers
+(`tests/Reactor.Maui.DeviceTests/EchoFixtures.cs`):
+
+| Case | What MAUI does |
+|---|---|
+| Reactor writes a controlled control | Its change event fires synchronously inside the write and is suppressed. Nothing is reported in the 400 ms after the render either. |
+| Two renders in one batch, or a render that changes nothing | Nothing is reported, and the control shows the last value. (The number of writes isn't measured.) |
+| A write the control coerces (slider or stepper value out of range, `Entry` longer than `MaxLength`, picker index past the last item) | The control shows the coerced value; nothing is reported; re-rendering the same value doesn't loop. For the slider and stepper the clamping is Reactor's own (`Range.Write`); the other two are the control's. |
+| User input the app refuses | Reported once, with the input value; the control returns to the declared value, and the restore isn't reported. Checked on the platform view for `Entry` and `Switch`, on the virtual view for the check box, slider and picker. |
+| Input after the element is unmounted | Was reported to the unmounted component's callbacks, on every platform and both renderers. Now dropped. |
+
+**Not characterized yet**, and owned by phase 4's control inventory: the controlled properties of
+`CarouselView` (`Position`, which the platform can update while an animated scroll settles, after the
+write returns), `CollectionView` selection, `RefreshView.IsRefreshing`, tabs and the flyout's
+`IsPresented`. Two §12.3 cases have no fixture either: an event's payload against the control's
+readback, and several controlled properties on one control (the slider's range and value are written
+together, but only the value is controlled).
+
+**What this means for sharing.** WinUI needs its value-diff arm and suppress counter because some
+WinUI controls raise their change event after the write returns (`RichEditBox`, `AutoSuggestBox`),
+and because a write can raise several events. None of the controls above does either: a scope around
+the write (`EchoGuard`, the equivalent of WinUI's non-consuming setter scope) is exact for them.
+Moving WinUI's mechanism into the core would put a seam on WinUI's hot path for no proven MAUI
+benefit, so echo stays in each renderer, as §12.2 option C allows. If one of the uncharacterized
+controls echoes late, the value-diff decision is the piece to extract then, with that control as its
+second consumer. What is shared is the contract:
+
+- A programmatic write is never reported as input.
+- A coerced write is not reported; the control shows the coerced value and the app keeps its own.
+  WinUI does the same for its range controls (the counter path). Reporting it instead would loop:
+  the restore after the report writes the declared value again, which is coerced again.
+- Input after unmount reaches no callback. On MAUI, handlers invoke callbacks through
+  `HandlerContext.Live`, which is `null` once the element is unmounted. `IsEchoing` is also true
+  then, so a third-party change event that checks it first is covered even if it reads `Current`;
+  any other third-party event must use `Live`. On WinUI this isn't verified yet: its trampolines
+  read the element from the control's state, which the pool and the items factory clear, but other
+  unmount paths may not. A WinUI fixture for it is a follow-up.
+
+Two consequences for MAUI apps:
+
+- **A page the app removes doesn't report `OnDisappearing`.** Reactor unmounts it before the platform
+  pops it, and the component that rendered it may already have run its cleanups. A page that is
+  covered, or that the user pops before the app's state drops it, still reports it. Release
+  resources in an effect's cleanup, which runs on removal.
+- **A list's cells stop rendering once the list is unmounted.** The platform can still realize cells
+  while a page animates out; they no longer start Reactor trees, which nothing would unmount.
+
+**Convergence item.** MAUI handlers repeat a three-step input pattern (`IsEchoing`, invoke through
+`Live`, `RestoreAfterEvent`), where WinUI's bindings resolve the element in the framework
+(`ReactorBinding<TElement>`). A single `HandlerContext` dispatch helper would make the pattern
+correct by construction for third-party handlers; it is part of the shared handler protocol work
+(§12.3, descriptors).

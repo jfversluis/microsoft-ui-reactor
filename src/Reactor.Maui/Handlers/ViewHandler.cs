@@ -30,7 +30,7 @@ internal abstract class ViewHandler<TElement, TView> : Reactor.Hosting.IElementH
 
     public virtual IChildrenStrategy<TElement, TView>? Children => null;
 
-    /// <summary>Creates the view and subscribes its events. Events read <c>context.Current</c>.</summary>
+    /// <summary>Creates the view and subscribes its events. Events invoke callbacks through <c>context.Live</c>.</summary>
     protected abstract TView Create(HandlerContext<TElement> context, TElement element);
 
     /// <summary>Applies the control's own properties. <paramref name="previous"/> is <c>null</c> on mount.</summary>
@@ -185,7 +185,7 @@ internal static class ViewApplier
         if (n.OnTap is not null && state.Tap is null)
         {
             state.Tap = new TapGestureRecognizer();
-            state.Tap.Tapped += (_, _) => context.Current.Modifiers?.OnTap?.Invoke();
+            state.Tap.Tapped += (_, _) => context.Live?.Modifiers?.OnTap?.Invoke();
             view.GestureRecognizers.Add(state.Tap);
         }
         else if (n.OnTap is null && state.Tap is not null)
@@ -200,7 +200,7 @@ internal static class ViewApplier
             state.Swipes = [.. new[] { SwipeDirection.Left, SwipeDirection.Right, SwipeDirection.Up, SwipeDirection.Down }.Select(direction =>
             {
                 var swipe = new SwipeGestureRecognizer { Direction = direction };
-                swipe.Swiped += (_, e) => context.Current.Modifiers?.OnSwipe?.Invoke(e.Direction);
+                swipe.Swiped += (_, e) => context.Live?.Modifiers?.OnSwipe?.Invoke(e.Direction);
                 view.GestureRecognizers.Add(swipe);
                 return swipe;
             })];
@@ -214,7 +214,7 @@ internal static class ViewApplier
         if (n.OnPan is not null && state.Pan is null)
         {
             state.Pan = new PanGestureRecognizer();
-            state.Pan.PanUpdated += (_, e) => context.Current.Modifiers?.OnPan?.Invoke(e);
+            state.Pan.PanUpdated += (_, e) => context.Live?.Modifiers?.OnPan?.Invoke(e);
             view.GestureRecognizers.Add(state.Pan);
         }
         else if (n.OnPan is null && state.Pan is not null)

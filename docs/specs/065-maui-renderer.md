@@ -168,7 +168,9 @@ Design choices that differ from today's WinUI Reactor, and why:
 - **The engine keeps its own node tree** instead of storing state on native controls through
   an attached property. A component node's state is the shared core's `ComponentNode`, so the
   core's skip gate and render kernel run on it. Handlers
-  wire events once at mount and read `context.Current` when the event fires.
+  wire events once at mount and invoke callbacks through `context.Live` when the event fires:
+  the current element, or `null` once it is unmounted, so a control that raises an event after
+  teardown reaches no callback.
 - **Native controls are `object` to the engine.** Each handler is strongly typed; the
   registry erases the types. Natives are always reference types, so nothing is boxed.
 - **Components and groups produce no native control.** After reconciling, the engine
@@ -176,6 +178,9 @@ Design choices that differ from today's WinUI Reactor, and why:
   hands that list to the children strategy, which moves only what changed.
 - **Echo suppression is an engine primitive** (`HandlerContext.WriteSuppressed` /
   `IsEchoing`), so a programmatic write's change event is not reported as user input.
+  `IsEchoing` is also true once the element is unmounted. Every controlled form control raises its
+  change event synchronously inside the write, so a scope around the write is enough for them
+  (spec 067 §14 lists the controls not characterized yet).
 
 ## 6. What has been proven
 
@@ -192,14 +197,15 @@ restored when a callback rejects input, `CanUpdate` remounts, and hot reload re-
 root, and errors a handler reports from its own asynchronous work (`HandlerContext.ReportError`)
 reaching boundaries. A boundary test fails if the core references anything but `System.*`.
 
-**Renderer, headless** (`tests/Reactor.Maui.Tests`, 34 tests). Real Controls objects and direct
+**Renderer, headless** (`tests/Reactor.Maui.Tests`, 39 tests). Real Controls objects and direct
 views, no platform handlers: modifiers, every control's props and echo-free events, the hybrid
 fallback and mixed trees, `CollectionView` cells as child roots, pages, toolbar items, the
 navigation stack's reconcile, the user-pop rule (below), tabs and flyout (including swapping the
 two flyout pages between slots).
 
-**Device tier** (`tests/Reactor.Maui.DeviceTests`, 25 fixtures). All pass on Mac Catalyst (macOS 26,
-Apple silicon), an iPhone 18 Pro simulator (iOS 27) and a Pixel 10 (Android 16). They check what the
+**Device tier** (`tests/Reactor.Maui.DeviceTests`, 34 fixtures). All pass on Mac Catalyst (macOS 26,
+Apple silicon), an iPhone 18 Pro simulator (iOS 27) and the Android API 37 emulator; the 25 earlier
+ones also ran on a Pixel 10 (Android 16). They check what the
 native views show, not the virtual tree:
 - Taps reach state, and the platform label updates in place. Typing into a controlled `Entry` is
   corrected by the app's rule on the platform field. Keyed rows keep their typed text across a
@@ -209,6 +215,10 @@ native views show, not the virtual tree:
   Pixel), for both renderers. Mac Catalyst is exempt: MAUI lays page content under its title bar
   there, whatever renders it.
 - A long label wraps (several lines' height) on both renderers, with identical metrics.
+- Echo, on both renderers (spec 067 §14): Reactor's writes to the eleven controlled form controls
+  report nothing, at once or later; a coerced write shows the coerced value and reports nothing,
+  without looping; input the app refuses is reported once and restored; input after unmount is not
+  reported. A page the app removes doesn't report `OnDisappearing`; a covered page does.
 - Navigation: a push reaches the platform stack (`UINavigationController` depth on iOS); the back
   button reaches app state; a back press *while the push animation still runs* is reported; a pop
   the app refuses is undone, including when the navigator is idle; an accepted back never re-pushes

@@ -9,7 +9,7 @@ using static Reactor.Maui.DeviceTests.FixtureContext;
 
 namespace Reactor.Maui.DeviceTests;
 
-public static class Fixtures
+public static partial class Fixtures
 {
     private static readonly (string Name, Func<ElementHandlerRegistry> Create)[] Renderers =
     [
@@ -27,6 +27,7 @@ public static class Fixtures
             new($"Keyed_RowsKeepTheirStateAcrossAReorder [{r.Name}]", c => KeyedRows(c, r.Create())),
             new($"Label_WrapsLongTextByDefault [{r.Name}]", c => LabelWraps(c, r.Create())),
         }),
+        .. EchoFixtures(),
         new("NavigationStack_PushReachesThePlatform_AndBackIsReported", NavigationBack),
         new("NavigationStack_BackDuringThePushAnimation_IsReported", NavigationBackDuringPush),
         new("NavigationStack_BackTheAppRefuses_PushesThePageBack", NavigationRefusedBack),
