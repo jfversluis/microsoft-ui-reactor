@@ -65,9 +65,9 @@ So the **behaviour** moves to the core, and each renderer keeps a thin public **
 | `NavigationStack<TRoute>` (internal, moved as is) | `NavigationHandle<TRoute>`: the public facade over the model. WinUI's is unchanged; MAUI's has the same names and members |
 | `NavigationState<TRoute>`, `DeepLinkMap<TRoute>` and its helpers (public, moved: same namespace and names) | `NavigateOptions`: WinUI keeps `Transition`, `ConnectedAnimationKey` and `PushToBackStack`; MAUI has `Animated` and `PushToBackStack` |
 | `NavigationMode` and the four lifecycle contexts (public, moved) | `NavigationEventArgs<TRoute>` and `INavigationHandle` |
-| `NavigationModel<TRoute>` (new, internal): the stack, the guard, the navigation operations, change notification, and the captured render-thread scheduler. The handles delegate to it | `NavigationContext<TRoute>`, because it carries the renderer's handle type |
-| `UseNavigationLifecycle` with its hook state, and the lifecycle policy: which callbacks run, in what order, and how a cancel stops a navigation | `UseNavigation<TRoute>(initial)` and `UseNavigation<TRoute>()`, as thin hooks that create or find the renderer's handle |
-| An internal diagnostics sink for navigation requested, completed and cancelled, and for deep links resolved. It emits the ETW events once, and forwards to an installed raiser | `NavigationDiagnostics`. WinUI's public class keeps its events and installs its raiser in its static constructor. The static constructor runs before anything can subscribe, so installation is deterministic, needs no module initializer, and adds no trimming root |
+| `NavigationStack<TRoute>` (internal, moved as is) is the model: the back, current and forward routes, the guard, and change notification. The handles delegate to it, as WinUI's already does | `NavigationContext<TRoute>`, because it carries the renderer's handle type |
+| The lifecycle hook's state and registration (`NavigationLifecycleHooks`, internal): the slot the hook stores, and the lookup a host uses to find a component's callbacks | `UseNavigation<TRoute>(initial)`, `UseNavigation<TRoute>()` and `UseNavigationLifecycle(...)`, as thin public hooks. WinUI's `UseNavigationLifecycle` stays in `WinUIHooks`, so binaries built against it keep resolving |
+| | `NavigationDiagnostics`: WinUI's public class is unchanged. The moved model types raise no diagnostics, so no sink is needed; MAUI's handle writes the same ETW events through `ReactorEventSource` |
 | | Hosts, transitions, cache and the system back button |
 
 - **No WinUI source change.** Shared components call `UseNavigation`, `Navigate`, `GoBack` and the
@@ -76,8 +76,8 @@ So the **behaviour** moves to the core, and each renderer keeps a thin public **
 - **The moved types keep their full names.** They are pure data and logic with no WinUI types in
   their signatures. Each gets a `[TypeForwardedTo]` entry in `src/Reactor/TypeForwards.cs`; the
   existing gate (`NeutralCoreBoundaryTests`) detects a missing one.
-- **The `Microsoft.UI.Reactor.Core` IVT list** gains `Microsoft.UI.Reactor.Maui` for the internal
-  model.
+- **The `Microsoft.UI.Reactor.Core` IVT list** already includes `Microsoft.UI.Reactor.Maui`, so
+  MAUI's handle and host use the internal model and lifecycle hooks.
 
 ### 2.2 The model
 
