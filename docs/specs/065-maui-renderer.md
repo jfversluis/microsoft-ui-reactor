@@ -296,8 +296,7 @@ and the direct-renderer todos page were checked on the iPhone simulator.
 - **Hot reload is verified headlessly only**, by invoking the metadata-update handler. It has not
   been exercised from an IDE session.
 - **CI device runs.** `.github/workflows/maui.yml` runs the device tier on Mac Catalyst and an iOS
-  simulator. Android runs locally only (an emulator on a hosted macOS runner is too slow). The
-  workflow has not run on GitHub yet.
+  simulator on every PR. Android runs locally only (an emulator on a hosted macOS runner is too slow).
 - **App projects must not be trimmable.** The repo enables `IsAotCompatible` everywhere, which marks
   app assemblies trimmable. Apple builds then trim them even in Debug, and drop `SceneDelegate`,
   which only `Info.plist` names. The result is a blank window. The sample sets
@@ -306,9 +305,10 @@ and the direct-renderer todos page were checked on the iPhone simulator.
   longer than that, the navigator would settle against it and not restore the page when it finally
   left. Not observed on any platform (pops leave within about 0.6 s).
 - **MAUI bug on Android: replacing `Window.Page` while a `NavigationPage` push is in flight**
-  crashes the app ("NavigationManager cannot be null here", from
+  crashes the app ("NavigationManager cannot be null here", or "CurrentPage cannot be null", from
   `NavigationViewFragment.OnCreateView`). Reproduced with plain MAUI, no Reactor involved. A
   `ReactorWindow` hits it when its root switches away from a `NavigationStack` mid-push. Worth
-  filing in dotnet/maui; a workaround would defer the window page swap until navigation settles.
+  filing in dotnet/maui; a workaround would defer the window page swap until navigation settles
+  (spec 068 §3 records why that isn't shipped yet).
 - **About 46,000 outstanding JNI global references** were logged during the Android benchmark;
   worth investigating for leaks (§4.1).

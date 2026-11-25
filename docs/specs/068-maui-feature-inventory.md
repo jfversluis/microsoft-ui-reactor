@@ -94,15 +94,17 @@ Legend: ✅ implemented · 🟡 partial (gap noted) · ⬜ planned (sub-phase) �
 
 ## 3. Open issues carried into phase 4
 
-- **Android: `CurrentPage cannot be null`** in `StackNavigationManager` /
-  `NavigationViewFragment.OnCreateView`.
-  - Seen in phase 3e on a GPU-backed emulator, when a test replaced the window's page right after an
+- **Android: replacing `Window.Page` while a `NavigationPage` navigates crashes MAUI.** Spec 065 §7
+  records this; it reproduced with plain MAUI, without Reactor ("NavigationManager cannot be null",
+  and in phase 3e "CurrentPage cannot be null", both from `NavigationViewFragment.OnCreateView`).
+  - Phase 3e hit it on a GPU-backed emulator, when a test replaced the window's page right after an
     app-initiated pop (3 of 3 runs).
-  - It does not reproduce on a SwiftShader emulator, even when the page is swapped while the navigator
-    is mid-push or mid-pop, with or without a deferral.
+  - On the current SwiftShader emulator it doesn't reproduce, even when the page is swapped while the
+    navigator is mid-push or mid-pop. So a deferred page swap couldn't be shown to fix it, and it
+    isn't shipped.
   - `Window_ReplacingThePageWhileAStackNavigates_ShowsTheNewPage` covers the scenario.
-  - The cause is not established, so there is no fix yet. The next step is a minimal MAUI-only repro
-    on the GPU emulator; if it reproduces without Reactor, file it in dotnet/maui.
+  - Next steps: file the plain-MAUI repro in dotnet/maui, then add a `ReactorWindow` workaround once
+    there's a device setup that reproduces it.
 - **Back gestures and platform pops** are reconciled with a 3-second cutoff (`StackNavigator`);
   replace it with MAUI's navigation-completed signal (4c, with Shell).
 - **Android JNI references.** Phase 3e's SIGSEGV after a theme change was one instance: removed
