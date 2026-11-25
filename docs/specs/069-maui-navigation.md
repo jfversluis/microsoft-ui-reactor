@@ -374,25 +374,46 @@ return Shell(tab, setTab,
     and depth. The `Navigating` and `Navigated` events that match are its own, and are never
     treated as the user's.
 - **A user's back: preflight in `Navigating`, commit on completion.** Shell reports every user back
-  as `Navigating` with source `Pop`, which can be cancelled. This covers the iOS back button and
-  swipe, the Android toolbar back, and the Android back key.
-  - **Preflight**, synchronously in `Navigating`, for a pop that isn't the adapter's own:
+  as a cancellable `Navigating`: the iOS back button and swipe, the Android toolbar back, and the
+  Android back key. The source is `Pop`, or `PopToRoot` when the target is the content's root
+  (`ShellNavigationManager.CalculateNavigationSource`). Both are handled the same way.
+  - **Classification.** An event is a user back when:
+    - it isn't the adapter's own (origin tagging above);
+    - its target is a page in this section's stack;
+    - it removes pages from the top.
+
+    A modal dismissal and a root exit (an empty target) are not user backs.
+  - **Preflight**, synchronously in `Navigating`:
     - the departing page's `onNavigatingFrom`;
-    - the destination's `onNavigatingTo`. The destination is the page below, already mounted.
-    - If either refuses, the event is cancelled and no page moves on any platform.
-    - If both accept, nothing is committed yet; the approval is recorded with the section, its
-      depth and the model's version.
-  - **Commit** when the section's stack has lost the page: `Navigated` with source `Pop` for that
-    section, at the approved depth. The model then moves back by the levels the user popped, without
-    running the guard again. A navigation the app started in the meantime (the model's version
-    changed) voids the approval, and the host reconciles to the model, as on a `NavigationPage`.
-  - **Abandon.** An iOS swipe can be cancelled after `Navigating`. Then no `Navigated` follows, and
-    the next `Navigating` replaces the approval, so the model never moves for a gesture that didn't
-    complete.
+    - the destination's `onNavigatingTo` (the destination is already mounted below).
+    - If either refuses, the event is cancelled, and no page moves on any platform.
+    - If both accept, the adapter records a **single-use approval**: the section, the identities of
+      the departing and destination pages, the depth, and the model's version. The approval is
+      checked against the model after the callbacks run, since a callback can navigate.
+  - **The native operation is then busy** until it settles:
+    - **Completed:** `Navigated` for that section reaches the approved depth.
+    - **Cancelled:** an interactive swipe the user abandons. On iOS and Mac Catalyst the adapter
+      watches the navigation controller's transition coordinator (`NotifyWhenInteractionChanges`),
+      which reports a cancel, as MAUI's renderer does. Android's back is not interactive.
+    - **Fallback:** if neither arrives within a few seconds, the operation is treated as settled.
+      The adapter never waits on a later `Navigating`.
+
+    While the operation is busy, app navigations are held and reconciled when it settles.
+    `WindowPageSetter` waits on the same busy state.
+  - **Commit** on completion. The approval is consumed once at both layers: the model moves back to
+    the approved entry through an internal commit that skips its guard, and the host's lifecycle
+    takes the destination as already approved, so its `onNavigatingTo` doesn't run again. The
+    `onNavigatedTo` and `onNavigatedFrom` callbacks then run as usual.
+    - If the model's version changed while the operation was busy, the approval is void, and the
+      host reconciles to the model.
+    - A cancel discards the approval; the model never moved.
   - **At the root**, Shell raises `Navigating(Pop)` with an empty target to offer the back key. The
     adapter leaves it alone, so the key reaches the app or the OS.
   - `BackButtonBehavior.Command` isn't used for interception, because MAUI doesn't run it for the
     Android back key.
+- **Visible intermediate steps.** A change below the top pops to the deepest page that is still the
+  same, then pushes the rest. The user may see those steps. They are the adapter's own operations
+  (tagged), and never become separate navigations in the model.
 - **Completion** of the adapter's own operations is its awaited task. A user pop completes at
   `Navigated`. Inside Shell, this replaces the 3-second platform-pop window (spec 068 §3).
 - **A deselected tab keeps its stack.** MAUI doesn't reset a section's stack when the selection
@@ -417,8 +438,12 @@ return Shell(tab, setTab,
   for it. An app that wants to refuse a switch refuses it in `onSelected`.
 - **Structural changes are staged:** add new items, select, let the selection settle, then remove
   old items. MAUI's own fallback for a removed current item re-navigates asynchronously, which
-  Reactor never relies on. A removed section's adapter stops. An empty Shell, or a selected key that
-  no longer exists, selects the first selectable item and reports it through `onSelected`.
+  Reactor never relies on. A removed section's adapter stops.
+- **Invalid or missing selection:**
+  - A Shell with nothing selectable (empty, or menu items only) has no selection, and `onSelected`
+    isn't called.
+  - In a Shell with selectable items, a selected key that doesn't exist selects the first selectable
+    item. `onSelected` reports that once, when the selection shown changes, not on every render.
 - **Swapping `ShellItem`s is heavy** (a new native item renderer on iOS, a fragment swap on
   Android). Apps with tabs should use one `TabBar` and change its tabs, which MAUI updates
   incrementally.
@@ -463,10 +488,16 @@ return Shell(tab, setTab,
   - a deep link selecting a tab and a stack;
   - the typed equivalents of an absolute reset (`//route`) and of a relative back with a query
     (`..?refresh=true`).
-- **The interactive iOS swipe**, completed and cancelled, can't be driven from inside the app. Its
-  logic (preflight, then completion or abandonment) is covered headlessly by raising MAUI's events
-  in the order the iOS renderer raises them. The real gesture is checked by the phase 5 Appium
-  harness. Validation is pinned to the MAUI version the workload ships.
+- **The interactive iOS swipe**, completed and cancelled, can't be driven from inside the app.
+  - Its state machine is covered headlessly, by raising MAUI's events in the order the iOS renderer
+    raises them: preflight, then completion, cancel or the fallback.
+  - Before the 4b-2 gate, the real gesture is also driven on the iOS simulator through Appium: an
+    edge swipe that completes, and one that is released early. The checks are the page shown, the
+    model, the guard count, and an app navigation held during the gesture and applied after it.
+  - A cancelled swipe followed by a window swap is included.
+- Also covered: a modal dismissal that leaves the model alone, back to the root reported as
+  `PopToRoot`, and two sections navigating at the same time without their origins colliding.
+- Validation is pinned to the MAUI version the workload ships.
 - **WinUI tiers** green (no WinUI change is expected), and `/perf` within noise.
 
 ## 5. Outline: 4b-3, dialogs, back button, lifecycle
