@@ -529,7 +529,11 @@ differs from §4.1–4.6, or §4 left a choice open:
   host showing its model, the guards run as in the preflight (`PreflightBack`) and the navigator pops
   as its own operation, holding the approval; the model moves (`CommitBack`) once Shell has popped. If
   another `Navigating` handler cancels that pop, the approval is discarded and the model is unchanged.
-  So Android has no preflighted platform pop to watch and no 16 ms polling. A back
+  A key pressed while that pop is outstanding is consumed and queued, and goes back one more level
+  once the model shows the first (its guards run then), so two presses go back two levels with each
+  level's guards running once, as two back-key presses do for a `NavigationPage` (§2.6). A refused or
+  cancelled level drops the presses queued behind it. So Android has no preflighted platform pop to
+  watch and no 16 ms polling. A back
   the host can't preflight is the guarded `GoBack` of §2.6; at the root the key is passed on. iOS and
   Mac Catalyst keep the `Navigating` preflight: the swipe never reaches `OnBackButtonPressed`.
 - **The surface is one-directional.** The binding declares pages to `INativeStack`; a user's back
@@ -591,13 +595,14 @@ differs from §4.1–4.6, or §4 left a choice open:
   user's); the host's lifecycle completes once the page change is shown.
 - **An own operation another handler cancels isn't retried.** After each of its operations the
   navigator compares the section's stack and modal stack with what they were; if Shell didn't move
-  (another `Navigating` handler cancelled it, at once or after a deferral), the declaration is left as
-  refused: a warning is logged through `DiagnosticLog`, the navigator goes idle without retrying, and
+  (another `Navigating` handler cancelled it, at once or after a deferral) and the app hasn't declared
+  anything new meanwhile, the declaration is left as refused: a warning is logged through `DiagnosticLog`, the navigator goes idle without retrying, and
   the host's lifecycle waits (`IsHolding`) until the app declares something else.
 - **A host replacing another in the same tab** takes the section over: the replaced navigator doesn't
   pop (the new one reconciles the section to its own pages, popping to its root once), and the new one
   starts nothing until the replaced one has finished any operation still running, so they never
-  overlap.
+  overlap. A navigator waiting for the one it replaced counts as busy, so a chain of replacements
+  (A, then B, then C) waits for A.
 - **Modal route pages are rejected.** A route page of a Shell tab's host with a modal
   `PresentationMode` throws, pointing at the host's `Modals`: Shell would put it on the window's modal
   stack, outside the section's stack the navigator reconciles.
@@ -624,7 +629,7 @@ differs from §4.1–4.6, or §4 left a choice open:
   `IShellItemController.ProposeSection`, which the tab bars call; the native back is
   `ShellSectionRenderer.ShouldPopItem` (the back button's path; a direct `PopViewController` bypasses
   Shell) on iOS and Mac Catalyst, and the activity's back dispatcher on Android.
-- **Gate evidence.** Headless: `tests/Reactor.Maui.Tests/ShellTests.cs` (52 tests). Device: the 17
+- **Gate evidence.** Headless: `tests/Reactor.Maui.Tests/ShellTests.cs` (55 tests). Device: the 17
   `Shell_*` fixtures pass on Mac Catalyst, the iOS simulator and the Android emulator, with the rest
   of the suite. Each key oracle was mutation-checked (the code broken, the test seen to fail).
 - **The real iOS edge swipe** was driven through Appium (XCUITest, iPhone 18 Pro simulator, iOS 27)

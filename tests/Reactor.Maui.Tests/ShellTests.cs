@@ -1182,6 +1182,115 @@ public class ShellTests
     }
 
     [Fact]
+    public void AndroidBackKey_PressedTwiceDuringThePop_GoesBackTwoLevels_EachGuardOnce()
+    {
+        var h = new Harness();
+        h.Shell.BackKeyIsModelBack = true;
+        h.Lab.A.Navigate("a1");
+        h.Lab.A.Navigate("a2");
+        h.Settle();
+        h.Lab.Log.Entries.Clear();
+        ShellNavigatingDeferral? deferral = null;
+        h.Shell.Navigating += (_, e) =>
+        {
+            if (e.Source is ShellNavigationSource.Pop or ShellNavigationSource.PopToRoot) deferral ??= e.GetDeferral();
+        };
+
+        Assert.True(h.Shell.SendBackButtonPressed());
+        h.Settle();
+        // The first pop is still running: the second press is consumed and queued.
+        Assert.True(h.Shell.SendBackButtonPressed());
+        h.Settle();
+        Assert.Equal("a2", h.Lab.A.CurrentRoute);
+        Assert.Equal("a2:navigatingFrom:Pop a1:navigatingTo:Pop", string.Join(" ", h.Lab.Log.Entries));
+
+        deferral!.Complete();
+        h.Settle();
+
+        Assert.Equal("a0", h.Lab.A.CurrentRoute);
+        Assert.Equal("a0", h.Pages("a"));
+        foreach (var guard in new[] { "a2:navigatingFrom:Pop", "a1:navigatingTo:Pop", "a1:navigatingFrom:Pop", "a0:navigatingTo:Pop" })
+            Assert.Equal(1, Count(h.Lab.Log, guard));
+        Assert.True(h.Navigator("a").IsIdle);
+        Assert.Empty(h.Errors);
+    }
+
+    [Fact]
+    public void ADeclarationMadeWhileACancelledOperationRan_IsTried()
+    {
+        var h = new Harness();
+        ShellNavigatingEventArgs? held = null;
+        ShellNavigatingDeferral? deferral = null;
+        h.Shell.Navigating += (_, e) =>
+        {
+            if (e.Source == ShellNavigationSource.Push && deferral is null)
+            {
+                held = e;
+                deferral = e.GetDeferral();
+            }
+        };
+        h.Lab.A.Navigate("a1");
+        h.Settle();
+        h.Lab.A.Navigate("a2");
+        h.Settle();
+
+        held!.Cancel();
+        deferral!.Complete();
+        h.Settle();
+
+        Assert.Equal("a0,a1,a2", h.Pages("a"));
+        Assert.False(h.Navigator("a").IsHolding);
+        Assert.Empty(h.Errors);
+    }
+
+    [Fact]
+    public void ChainedHostReplacements_WaitForTheFirst_ThenPopToTheRootOnce()
+    {
+        var host = "a";
+        var h = new Harness(lab => lab.Build = l => Shell(l.Tab, l.OnSelected, TabBar(
+            ShellTab("a", "A", host switch
+            {
+                "b" => l.Host(l.B).WithKey("host-b"),
+                "c" => l.Host(l.B).WithKey("host-c"),
+                _ => l.Host(l.A),
+            }))));
+        h.Lab.A.Navigate("a1");
+        h.Settle();
+        ShellNavigatingDeferral? deferral = null;
+        var sources = new List<ShellNavigationSource>();
+        h.Shell.Navigating += (_, e) =>
+        {
+            sources.Add(e.Source);
+            if (e.Source == ShellNavigationSource.Push) deferral ??= e.GetDeferral();
+        };
+        h.Lab.A.Navigate("a2");
+        h.Settle();
+        var a = h.Navigator("a");
+
+        host = "b";
+        h.RenderAgain();
+        var b = h.Navigator("a");
+        host = "c";
+        h.RenderAgain();
+        var c = h.Navigator("a");
+        Assert.Equal(3, new[] { a, b, c }.Distinct().Count());
+        // B waits for A, so it counts as busy, and C waits for it.
+        Assert.False(b.IsIdle);
+        Assert.False(c.IsIdle);
+        Assert.Equal([ShellNavigationSource.Push], sources);
+
+        deferral!.Complete();
+        h.Settle();
+        Assert.True(a.IsIdle && b.IsIdle && c.IsIdle);
+        Assert.Equal([ShellNavigationSource.Push, ShellNavigationSource.PopToRoot], sources);
+        var section = h.Section("a");
+        Assert.Single(section.Stack);
+        Assert.Equal("b0", ((Page)section.CurrentItem.Content).Title);
+        Assert.Empty(h.Shell.Lingering);
+        Assert.Empty(h.Errors);
+    }
+
+    [Fact]
     public void ABackBeforeTheModelsChangeIsShown_IsOneGuardedBackOfTheModel()
     {
         var h = new Harness();

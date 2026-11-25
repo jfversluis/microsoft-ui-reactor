@@ -238,7 +238,7 @@ shared navigation model (spec 069): the stack's operations and guard order, `Pop
 state restored without guards, the lifecycle hook's order and lookup, and a handle over an injected
 scheduler (including one that refuses).
 
-**Renderer, headless** (`tests/Reactor.Maui.Tests`, 148 tests). Real Controls objects and direct
+**Renderer, headless** (`tests/Reactor.Maui.Tests`, 151 tests). Real Controls objects and direct
 views, no platform handlers: modifiers, every control's props and echo-free events, the hybrid
 fallback and mixed trees, `CollectionView` cells as child roots, pages, toolbar items, the
 navigation stack's reconcile, the user-pop rule (below), tabs and flyout (including swapping the
@@ -268,8 +268,10 @@ back key as a guarded model back (accepted, refused by either guard, at the root
 waiting for a busy section (also after a root swap unmounts the Shell), modals (a page change held
 while one is shown, a user dismissal reported, dismissed when the Shell unmounts, a host tab removed
 with its modal shown or mid-push), modal route pages rejected, a tab's content changing from a deep
-host, a host replaced by another (one pop to the root, after the replaced one's operation), an own
-operation or the Android back key's pop cancelled by another handler (not retried, model unchanged),
+host, a host replaced by another (one pop to the root, after the replaced one's operation, also
+through a chain of replacements), an own operation or the Android back key's pop cancelled by another
+handler (not retried, model unchanged; a declaration made meanwhile still tried), two quick back-key
+presses (two levels, each guard once),
 a nested host in a tab's page, conditional tabs, the pages' Shell properties, the flyout, and the
 README snippet.
 

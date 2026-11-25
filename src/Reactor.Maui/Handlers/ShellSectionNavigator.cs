@@ -41,6 +41,7 @@ internal sealed class ShellSectionNavigator : INativeStack
     private OwnOperation? _own;
     private UserBack? _userBack;
     private KeyBack? _keyBack;
+    private int _queuedKeyBacks;
     private ShellSectionNavigator? _predecessor;
 
     // A declaration whose operation Shell refused (another Navigating handler cancelled it): not
@@ -62,7 +63,11 @@ internal sealed class ShellSectionNavigator : INativeStack
 
     public ShellSection? Section => _section;
 
-    public bool IsIdle => !_running && _userBack is null && _keyBack is null;
+    /// <summary>
+    /// True when nothing runs: no operation, no user's back or back key outstanding, and no replaced
+    /// host this one waits for (so a host replacing this one waits too).
+    /// </summary>
+    public bool IsIdle => !_running && _userBack is null && _keyBack is null && _predecessor is null;
 
     public event Action? BecameIdle;
 
@@ -170,6 +175,12 @@ internal sealed class ShellSectionNavigator : INativeStack
             for (var step = 0; step < 1000; step++)
             {
                 if (_userBack is not null || _section is null) return;
+                if ((_stopped || _detached) && _keyBack is { Started: false } unstarted)
+                {
+                    _keyBack = null;
+                    _queuedKeyBacks = 0;
+                    Binding?.DiscardBack(unstarted.Approval);
+                }
                 var operation = _stopped || _detached ? ReleaseOperation() : NextOperation();
                 if (operation is null) return;
                 await operation();
@@ -192,11 +203,9 @@ internal sealed class ShellSectionNavigator : INativeStack
     private void Finish()
     {
         if (!IsIdle) return;
-        if (_keyBack is { } pendingKeyBack && (_stopped || _detached))
-        {
-            _keyBack = null;
-            Binding?.DiscardBack(pendingKeyBack.Approval);
-        }
+        // A back key pressed while the previous one's pop ran goes back one more level once the model
+        // shows the first: its guards run now, once.
+        if (_queuedKeyBacks > 0 && !_stopped && !_detached && StartQueuedKeyBack()) return;
         if (_stopped && !_modalsDismissed)
         {
             _modalsDismissed = true;
@@ -242,9 +251,9 @@ internal sealed class ShellSectionNavigator : INativeStack
         var section = _section!;
         var navigation = section.Navigation;
 
-        if (_keyBack is { } keyBack)
+        if (_keyBack is { Started: false } keyBack)
         {
-            _keyBack = null;
+            keyBack.Started = true;
             return KeyBackOperation(section, keyBack);
         }
         if (IsRefused) return null;
@@ -344,6 +353,7 @@ internal sealed class ShellSectionNavigator : INativeStack
         LastOperationAnimated = animated;
         var section = _section!;
         var before = Snapshot(section);
+        var (pages, modals) = (_pages, _modals);
         _own = new OwnOperation(kind);
         try
         {
@@ -357,7 +367,8 @@ internal sealed class ShellSectionNavigator : INativeStack
         // deferral). Retrying would loop, so the declaration is left until the app declares another.
         var progressed = !Snapshot(section).Equals(before);
         if (completed is not null) completed(progressed);
-        else if (!progressed) Refuse(kind);
+        // A declaration made while the operation ran is tried, not taken as refused.
+        else if (!progressed && ReferenceEquals(pages, _pages) && ReferenceEquals(modals, _modals)) Refuse(kind);
     };
 
     private static (int Pages, Page? Top, int Modals, Page? TopModal) Snapshot(ShellSection section)
@@ -375,7 +386,10 @@ internal sealed class ShellSectionNavigator : INativeStack
             $"A {kind.ToString().ToLowerInvariant()} in a Shell section was cancelled by another Navigating handler; the section keeps its pages until the app navigates again.");
     }
 
-    private sealed record KeyBack(NavigationHostBinding.BackApproval Approval, int Depth, Page Departing);
+    private sealed record KeyBack(NavigationHostBinding.BackApproval Approval, int Depth, Page Departing)
+    {
+        public bool Started { get; set; }
+    }
 
     /// <summary>
     /// The back key's pop: the model moves to the approved entry once Shell has popped the page. If
@@ -386,6 +400,8 @@ internal sealed class ShellSectionNavigator : INativeStack
         var animated = _animated;
         return Own(OperationKind.Pop, animated, () => section.Navigation.PopAsync(animated), _ =>
         {
+            // Outstanding until here: a key pressed meanwhile is queued, not run as another back.
+            _keyBack = null;
             if (section.Stack.Count == back.Depth && !section.Stack.Contains(back.Departing) && !_stopped && !_detached)
             {
                 // The declaration follows the platform at once, so nothing pushes the page back.
@@ -394,6 +410,8 @@ internal sealed class ShellSectionNavigator : INativeStack
             }
             else
             {
+                // The keys queued behind a back that didn't happen are dropped with it.
+                _queuedKeyBacks = 0;
                 Binding?.DiscardBack(back.Approval);
                 if (!_stopped && !_detached)
                     DiagnosticLog.Warning(LogCategory.Navigation, "ShellSection.BackKey",
@@ -516,25 +534,55 @@ internal sealed class ShellSectionNavigator : INativeStack
     /// The back key (Android's key and toolbar back reach <c>Shell.OnBackButtonPressed</c>): one guarded
     /// back of the model, after which the navigator pops as its own operation, so nothing is
     /// preflighted against a platform pop. Returns whether the key is consumed; at the root, with
-    /// nowhere to go, it is passed on to the app or the OS.
+    /// nowhere to go, it is passed on to the app or the OS. A key pressed while the previous one's pop
+    /// is outstanding is consumed and queued: it goes back one more level once that pop has landed, so
+    /// two presses go back two levels, each level's guards running once, as with a
+    /// <c>NavigationPage</c> (spec 069 §2.6).
     /// </summary>
     public bool OnBackKey()
     {
-        if (_section is not { } section || _content is not { } content || _stopped || _detached || Binding is not { } binding) return false;
-        if (_userBack is not null || _keyBack is not null) return true;
-        var stack = section.Stack;
-        if (stack.Count > 1 && CanPreflight(stack, content, binding))
+        if (_section is null || _content is null || _stopped || _detached || Binding is not { } binding) return false;
+        if (_userBack is not null) return true;
+        if (_keyBack is not null || _queuedKeyBacks > 0)
         {
-            var depth = stack.Count - 1;
-            if (binding.PreflightBack(depth) is { } approval)
-            {
-                // The navigator pops now, as its own operation; the model follows once Shell has popped.
-                _keyBack = new KeyBack(approval, depth, stack[^1]);
-                Run();
-            }
+            _queuedKeyBacks++;
             return true;
         }
-        return binding.OnBackButton();
+        return TryKeyBack(binding) ?? binding.OnBackButton();
+    }
+
+    /// <summary>Starts a guarded key back if the host shows its model: whether it was consumed, or <see langword="null"/> if it can't be preflighted now.</summary>
+    private bool? TryKeyBack(NavigationHostBinding binding)
+    {
+        var stack = _section!.Stack;
+        if (stack.Count <= 1 || !CanPreflight(stack, _content!, binding)) return null;
+        var depth = stack.Count - 1;
+        if (binding.PreflightBack(depth) is { } approval)
+        {
+            // The navigator pops now, as its own operation; the model follows once Shell has popped.
+            _keyBack = new KeyBack(approval, depth, stack[^1]);
+            Run();
+        }
+        return true;
+    }
+
+    private bool StartQueuedKeyBack()
+    {
+        if (Binding is not { } binding || _section is not { } section || _content is not { } content) return false;
+        var stack = section.Stack;
+        if (stack.Count <= 1)
+        {
+            _queuedKeyBacks = 0;
+            return false;
+        }
+        // Waits until the model is shown (the host re-renders after the previous back's commit).
+        if (!CanPreflight(stack, content, binding)) return false;
+        _queuedKeyBacks--;
+        TryKeyBack(binding);
+        if (_keyBack is not null) return true;
+        // A refused level ends the presses queued behind it.
+        _queuedKeyBacks = 0;
+        return false;
     }
 
     private bool CanPreflight(IReadOnlyList<Page> stack, ShellContent content, NavigationHostBinding binding) =>
