@@ -674,6 +674,8 @@ All internal, and invisible to WinUI except where noted:
   MAUI asked it anyway and ignored the answer.
 - A component's effects run their cleanups first, then the new effects, rather than each effect's
   cleanup just before that effect (React's order, and WinUI's).
+- An unkeyed child among keyed siblings is matched by its absolute position (phase 3b, §13.6): moving
+  it past a keyed sibling remounts it. Key it to keep its state.
 - Code that calls `Provide` needs `Microsoft.UI.Reactor.Core` in scope; the package's global usings
   provide it. Both `context.Provide(value, child)` and WinUI's `element.Provide(context, value)` work;
   the second returns the provider, so it ends a modifier chain.
@@ -687,3 +689,69 @@ All internal, and invisible to WinUI except where noted:
 
 The rest of §11.3 (identity, invalidation, recovery, effect timing) and the protocol pieces of §12.
 Those are decided through a conformance suite that runs on both renderers; 3a doesn't change them.
+
+### 13.6 Phase 3b: one child diff, and a conformance suite
+
+**Identity** (§11.3) is settled by sharing the algorithm. MAUI's engine reconciles a node's children
+through the core's `ChildReconciler`, the diff WinUI uses, with child nodes as its "native"
+children (`ReactorRoot.ChildHost`). Keyed children match by key with the minimal moves for a
+reorder (LIS); unkeyed children match by slot, so a conditional child that appears or disappears
+doesn't shift its siblings. An unkeyed child among keyed ones matches by its absolute position and
+type, which is WinUI's rule. MAUI used to match it by position among the unkeyed children, so
+moving it past a keyed sibling kept its state; now it remounts, as on WinUI.
+
+The engine's host answers the diff's questions with constants where MAUI has no equivalent:
+
+- no exit transitions or ambient animation;
+- no structural-skip hints;
+- no theme re-resolution on a skip.
+
+A child whose element is unchanged is skipped unless it is dirty itself; its dirty descendants
+render in the engine's batch, as before. Duplicate sibling keys still throw on MAUI, where WinUI
+reports them (§13.7). A slotted host still gets one group per declared child, including null and
+empty ones, which the diff mounts no node for: a navigation stack finds its modals by position.
+
+**The conformance suite** is one table of scenarios and expected results,
+`tests/_shared/RendererConformanceScenarios.cs`, compiled into both renderers' suites: MAUI's
+`RendererConformanceTests` (`tests/Reactor.Maui.Engine.Tests`) and WinUI's `Conformance_Identity`
+and `Conformance_Lifecycle` selftests. Each project supplies a few element factories and a runner for
+its own host. It runs on the two real renderers rather than the fake core host §11.3 sketched, so it
+checks each renderer end to end. Each identity scenario mounts tallies, sets their state, checks
+them, re-renders a different arrangement from the root's own state, and reads which tallies kept
+theirs:
+
+- keyed siblings swapped keep their state;
+- an unkeyed child moved past a keyed one is a new child;
+- a conditional child before an unkeyed one doesn't reset it;
+- an unkeyed child that changes type is a new child;
+- unkeyed siblings keep their state when one is appended.
+
+Run on the previous MAUI engine, only the second fails. The lifecycle scenarios are in §13.7.
+
+### 13.7 Recovery and effect timing: renderer policy
+
+The remaining §11.3 contracts stay renderer policy. Invalidation: render counts were never part of
+the contract (§11.3), so each renderer keeps its own (WinUI re-renders the path to a state change,
+MAUI only the dirty node). Recovery and effect timing: §11.3 said phase 3 would pick one; it keeps
+both behind the render kernel's host instead, because each renderer's current behavior is
+defensible and WinUI's can't change without breaking apps:
+
+| | WinUI | MAUI |
+|---|---|---|
+| A render error outside every boundary | an in-tree fallback in the component's place; the app keeps running | the root unmounts, then `UnhandledException` is raised (or the error rethrown), as React does |
+| When effects run | right after the component's own render, before its children mount | after the commit, deepest first, as React's `useEffect` does |
+| Duplicate sibling keys | a diagnostic; the diff continues and matches them to the wrong controls | `InvalidOperationException` before anything changes |
+
+What both renderers guarantee is in the conformance suite (`Conformance_Lifecycle` on WinUI,
+`RendererConformanceTests.Lifecycle` on MAUI):
+
+- an effect runs once, then cleans up and runs again only when a dependency changes, and cleans up
+  when its component unmounts;
+- a boundary shows its fallback for an error below it, runs the failed subtree's cleanups, leaves
+  its siblings and their state alone, and retries its child when it re-renders.
+
+An app or library that depends on the order of effects across components, or on what an
+unhandled error does, depends on its renderer. Duplicate keys throw on MAUI because the shared diff
+would otherwise move one child's state to another silently; WinUI keeps reporting them, since
+throwing would break apps that render with them today. The hook-count check (§13.3) is MAUI-only for the
+same reason: turning it on for WinUI would throw in apps that call hooks conditionally today.

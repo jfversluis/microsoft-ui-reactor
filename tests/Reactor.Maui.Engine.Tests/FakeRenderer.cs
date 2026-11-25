@@ -24,6 +24,15 @@ public sealed class FakeView(string kind)
     }
 
     public void SimulateTyping(string text) => SetText(text);
+
+    /// <summary>Which slot group a slotted host put this view in.</summary>
+    public string? Slot { get; private set; }
+
+    public FakeView WithLabel(string slot)
+    {
+        Slot = slot;
+        return this;
+    }
 }
 
 public sealed record BoxElement(params Element?[] Children) : Element;
@@ -33,6 +42,8 @@ public sealed record TextElement(string Text) : Element;
 public sealed record InputElement(string Value, Action<string>? OnChanged = null) : Element;
 /// <summary>Its handler throws on mount, after the elements before it in a list mounted.</summary>
 public sealed record ExplodingElement(string Message) : Element;
+/// <summary>Two groups of children, synchronized as slots (first, then second).</summary>
+public sealed record SlotsElement(Element?[] First, Element?[] Second) : Element;
 
 /// <summary>Hands out its handler's <c>ReportError</c>, as a control with its own async work would use it.</summary>
 public sealed record ReporterElement(Action<Action<Exception>> Expose) : Element;
@@ -47,7 +58,8 @@ public sealed class FakeRenderer
         .Register(new InputHandler(this))
         .Register(new ExplodingHandler())
         .Register(new ReporterHandler(this))
-        .Register(new FrameHandler(this));
+        .Register(new FrameHandler(this))
+        .Register(new SlotsHandler(this));
 
     private FakeView Create(string kind)
     {
@@ -78,6 +90,27 @@ public sealed class FakeRenderer
             => control.SetText(newElement.Text);
 
         public void Unmount(FakeView control) => control.Unmounted = true;
+    }
+
+    /// <summary>Like a navigation stack: its first slots are pages, the rest modals, found by position.</summary>
+    private sealed class SlotsHandler(FakeRenderer renderer) : IElementHandler<SlotsElement, FakeView>
+    {
+        public FakeView Mount(HandlerContext<SlotsElement> context, SlotsElement element) => renderer.Create("slots");
+        public void Update(HandlerContext<SlotsElement> context, SlotsElement oldElement, SlotsElement newElement, FakeView control) { }
+        public IChildrenStrategy<SlotsElement, FakeView>? Children { get; } = new Strategy();
+
+        private sealed class Strategy : ISlottedChildrenStrategy<SlotsElement, FakeView>
+        {
+            public IReadOnlyList<Element?> GetChildren(SlotsElement element) => [.. element.First, .. element.Second];
+
+            public void SyncSlots(SlotsElement element, FakeView control, IReadOnlyList<IReadOnlyList<object>> slots)
+            {
+                control.Children.Clear();
+                var first = slots.Take(element.First.Length).SelectMany(static s => s).Cast<FakeView>();
+                var second = slots.Skip(element.First.Length).SelectMany(static s => s).Cast<FakeView>();
+                control.Children.AddRange(first.Select(v => v.WithLabel("first")).Concat(second.Select(v => v.WithLabel("second"))));
+            }
+        }
     }
 
     private sealed class FrameHandler(FakeRenderer renderer) : IElementHandler<FrameElement, FakeView>

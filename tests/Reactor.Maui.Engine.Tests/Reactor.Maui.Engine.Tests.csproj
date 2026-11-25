@@ -25,6 +25,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Renderer conformance scenarios, shared with the WinUI selftest hosts (spec 067 §13.6). -->
+    <Compile Include="..\_shared\RendererConformanceScenarios.cs" Link="RendererConformanceScenarios.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Reactor.Maui\Reactor.Maui.csproj" />
   </ItemGroup>
 

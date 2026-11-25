@@ -474,6 +474,9 @@ internal static class SelfTestFixtureRegistry
         ("Lifecycle_HotReload", static harness => new ComponentLifecycleCharacterization.HotReloadRetry(harness)),
         ("Lifecycle_Rerender", static harness => new ComponentLifecycleCharacterization.Rerender(harness)),
         ("Lifecycle_RerenderDepthCap", static harness => new ComponentLifecycleCharacterization.RerenderDepthCap(harness)),
+        // Spec 067 §13.6: renderer conformance, mirrored by MAUI's engine tests
+        ("Conformance_Identity", static harness => new RendererConformance.Identity(harness)),
+        ("Conformance_Lifecycle", static harness => new RendererConformance.Lifecycle(harness)),
         ("ComponentRendered_HostControlRootAndThrowingRoot", static harness => new ComponentRendered_HostControlRootAndThrowingRoot(harness)),
         ("ComponentRendered_ErrorBoundaryCaughtRendersAreReported", static harness => new ComponentRendered_ErrorBoundaryCaughtRendersAreReported(harness)),
         ("ComponentRendered_RootHookOrderRetryIsHotReload", static harness => new ComponentRendered_RootHookOrderRetryIsHotReload(harness)),
