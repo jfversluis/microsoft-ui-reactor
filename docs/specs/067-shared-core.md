@@ -743,7 +743,7 @@ defensible and WinUI's can't change without breaking apps:
 | Duplicate sibling keys | a diagnostic; the diff continues and matches them to the wrong controls | `InvalidOperationException` before anything changes |
 
 What both renderers guarantee is in the conformance suite (`Conformance_Lifecycle` on WinUI,
-`LifecycleConformanceTests` on MAUI):
+`RendererConformanceTests.Lifecycle` on MAUI):
 
 - an effect runs once, then cleans up and runs again only when a dependency changes, and cleans up
   when its component unmounts;
