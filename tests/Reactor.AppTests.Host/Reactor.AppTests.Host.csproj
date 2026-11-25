@@ -45,6 +45,8 @@
     <!-- The CI shard partition. Linked into both hosts and both wrappers so the host that
          selects a shard and the wrapper that checks it parse the spec with one implementation. -->
     <Compile Include="..\_shared\SelfTestShard.cs" Link="SelfTestShard.cs" />
+    <!-- Renderer conformance scenarios, shared with MAUI's engine tests (spec 067 §13.6). -->
+    <Compile Include="..\_shared\RendererConformanceScenarios.cs" Link="RendererConformanceScenarios.cs" />
   </ItemGroup>
 
   <!-- Spec 066 §12.1: the transforms behaviour ledger the TransformsMatrix selftest compares

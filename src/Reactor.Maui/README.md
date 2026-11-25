@@ -128,6 +128,8 @@ Entry(code, value => setCode(value.ToUpperInvariant()), placeholder: "Code")
 
 **Keys keep identity.** Give list items a stable `.WithKey(id)`. Then a reorder moves the existing
 controls, and each item's component state (text typed into its own entry, for example) moves with it.
+Once any sibling has a key, an unkeyed one is matched by its position: if it can move, key it too, or
+it remounts and loses its state.
 
 ## Navigation
 

@@ -67,8 +67,7 @@ public sealed class ReactorRoot
         var next = element ?? EmptyElement.Instance;
         try
         {
-            if (_root is not null && SameIdentity(_root.Element, next)
-                && (_root.Kind != NodeKind.Host || _root.Handler!.CanUpdate(_root.Element, next)))
+            if (_root is not null && CanUpdateInPlace(_root.Element, next))
             {
                 Update(_root, next);
             }
@@ -285,20 +284,21 @@ public sealed class ReactorRoot
     private Node Mount(Element? element, Node? parent)
     {
         element ??= EmptyElement.Instance;
-        var node = element switch
+        var kind = KindOf(element);
+        var node = new Node(element, parent, kind, this);
+        switch (kind)
         {
-            EmptyElement => new Node(element, parent, NodeKind.Empty, this),
-            GroupElement => new Node(element, parent, NodeKind.Group, this),
-            ContextProviderElement provider => new Node(element, parent, NodeKind.Provider, this)
-            {
-                Provided = new() { [provider.Context] = provider.Value },
-            },
-            ErrorBoundaryElement => new Node(element, parent, NodeKind.Boundary, this),
-            ComponentElement => new Node(element, parent, NodeKind.Component, this),
-            FuncElement => new Node(element, parent, NodeKind.Func, this) { Context = new RenderContext() },
-            MemoElement => new Node(element, parent, NodeKind.Memo, this) { Context = new RenderContext() },
-            _ => new Node(element, parent, NodeKind.Host, this) { Handler = _registry.Get(element.GetType()) },
-        };
+            case NodeKind.Provider:
+                var provider = (ContextProviderElement)element;
+                node.Provided = new() { [provider.Context] = provider.Value };
+                break;
+            case NodeKind.Func or NodeKind.Memo:
+                node.Context = new RenderContext();
+                break;
+            case NodeKind.Host:
+                node.Handler = _registry.Get(element.GetType());
+                break;
+        }
 
         try
         {
@@ -623,8 +623,18 @@ public sealed class ReactorRoot
         // An Element?[] is an Element[] at run time; the diff skips the nulls itself.
         var next = elements as Element[] ?? [.. elements!];
         var teardown = new TeardownErrors();
-        ChildReconciler<Element, Node, ChildHost>.Reconcile(
-            parent.ChildElements, next, parent.ChildList, new ChildHost(this, parent, teardown), NoRerender, parent);
+        try
+        {
+            ChildReconciler<Element, Node, ChildHost>.Reconcile(
+                parent.ChildElements, next, parent.ChildList, new ChildHost(this, parent, teardown), NoRerender, parent);
+        }
+        catch (Exception primary)
+        {
+            // A child the diff already unmounted is unreachable now; report its teardown failures
+            // here, alongside the error that is propagating.
+            if (teardown.Errors is { } failures) ReportSecondary(failures, primary);
+            throw;
+        }
         parent.ChildElements = next;
         if (teardown.Errors is { } errors) Report(errors);
     }
@@ -665,9 +675,7 @@ public sealed class ReactorRoot
             teardown.Add(errors);
         }
 
-        public bool CanUpdate(Element oldElement, Element newElement) =>
-            SameIdentity(oldElement, newElement)
-            && (IsCompositional(newElement) || root._registry.Get(newElement.GetType()).CanUpdate(oldElement, newElement));
+        public bool CanUpdate(Element oldElement, Element newElement) => root.CanUpdateInPlace(oldElement, newElement);
 
         // A child whose element is unchanged is skipped, unless it is dirty itself (ResolveDirtyChildIndices).
         public bool CanSkipUpdate(Element oldElement, Element newElement) => ReferenceEquals(oldElement, newElement);
@@ -736,9 +744,23 @@ public sealed class ReactorRoot
         public void OnMovedUnderAmbient(Node control) { }
     }
 
-    private static bool IsCompositional(Element element) =>
-        element is EmptyElement or GroupElement or ContextProviderElement or ErrorBoundaryElement
-            or ComponentElement or FuncElement or MemoElement;
+    /// <summary>What kind of node an element mounts: one of the engine's own, or a host its handler renders.</summary>
+    private static NodeKind KindOf(Element element) => element switch
+    {
+        EmptyElement => NodeKind.Empty,
+        GroupElement => NodeKind.Group,
+        ContextProviderElement => NodeKind.Provider,
+        ErrorBoundaryElement => NodeKind.Boundary,
+        ComponentElement => NodeKind.Component,
+        FuncElement => NodeKind.Func,
+        MemoElement => NodeKind.Memo,
+        _ => NodeKind.Host,
+    };
+
+    /// <summary>Whether the node mounted for <paramref name="previous"/> can update to <paramref name="next"/>.</summary>
+    private bool CanUpdateInPlace(Element previous, Element next) =>
+        SameIdentity(previous, next)
+        && (KindOf(next) != NodeKind.Host || _registry.Get(next.GetType()).CanUpdate(previous, next));
 
     /// <summary>
     /// Unmounts <paramref name="node"/> and its subtree, children first. A throwing cleanup or handler
@@ -833,11 +855,15 @@ public sealed class ReactorRoot
     {
         if (host.Handler!.IsSlotted)
         {
-            var slots = new List<IReadOnlyList<object>>(host.Children.Count);
-            foreach (var child in host.Children)
+            // One group per declared child, nulls and empties included: the diff mounts no node for
+            // them, but a slotted strategy finds its slots by position (a stack's pages, then its modals).
+            var declared = host.ChildElements;
+            var slots = new List<IReadOnlyList<object>>(declared.Length);
+            var next = 0;
+            foreach (var element in declared)
             {
                 var slot = new List<object>();
-                CollectNatives(child, slot);
+                if (element is not null and not EmptyElement) CollectNatives(host.Children[next++], slot);
                 slots.Add(slot);
             }
             host.Handler.SyncSlots(host.Element, host.Native!, slots);

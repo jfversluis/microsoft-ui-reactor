@@ -23,8 +23,8 @@ model targets Android, iOS, Mac Catalyst and Windows through MAUI.
 
 | Project | Target | Role |
 |---|---|---|
-| `src/Reactor.Core` | `net10.0` | The core shared with WinUI (spec 067): `ReactorElement`, `ReactorComponent`, `RenderContext` and its hooks, `Context<T>`, the skip gate and the render kernel. No UI framework reference. |
-| `src/Reactor.Maui` | `net11.0` + `-android/-ios/-maccatalyst/-windows` | The MAUI `Element` and `Component`, the node engine (`Engine/`: keyed reconciler, batched scheduler, handler contract), MAUI element records, both renderers (§4), `ReactorPage`. The plain `net11.0` target exists for headless tests. |
+| `src/Reactor.Core` | `net10.0` | The core shared with WinUI (spec 067): `ReactorElement`, `ReactorComponent`, `RenderContext` and its hooks, `Context<T>`, the skip gate, the render kernel and the keyed child diff (`ChildReconciler`). No UI framework reference. |
+| `src/Reactor.Maui` | `net11.0` + `-android/-ios/-maccatalyst/-windows` | The MAUI `Element` and `Component`, the node engine (`Engine/`: the retained node tree and its host for the core's child diff, batched scheduler, handler contract), MAUI element records, both renderers (§4), `ReactorPage`. The plain `net11.0` target exists for headless tests. |
 | `tests/Reactor.Maui.Engine.Tests` | `net11.0` | Headless engine tests against an in-memory fake renderer. |
 | `tests/Reactor.Maui.Tests` | `net11.0` | Headless renderer tests: real Controls objects and direct views, no platform handlers. |
 | `tests/Reactor.Maui.DeviceTests` | MAUI app | Device tier: fixtures that mount trees through the real platform handlers, act like the platform (taps, typing, back button, modal dismissal, tab selection) and check what the native views show. Prints TAP; `run.sh maccatalyst\|ios\|android`. |
@@ -140,10 +140,10 @@ outstanding JNI global references, which is worth investigating separately.
 flowchart LR
   subgraph Core["Reactor.Core (shared with WinUI; no UI framework)"]
     C[ReactorComponent + RenderContext hooks]
-    G[Skip gate + render kernel]
+    G[Skip gate + render kernel + child diff]
   end
   subgraph Maui["Reactor.Maui"]
-    R[Engine: ReactorRoot<br/>retained node tree,<br/>keyed diff, batching, effects]
+    R[Engine: ReactorRoot<br/>retained node tree,<br/>batching, effects]
     H[IElementHandler contract]
     S[IRenderScheduler]
     MH[Handlers: controls, layouts,<br/>lists, pages, navigation]
@@ -179,7 +179,8 @@ Design choices that differ from today's WinUI Reactor, and why:
 
 ## 6. What has been proven
 
-**Engine, headless** (`tests/Reactor.Maui.Engine.Tests`, 44 tests). Mounting through components and
+**Engine, headless** (`tests/Reactor.Maui.Engine.Tests`, 62 tests). It runs the renderer conformance
+scenarios WinUI runs, with the same expected results (spec 067 §13.6–13.7). Mounting through components and
 groups. A keyed reorder keeps component state *and* the same native controls. Removal unmounts
 and runs effect cleanups. Duplicate keys fail loudly, and changing the root's key remounts it.
 Setters are batched into one posted flush, across components, and hosts are re-synced only after
