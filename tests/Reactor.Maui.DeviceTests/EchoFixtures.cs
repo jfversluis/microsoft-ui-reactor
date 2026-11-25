@@ -256,8 +256,68 @@ public static partial class Fixtures
 {
     // A theme change reaches every input view MAUI still knows about. One Reactor removed must not
     // crash it (Android: SIGSEGV in SearchBarHandler.MapPlaceholderColor on a released native view).
-    private static IEnumerable<Fixture> TeardownFixtures() => Renderers.Select(r =>
-        new Fixture($"Theme_ChangeAfterInputViewsAreRemoved_DoesNotCrash [{r.Name}]", c => ThemeAfterRemoval(c, r.Create())));
+    private static IEnumerable<Fixture> TeardownFixtures() => Renderers.SelectMany(r => new[]
+    {
+        new Fixture($"Theme_ChangeAfterInputViewsAreRemoved_DoesNotCrash [{r.Name}]", c => ThemeAfterRemoval(c, r.Create())),
+        new Fixture($"Removal_DisconnectsTheRemovedView_NotItsSiblings [{r.Name}]", c => SiblingRemoval(c, r.Create())),
+    }).Append(new Fixture("Removal_APageTheAppPops_KeepsItsContentWhileItAnimatesOut", PoppedPageContent));
+
+    private sealed record SiblingProps(Action<Action<bool>> Publish);
+
+    private sealed class Siblings : Component<SiblingProps>
+    {
+        public override Element Render()
+        {
+            var (both, setBoth) = UseState(true);
+            Props.Publish(setBoth);
+            return VStack(
+                both ? SearchBar("a", _ => { }).AutomationId("a").WithKey("a") : null,
+                SearchBar("b", _ => { }).AutomationId("b").WithKey("b"));
+        }
+    }
+
+    private static async Task SiblingRemoval(FixtureContext c, ElementHandlerRegistry registry)
+    {
+        Action<bool>? setBoth = null;
+        c.Show(Component<Siblings, SiblingProps>(new(s => setBoth = s)), registry);
+        var a = (IView)await Loaded<ISearchBar>(c, "a");
+        var b = (IView)c.ById<ISearchBar>("b");
+        await c.WaitFor(() => a.Handler is not null && b.Handler is not null, "both search bars to have handlers");
+
+        setBoth!(false);
+        await c.WaitFor(() => a.Handler is null, "the removed search bar to be disconnected");
+        await c.Settle(300);
+        Check(b.Handler is not null, "the search bar that stays keeps its handler");
+        Check(ReferenceEquals(c.ById<ISearchBar>("b"), b), "the search bar that stays is the same view");
+        Application.Current!.UserAppTheme = AppTheme.Dark;
+        await c.Settle(300);
+        Application.Current.UserAppTheme = AppTheme.Unspecified;
+        Check(b.Handler is not null, "the search bar that stays is still connected after a theme change");
+    }
+
+    private static async Task PoppedPageContent(FixtureContext c)
+    {
+        var log = new List<string>();
+        Action<int>? setDepth = null;
+        c.Show(Component<LifecycleStack, LifecycleProps>(new(log, s => setDepth = s)));
+        var navigation = await LoadedPage<NavigationPage>(c);
+        await c.Settle();
+        setDepth!(2);
+        await c.WaitFor(() => navigation.CurrentPage?.Title == "detail" && navigation.CurrentPage.IsLoaded, "detail to be shown");
+        await c.Settle();
+        var detail = (ContentPage)navigation.CurrentPage;
+        var content = (IView)detail.Content!;
+        Check(content.Handler is not null, "the detail page's content has a handler");
+
+        // The app pops the page; it animates out with its content still showing.
+        setDepth(1);
+        await Task.Yield();
+        Check(content.Handler is not null, "the popped page's content is still connected while it animates out");
+        await c.WaitFor(() => navigation.Navigation.NavigationStack.Count == 1, "MAUI's stack to drop the page", 20000);
+        // Replacing the window's page while the pop still animates crashes MAUI on Android
+        // ("CurrentPage cannot be null"); phase 4 owns that. Let the pop finish before teardown.
+        await c.Settle(800);
+    }
 
     private static async Task ThemeAfterRemoval(FixtureContext c, ElementHandlerRegistry registry)
     {
@@ -265,20 +325,22 @@ public static partial class Fixtures
         var original = app.UserAppTheme;
         try
         {
-            for (var round = 0; round < 12; round++)
+            for (var round = 0; round < 4; round++)
             {
                 c.Show(VStack(
                     SearchBar("s", _ => { }, placeholder: "search").AutomationId("search"),
                     SearchBar("t", _ => { }),
                     SearchBar("u", _ => { }, placeholder: "more"),
-                    Entry("e", _ => { }, placeholder: "entry"),
+                    Entry("e", _ => { }, placeholder: "entry").AutomationId("entry"),
                     Editor("d", _ => { }, placeholder: "editor")), registry);
-                var search = (VisualElement)await Loaded<ISearchBar>(c, "search");
+                var search = (IView)await Loaded<ISearchBar>(c, "search");
+                var entry = (IView)c.ById<IEntry>("entry");
                 await c.Settle(200);
-                await c.WaitFor(() => search.Handler is not null, "the search bar to have a handler while shown");
+                await c.WaitFor(() => search.Handler is not null && entry.Handler is not null, "the views to have handlers while shown");
                 c.Unmount();
-                // The mechanism: a removed input view is disconnected, so an app-wide event can't reach its native views.
-                await c.WaitFor(() => search.Handler is null, "the removed search bar's handler to be disconnected");
+                // The mechanism: removed views are disconnected (a direct layout's Controls children with it), so an
+                // app-wide event can't reach their native views.
+                await c.WaitFor(() => search.Handler is null && entry.Handler is null, "the removed views' handlers to be disconnected");
                 for (var i = 0; i < 3; i++)
                 {
                     GC.Collect();

@@ -13,55 +13,55 @@ namespace Microsoft.UI.Reactor.Maui.Handlers;
 internal static class ControlDescriptors
 {
     public static ControlDescriptor<BoxViewElement, MauiBoxView> BoxView() =>
-        new ControlDescriptor<BoxViewElement, MauiBoxView>(static _ => new())
+        ControlDescriptor.Create<BoxViewElement, MauiBoxView>()
             .Property(MauiBoxView.ColorProperty, static e => e.Color)
             .Property(MauiBoxView.CornerRadiusProperty, static e => e.CornerRadius);
 
     public static ControlDescriptor<ActivityIndicatorElement, MauiActivityIndicator> ActivityIndicator() =>
-        new ControlDescriptor<ActivityIndicatorElement, MauiActivityIndicator>(static _ => new())
+        ControlDescriptor.Create<ActivityIndicatorElement, MauiActivityIndicator>()
             .OneWay(static e => e.IsRunning, static (v, running) => v.IsRunning = running)
             .Property(MauiActivityIndicator.ColorProperty, static e => e.Color);
 
     public static ControlDescriptor<ProgressBarElement, MauiProgressBar> ProgressBar() =>
-        new ControlDescriptor<ProgressBarElement, MauiProgressBar>(static _ => new())
+        ControlDescriptor.Create<ProgressBarElement, MauiProgressBar>()
             .OneWay(static e => e.Progress, static (v, progress) => v.Progress = progress)
             .Property(MauiProgressBar.ProgressColorProperty, static e => e.ProgressColor);
 
     public static ControlDescriptor<CheckBoxElement, MauiCheckBox> CheckBox() =>
-        new ControlDescriptor<CheckBoxElement, MauiCheckBox>(static _ => new())
+        ControlDescriptor.Create<CheckBoxElement, MauiCheckBox>()
             .Property(MauiCheckBox.ColorProperty, static e => e.Color)
             .Controlled(
                 static e => e.IsChecked,
-                static v => v.IsChecked,
                 static (v, isChecked) => v.IsChecked = isChecked,
                 static (v, report) => v.CheckedChanged += (_, e) => report(e.Value),
-                static e => e.OnCheckedChanged);
+                static e => e.OnCheckedChanged,
+                static v => v.IsChecked);
 
     public static ControlDescriptor<SwitchElement, MauiSwitch> Switch() =>
-        new ControlDescriptor<SwitchElement, MauiSwitch>(static _ => new())
+        ControlDescriptor.Create<SwitchElement, MauiSwitch>()
             .Property(MauiSwitch.OnColorProperty, static e => e.OnColor)
             .Property(MauiSwitch.ThumbColorProperty, static e => e.ThumbColor)
             .Controlled(
                 static e => e.IsToggled,
-                static v => v.IsToggled,
                 static (v, on) => v.IsToggled = on,
                 static (v, report) => v.Toggled += (_, e) => report(e.Value),
-                static e => e.OnToggled);
+                static e => e.OnToggled,
+                static v => v.IsToggled);
 
     public static ControlDescriptor<RadioButtonElement, MauiRadioButton> RadioButton() =>
-        new ControlDescriptor<RadioButtonElement, MauiRadioButton>(static _ => new())
+        ControlDescriptor.Create<RadioButtonElement, MauiRadioButton>()
             .OneWay(static e => e.Content, static (v, content) => v.Content = content)
             .TextProperties()
             .Property(MauiRadioButton.GroupNameProperty, static e => e.GroupName)
             .Controlled(
                 static e => e.IsChecked,
-                static v => v.IsChecked,
                 static (v, isChecked) => v.IsChecked = isChecked,
                 static (v, report) => v.CheckedChanged += (_, e) => report(e.Value),
-                static e => e.OnCheckedChanged);
+                static e => e.OnCheckedChanged,
+                static v => v.IsChecked);
 
     public static ControlDescriptor<EditorElement, MauiEditor> Editor() =>
-        new ControlDescriptor<EditorElement, MauiEditor>(static _ => new())
+        ControlDescriptor.Create<EditorElement, MauiEditor>()
             .TextProperties()
             .Property(MauiEditor.PlaceholderProperty, static e => e.Placeholder)
             .Property(MauiEditor.PlaceholderColorProperty, static e => e.PlaceholderColor)
@@ -71,21 +71,21 @@ internal static class ControlDescriptors
             .Property(MauiEditor.AutoSizeProperty, static e => e.AutoSize)
             .Controlled(
                 static e => e.Text,
-                static v => v.Text ?? "",
                 static (v, text) => v.Text = text,
                 static (v, report) => v.TextChanged += (_, e) => report(e.NewTextValue ?? ""),
-                static e => e.OnTextChanged)
+                static e => e.OnTextChanged,
+                static v => v.Text ?? "")
             .Event(static (context, v) => v.Completed += (_, _) => context.Live?.OnCompleted?.Invoke());
 
     public static ControlDescriptor<SearchBarElement, MauiSearchBar> SearchBar() =>
-        new ControlDescriptor<SearchBarElement, MauiSearchBar>(static _ => new())
+        ControlDescriptor.Create<SearchBarElement, MauiSearchBar>()
             .TextProperties()
             .Property(MauiSearchBar.PlaceholderProperty, static e => e.Placeholder)
             .Controlled(
                 static e => e.Text,
-                static v => v.Text ?? "",
                 static (v, text) => v.Text = text,
                 static (v, report) => v.TextChanged += (_, e) => report(e.NewTextValue ?? ""),
-                static e => e.OnTextChanged)
+                static e => e.OnTextChanged,
+                static v => v.Text ?? "")
             .Event(static (context, v) => v.SearchButtonPressed += (_, _) => context.Live?.OnSearch?.Invoke(v.Text ?? ""));
 }

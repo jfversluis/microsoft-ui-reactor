@@ -44,6 +44,11 @@ public sealed class ControlDescriptor<TElement, TView> : Reactor.Hosting.IElemen
     {
         ArgumentNullException.ThrowIfNull(property);
         ArgumentNullException.ThrowIfNull(get);
+        // A value of the wrong type compiles, and MAUI would drop the write at run time.
+        var valueType = Nullable.GetUnderlyingType(typeof(TValue)) ?? typeof(TValue);
+        if (!property.ReturnType.IsAssignableFrom(valueType))
+            throw new ArgumentException(
+                $"{property.PropertyName} holds {property.ReturnType.Name} values, but the element gives {valueType.Name}.", nameof(get));
         _entries.Add(new PropertyEntry<TValue>(property, get, comparer ?? EqualityComparer<TValue>.Default));
         return this;
     }
@@ -71,28 +76,29 @@ public sealed class ControlDescriptor<TElement, TView> : Reactor.Hosting.IElemen
     /// A value the user can change and the element declares, such as a switch's state. The view always
     /// shows the declared value: Reactor's own writes are not reported, the user's changes are reported
     /// through <paramref name="callback"/>, and if the app doesn't accept one (its state doesn't change),
-    /// the view returns to the declared value.
+    /// the view returns to the declared value. The parameters follow WinUI's <c>Controlled</c>; MAUI
+    /// needs no <c>unsubscribe</c>, because a view is never reused.
     /// </summary>
-    /// <param name="get">The declared value.</param>
-    /// <param name="read">The value the view shows now. A write happens only when it differs.</param>
-    /// <param name="write">Shows a value. Its change event must be raised inside the write.</param>
+    /// <param name="get">The value the element declares.</param>
+    /// <param name="set">Shows a value. Its change event must be raised inside the write.</param>
     /// <param name="subscribe">Subscribes to the view's change event, reporting the new value.</param>
     /// <param name="callback">The element's callback for a change, if it has one.</param>
+    /// <param name="readBack">The value the view shows now. A write happens only when it differs from <paramref name="get"/>.</param>
     /// <param name="comparer">Compares the view's value with the declared one.</param>
     public ControlDescriptor<TElement, TView> Controlled<TValue>(
         Func<TElement, TValue> get,
-        Func<TView, TValue> read,
-        Action<TView, TValue> write,
+        Action<TView, TValue> set,
         Action<TView, Action<TValue>> subscribe,
         Func<TElement, Action<TValue>?> callback,
+        Func<TView, TValue> readBack,
         IEqualityComparer<TValue>? comparer = null)
     {
         ArgumentNullException.ThrowIfNull(get);
-        ArgumentNullException.ThrowIfNull(read);
-        ArgumentNullException.ThrowIfNull(write);
+        ArgumentNullException.ThrowIfNull(set);
         ArgumentNullException.ThrowIfNull(subscribe);
         ArgumentNullException.ThrowIfNull(callback);
-        _entries.Add(new ControlledEntry<TValue>(get, read, write, subscribe, callback, comparer ?? EqualityComparer<TValue>.Default));
+        ArgumentNullException.ThrowIfNull(readBack);
+        _entries.Add(new ControlledEntry<TValue>(get, readBack, set, subscribe, callback, comparer ?? EqualityComparer<TValue>.Default));
         return this;
     }
 
@@ -147,11 +153,7 @@ public sealed class ControlDescriptor<TElement, TView> : Reactor.Hosting.IElemen
         ViewApplier.Apply(context, control, oldElement.Modifiers, newElement.Modifiers);
     }
 
-    void Reactor.Hosting.IElementHandler<TElement, TView>.Unmount(TView control)
-    {
-        _unmount?.Invoke(control);
-        ViewApplier.DisconnectWhenRemoved(control);
-    }
+    void Reactor.Hosting.IElementHandler<TElement, TView>.Unmount(TView control) => _unmount?.Invoke(control);
 
     bool Reactor.Hosting.IElementHandler<TElement, TView>.CanUpdate(TElement oldElement, TElement newElement) =>
         _canUpdate?.Invoke(oldElement, newElement) ?? true;
@@ -236,6 +238,15 @@ public sealed class ControlDescriptor<TElement, TView> : Reactor.Hosting.IElemen
     }
 }
 
+/// <summary>Creates <see cref="ControlDescriptor{TElement, TView}"/>s.</summary>
+public static class ControlDescriptor
+{
+    /// <summary>A descriptor whose views are created with <typeparamref name="TView"/>'s parameterless constructor.</summary>
+    public static ControlDescriptor<TElement, TView> Create<TElement, TView>()
+        where TElement : ViewElement
+        where TView : View, new() => new(static _ => new TView());
+}
+
 /// <summary>Entries for the settings every text element shares.</summary>
 public static class ControlDescriptorExtensions
 {
@@ -245,7 +256,7 @@ public static class ControlDescriptorExtensions
     /// </summary>
     public static ControlDescriptor<TElement, TView> TextProperties<TElement, TView>(this ControlDescriptor<TElement, TView> descriptor)
         where TElement : TextViewElement
-        where TView : View =>
+        where TView : View, Microsoft.Maui.Controls.Internals.IFontElement, Microsoft.Maui.Controls.ITextElement =>
         descriptor
             .Property(Label.FontSizeProperty, static e => e.FontSize)
             .Property(Label.FontAttributesProperty, static e => e.FontAttributes)

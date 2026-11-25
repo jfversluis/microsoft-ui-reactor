@@ -68,6 +68,9 @@ case "$platform" in
     "${adb_cmd[@]}" install -r "$apk"
     activity="$("${adb_cmd[@]}" shell cmd package resolve-activity --brief "$app_id" | tail -1 | tr -d '\r')"
     "${adb_cmd[@]}" logcat -c
+    # adb shell re-parses the command on the device, so the filter goes in single quotes (it may
+    # contain | or [ ]); fixture names never contain one, so a filter with ' is rejected.
+    if [[ "${REACTOR_DEVICE_TEST_FILTER:-}" == *"'"* ]]; then echo "REACTOR_DEVICE_TEST_FILTER must not contain '" >&2; exit 2; fi
     "${adb_cmd[@]}" shell am start -n "$activity" ${REACTOR_DEVICE_TEST_FILTER:+-e REACTOR_DEVICE_TEST_FILTER "'$REACTOR_DEVICE_TEST_FILTER'"} > /dev/null
     deadline=$((SECONDS + timeout_seconds))
     until "${adb_cmd[@]}" logcat -d -s DOTNET:I | grep -q "$done_marker"; do

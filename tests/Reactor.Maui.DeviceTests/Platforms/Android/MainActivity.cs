@@ -9,7 +9,7 @@ public class MainActivity : MauiAppCompatActivity
 {
     protected override void OnCreate(Bundle? savedInstanceState)
     {
-        // `adb shell am start -e REACTOR_DEVICE_TEST_FILTER <substring>` (run.sh passes it on).
+        // `adb shell am start -e REACTOR_DEVICE_TEST_FILTER '<a>|<b>'` (run.sh passes it on, quoted for the device shell).
         if (Intent?.GetStringExtra("REACTOR_DEVICE_TEST_FILTER") is { Length: > 0 } filter)
             System.Environment.SetEnvironmentVariable("REACTOR_DEVICE_TEST_FILTER", filter);
         base.OnCreate(savedInstanceState);

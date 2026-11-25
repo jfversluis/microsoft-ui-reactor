@@ -238,7 +238,7 @@ internal sealed class CollectionViewHandler : ViewHandler<CollectionViewElement,
         view.EmptySlot.Render(next.EmptyView);
     }
 
-    protected override void OnUnmount(ReactorCollectionView control)
+    public override void Unmount(ReactorCollectionView control)
     {
         control.Host.UnmountAll();
         control.HeaderSlot.Unmount();
@@ -329,5 +329,5 @@ internal sealed class CarouselViewHandler : ViewHandler<CarouselViewElement, Rea
         });
     }
 
-    protected override void OnUnmount(ReactorCarouselView control) => control.Host.UnmountAll();
+    public override void Unmount(ReactorCarouselView control) => control.Host.UnmountAll();
 }

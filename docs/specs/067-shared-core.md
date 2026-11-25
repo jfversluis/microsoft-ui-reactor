@@ -868,17 +868,20 @@ It is a handler built from entries, with WinUI's verbs:
 |---|---|---|
 | A value Reactor owns | `OneWay` (and `OneWay` with `Optional<T>`, which clears the DP) | `OneWay`; `Property(BindableProperty, get)`, which clears when the value is `null` |
 | Written once | `Initial` / `InitialOnly` | `Initial` |
-| A value the user changes and the element declares | `Controlled` | `Controlled(get, read, write, subscribe, callback)` |
-| Anything else the control reports | `HandCodedEvent`, `Imperative` | `Event((context, view) => …)` |
-| Teardown, remount | `WithUnmount`, the handler's `CanUpdate` | `WithUnmount`, `WithCanUpdate` |
+| A value the user changes and the element declares | `Controlled(get, set, subscribe, unsubscribe, callback, readBack)`; an unset `Optional` value leaves it uncontrolled | `Controlled(get, set, subscribe, callback, readBack)`, always controlled; no `unsubscribe`, since a view is never reused |
+| A coerced value | `CoercingOneWay` | none yet: coercing controls stay hand-written |
+| Anything else the control reports | `HandCodedEvent` | `Event((context, view) => …)` |
+| Teardown, remount | `WithUnmount`; remounting is the reconciler's type and key check | `WithUnmount`, `WithCanUpdate` |
 | Children | children strategies | `WithChildren(IChildrenStrategy)` |
 
 The gate's four points, on MAUI:
 
 - **Order.** On mount, a descriptor creates the view, then every entry writes its initial value, then
-  the element's modifiers are applied, and only then are events wired. This is WinUI's KD-1b rule:
-  no initial write can be reported as input. Children are reconciled after the handler returns, so
-  props come before children, as on WinUI.
+  the element's modifiers are applied, and only then are events wired. Initial writes before events
+  is WinUI's KD-1b rule: no initial write can be reported as input. Applying the modifiers before
+  events is MAUI's own, stricter order (WinUI applies them after the handler returns). Children are
+  reconciled after the handler returns, so props come before children; WinUI's panel strategies do
+  the same, while its items strategies bind items before props (§12.1).
 - **Live element.** A controlled entry reports through `HandlerContext.Live`, and an `Event` entry
   gets the context to do the same, so nothing reaches an unmounted element (§14).
 - **Restore-after-event.** A controlled entry compares the view's value with the declared one, not
@@ -890,6 +893,19 @@ The gate's four points, on MAUI:
 Eight built-in Controls handlers are now descriptors (`ControlDescriptors`): `BoxView`,
 `ActivityIndicator`, `ProgressBar`, `CheckBox`, `Switch`, `RadioButton`, `Editor` and `SearchBar`.
 Controls with coercion or several coupled values (`Entry`'s text and selection, `Slider`, `Stepper`,
-the pickers) stay hand-written for now; the same applies to WinUI's hand-coded handlers. The
+the pickers) stay hand-written for now. That is a MAUI decision: WinUI describes its slider, text box,
+number box and combo box declaratively (`CoercingOneWay`, `HandCodedControlled`), and a MAUI
+`CoercingOneWay` is the matching gap. The
 descriptor is what phase 4's MAUI wrapper generator emits for third-party controls.
+
+**Removed views are disconnected** (found by this phase's device gate). Reactor removed views but
+left their MAUI handlers connected, and some MAUI views stay subscribed to app-wide events: on
+Android, a theme change after a `SearchBar` was removed crashed on its released native views
+(SIGSEGV in `SearchBarHandler.MapPlaceholderColor`, 2 of 4 full device runs). Now the engine records
+the top-most native of every subtree it unmounts, and hands each one to the registry's release hook
+once the pass has synchronized its host. MAUI's hook disconnects the view's handlers with its
+subtree: at once if it is no longer loaded, otherwise when it unloads, as MAUI does for a popped
+page. Pages themselves, and so a popped page's content, are left to MAUI's own disconnect after the
+pop. `HandlerDisconnectPolicy.Manual` opts a view out. The release works for every handler kind,
+built-in, descriptor, direct or third-party, because it lives in the engine.
 

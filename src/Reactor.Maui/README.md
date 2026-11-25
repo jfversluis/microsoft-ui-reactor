@@ -74,7 +74,7 @@ registry you pass. The last registration for a type wins, so yours overrides the
 
 ```csharp
 var registry = MauiHandlers.CreateRegistry()
-    .Register(new RatingHandler())             // IElementHandler<RatingElement, RatingView>
+    .Register(new BadgeHandler())              // IElementHandler<BadgeElement, BadgeView>
     .RegisterForDerivedTypes(new ChipHandler()); // every record derived from ChipBase
 ```
 
@@ -83,15 +83,20 @@ element's values, applies the shared modifiers (margin, size, gestures, semantic
 controlled values, so the view always shows what the element declares:
 
 ```csharp
+using Microsoft.UI.Reactor.Maui.Handlers;
+
 public sealed record RatingElement(int Value, Action<int>? OnChanged = null) : ViewElement;
 
-var rating = new ControlDescriptor<RatingElement, Stepper>(static _ => new Stepper { Maximum = 5 })
+var rating = ControlDescriptor.Create<RatingElement, Stepper>()
+    .Initial(static _ => 5.0, static (v, max) => v.Maximum = max)
     .Controlled(
         static e => (double)e.Value,                       // what the element declares
-        static v => v.Value,                               // what the view shows
         static (v, value) => v.Value = value,              // show a value
         static (v, report) => v.ValueChanged += (_, e) => report(e.NewValue),
-        static e => e.OnChanged is { } changed ? value => changed((int)value) : null);
+        static e => e.OnChanged is { } changed ? value => changed((int)value) : null,
+        static v => v.Value);                              // what the view shows now
+
+var registry = MauiHandlers.CreateRegistry().Register(rating);
 ```
 
 `RegisterForDerivedTypes` covers a family of element records with a non-generic base, such as the

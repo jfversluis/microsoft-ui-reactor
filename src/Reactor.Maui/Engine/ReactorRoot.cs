@@ -31,6 +31,10 @@ public sealed class ReactorRoot
     private readonly List<Node> _dirty = [];
     private readonly List<Node> _effectQueue = [];
     private readonly List<Node> _restoreQueue = [];
+
+    // The top-most natives of the subtrees unmounted in this pass, released once their hosts have
+    // been synchronized (see ReleaseRemoved).
+    private List<object>? _removed;
     private Node? _root;
     private object? _rootNative;
     private bool _flushScheduled;
@@ -75,7 +79,11 @@ public sealed class ReactorRoot
             {
                 var previous = _root;
                 _root = null;
-                if (previous is not null) UnmountAndReport(previous);
+                if (previous is not null)
+                {
+                    NoteRemoved(previous);
+                    UnmountAndReport(previous);
+                }
                 _root = Mount(next, null);
             }
         }
@@ -95,8 +103,10 @@ public sealed class ReactorRoot
         var root = _root;
         _root = null;
         var errors = new List<Exception>();
+        NoteRemoved(root);
         Unmount(root, errors);
         SyncRoot();
+        ReleaseRemoved();
         Report(errors);
     }
 
@@ -229,6 +239,7 @@ public sealed class ReactorRoot
             SyncHosts(hostsToSync, ref syncRoot);
             if (syncRoot) SyncRoot();
             RestoreControlledValues();
+            ReleaseRemoved();
         }
         catch (Exception ex)
         {
@@ -670,6 +681,7 @@ public sealed class ReactorRoot
 
         public void UnmountChild(Node control)
         {
+            root.NoteRemoved(control);
             var errors = new List<Exception>();
             Unmount(control, errors);
             teardown.Add(errors);
@@ -789,6 +801,37 @@ public sealed class ReactorRoot
         }
     }
 
+    /// <summary>Records the top-most natives of a subtree about to be unmounted, to release them after the pass.</summary>
+    private void NoteRemoved(Node node)
+    {
+        if (_registry.ReleaseNative is null || node.Unmounted) return;
+        CollectNatives(node, _removed ??= []);
+    }
+
+    /// <summary>
+    /// Hands each native removed in this pass to the renderer's release hook, once its host has been
+    /// synchronized, so the native is no longer in the native tree. The engine never reuses an
+    /// unmounted node's native, so the release is final. A failing release is reported like a
+    /// teardown error and doesn't stop the others.
+    /// </summary>
+    private void ReleaseRemoved()
+    {
+        if (_removed is not { Count: > 0 } removed || _registry.ReleaseNative is not { } release) return;
+        _removed = null;
+        foreach (var native in removed)
+        {
+            try
+            {
+                release(native);
+            }
+            catch (Exception ex)
+            {
+                if (UnhandledException is { } handler) handler(ex);
+                else System.Diagnostics.Trace.TraceError($"Reactor: releasing a removed control failed: {ex}");
+            }
+        }
+    }
+
     private void UnmountAndReport(Node node)
     {
         var errors = new List<Exception>();
@@ -829,6 +872,7 @@ public sealed class ReactorRoot
         if (_root is { } root)
         {
             _root = null;
+            NoteRemoved(root);
             Unmount(root, teardownErrors);
         }
         try
@@ -839,6 +883,7 @@ public sealed class ReactorRoot
         {
             teardownErrors.Add(syncError);
         }
+        ReleaseRemoved();
 
         var reported = teardownErrors.Count == 0 ? error : new AggregateException(error.Message, [error, .. teardownErrors]);
         if (UnhandledException is { } handler) handler(reported);
@@ -965,6 +1010,7 @@ public sealed class ReactorRoot
                         else syncRoot = true;
                         SyncHosts(hosts, ref syncRoot);
                         if (syncRoot) SyncRoot();
+                        ReleaseRemoved();
                     }
                     catch (Exception unhandled)
                     {

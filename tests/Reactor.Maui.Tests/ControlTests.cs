@@ -470,10 +470,10 @@ public class ControlDescriptorTests
             .Initial(static e => e.Hint, static (v, hint) => v.AutomationId = hint)
             .Controlled(
                 static e => (double)e.Value,
-                static v => v.Value,
                 static (v, value) => v.Value = value,
                 static (v, report) => v.ValueChanged += (_, e) => report(e.NewValue),
-                static e => e.OnChanged is { } changed ? value => changed((int)value) : null)
+                static e => e.OnChanged is { } changed ? value => changed((int)value) : null,
+                static v => v.Value)
             .Event((context, v) => v.Focused += (_, _) => { if (context.Live is { } live) log.Add($"focused {live.Value}"); })
             .WithCanUpdate(static (a, b) => a.Large == b.Large)
             .WithUnmount(v => log.Add($"unmount {v.Value}"));
@@ -569,5 +569,163 @@ public class ControlDescriptorTests
         view.Value = 9;
 
         Assert.Equal(["unmount 3"], log);
+    }
+}
+
+public class RemovedControlTests
+{
+    private sealed record Rows(string[] Keys);
+
+    private sealed class RowsApp : Component<Rows>
+    {
+        public override Element Render() => VStack([.. Props.Keys.Select(k => Label(k).WithKey(k))]);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AControlRemovedInAPass_IsReleasedOnce_AfterItLeavesItsHost_AndKeptOrMovedOnesAreNot(bool direct)
+    {
+        var released = new List<object>();
+        var registry = direct ? DirectHandlers.CreateRegistry() : MauiHandlers.CreateRegistry();
+        var host = new TestHost(registry);
+        registry.ReleaseNative = native =>
+        {
+            // Released only once it is out of its host.
+            Assert.DoesNotContain(native, (IList<IView>)host.RootView!);
+            released.Add(native);
+        };
+        host.Render(Component<RowsApp, Rows>(new(["a", "b", "c"])));
+        var stack = (IList<IView>)host.RootView!;
+        var (a, b, c) = (stack[0], stack[1], stack[2]);
+
+        host.Render(Component<RowsApp, Rows>(new(["c", "a"])));
+        Assert.Equal([b], released);
+        Assert.Equal([c, a], stack);
+
+        // A reorder removes nothing.
+        host.Render(Component<RowsApp, Rows>(new(["a", "c"])));
+        Assert.Equal([b], released);
+
+        // Unmounting the tree releases its top-most control only; it disconnects its own subtree.
+        var root = host.RootView!;
+        registry.ReleaseNative = released.Add;
+        host.Root.Unmount();
+        Assert.Equal([b, root], released);
+    }
+}
+
+public sealed record PanelElement(Element?[] Children) : ViewElement
+{
+    public string? Tag { get; init; }
+}
+
+public class ControlDescriptorEntryTests
+{
+    [Fact]
+    public void OneWay_WritesOnMount_ThenOnlyWhenTheValueChanges_AndChildrenAreReconciledAfterTheProps()
+    {
+        var log = new List<string>();
+        var panel = ControlDescriptor.Create<PanelElement, VerticalStackLayout>()
+            .OneWay(static e => e.Tag, (v, tag) => { log.Add($"tag {tag} with {v.Count} children"); v.ClassId = tag; })
+            .WithChildren(Microsoft.UI.Reactor.Hosting.ChildrenStrategy.List<PanelElement, VerticalStackLayout, IView>(static e => e.Children, static v => v));
+        var host = new TestHost(MauiHandlers.CreateRegistry().Register(panel))
+            .Render(new PanelElement([Label("a"), Label("b")]) { Tag = "one" });
+        var view = (VerticalStackLayout)host.RootView!;
+        var first = view[0];
+        Assert.Equal(["tag one with 0 children"], log);
+        Assert.Equal(["a", "b"], view.Cast<MauiLabel>().Select(l => l.Text));
+
+        host.Render(new PanelElement([Label("a2"), Label("b")]) { Tag = "one" });
+        Assert.Equal(["tag one with 0 children"], log);
+        Assert.Same(first, view[0]);
+        Assert.Equal("a2", ((MauiLabel)view[0]).Text);
+
+        host.Render(new PanelElement([Label("a2")]) { Tag = "two" });
+        Assert.Equal(["tag one with 0 children", "tag two with 2 children"], log);
+        Assert.Single(view);
+        Assert.Equal("two", view.ClassId);
+    }
+
+    [Fact]
+    public void Property_RejectsAValueOfTheWrongType_WhenTheEntryIsAdded()
+    {
+        var error = Assert.Throws<ArgumentException>(() =>
+            ControlDescriptor.Create<PanelElement, VerticalStackLayout>().Property(VisualElement.BackgroundColorProperty, static e => e.Tag));
+        Assert.Contains("BackgroundColor", error.Message);
+    }
+
+    private static T Only<T>(Element element) => (T)new TestHost(MauiHandlers.CreateRegistry()).Render(element).RootView!;
+
+    // Each migrated control: every property set on mount, then cleared when unset, on the same view.
+    [Fact]
+    public void TheMigratedControls_WriteAndClearTheirProperties()
+    {
+        var host = new TestHost(MauiHandlers.CreateRegistry());
+
+        host.Render(Editor("t", placeholder: "p") with
+        {
+            PlaceholderColor = Colors.Red, IsReadOnly = true, MaxLength = 4, Keyboard = Keyboard.Email,
+            AutoSize = EditorAutoSizeOption.TextChanges, FontSize = 20, TextColor = Colors.Blue,
+        });
+        var editor = (Microsoft.Maui.Controls.Editor)host.RootView!;
+        Assert.Equal(("t", "p", Colors.Red, true, 4, Keyboard.Email, EditorAutoSizeOption.TextChanges, 20d, Colors.Blue),
+            (editor.Text, editor.Placeholder, editor.PlaceholderColor, editor.IsReadOnly, editor.MaxLength, editor.Keyboard, editor.AutoSize, editor.FontSize, editor.TextColor));
+        host.Render(Editor("t"));
+        Assert.Same(editor, host.RootView);
+        var fresh = new Microsoft.Maui.Controls.Editor();
+        Assert.Equal((fresh.Placeholder, fresh.PlaceholderColor, fresh.IsReadOnly, fresh.MaxLength, fresh.AutoSize, fresh.FontSize, fresh.TextColor),
+            (editor.Placeholder, editor.PlaceholderColor, editor.IsReadOnly, editor.MaxLength, editor.AutoSize, editor.FontSize, editor.TextColor));
+
+        host.Render(RadioButton("r", true, groupName: "g") with { FontSize = 18 });
+        var radio = (Microsoft.Maui.Controls.RadioButton)host.RootView!;
+        Assert.Equal(("r", true, "g", 18d), ((string)radio.Content, radio.IsChecked, radio.GroupName, radio.FontSize));
+        host.Render(RadioButton("s", false));
+        Assert.Same(radio, host.RootView);
+        Assert.Equal(("s", false, (string?)null), ((string)radio.Content, radio.IsChecked, radio.GroupName));
+
+        var search = Only<Microsoft.Maui.Controls.SearchBar>(SearchBar("q", placeholder: "find"));
+        Assert.Equal(("q", "find"), (search.Text, search.Placeholder));
+        var check = Only<Microsoft.Maui.Controls.CheckBox>(CheckBox(true) with { Color = Colors.Green });
+        Assert.Equal((true, Colors.Green), (check.IsChecked, check.Color));
+        var toggle = Only<MauiSwitch>(Switch(true) with { OnColor = Colors.Green, ThumbColor = Colors.Yellow });
+        Assert.Equal((true, Colors.Green, Colors.Yellow), (toggle.IsToggled, toggle.OnColor, toggle.ThumbColor));
+        var spinner = Only<Microsoft.Maui.Controls.ActivityIndicator>(ActivityIndicator(true) with { Color = Colors.Red });
+        Assert.Equal((true, Colors.Red), (spinner.IsRunning, spinner.Color));
+        var progress = Only<Microsoft.Maui.Controls.ProgressBar>(ProgressBar(0.4) with { ProgressColor = Colors.Red });
+        Assert.Equal((0.4, Colors.Red), (progress.Progress, progress.ProgressColor));
+        var box = Only<Microsoft.Maui.Controls.BoxView>(BoxView(Colors.Red) with { CornerRadius = new CornerRadius(3) });
+        Assert.Equal((Colors.Red, new CornerRadius(3)), (box.Color, box.CornerRadius));
+    }
+
+    [Fact]
+    public void TheMigratedControls_ReportInputWhileMounted_AndNothingAfterUnmount()
+    {
+        var reported = new List<string>();
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(VStack(
+            Editor("e", v => reported.Add($"editor {v}")) with { OnCompleted = () => reported.Add("completed") },
+            SearchBar("s", v => reported.Add($"search {v}")) with { OnSearch = q => reported.Add($"query {q}") },
+            CheckBox(false, v => reported.Add($"check {v}")),
+            RadioButton("r", false, v => reported.Add($"radio {v}"))));
+        var children = (IList<IView>)host.RootView!;
+        var (editor, search, check, radio) = ((IEditor)children[0], (ISearchBar)children[1], (ICheckBox)children[2], (IRadioButton)children[3]);
+        void Input(string text)
+        {
+            editor.Text = text;
+            editor.Completed();
+            search.Text = text;
+            search.SearchButtonPressed();
+            check.IsChecked = true;
+            radio.IsChecked = true;
+        }
+
+        Input("typed");
+        host.Scheduler.Drain();
+        Assert.Equal(["editor typed", "completed", "search typed", "query typed", "check True", "radio True"], reported);
+        reported.Clear();
+
+        host.Root.Unmount();
+        Input("after");
+        Assert.Empty(reported);
     }
 }
