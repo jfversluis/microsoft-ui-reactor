@@ -28,7 +28,6 @@ public sealed class ReactorRoot
     // The context values in effect for the node being rendered or gated (spec 067 §13): filled
     // from its ancestor providers just for that call, so the core's UseContext and skip gate read them.
     private readonly ContextScope _contextScope = new();
-    private int _mountedProviders;
     private readonly List<Node> _dirty = [];
     private readonly List<Node> _effectQueue = [];
     private readonly List<Node> _restoreQueue = [];
@@ -310,7 +309,6 @@ public sealed class ReactorRoot
                     break;
 
                 case NodeKind.Provider:
-                    _mountedProviders++;
                     ReconcileChildren(node, [((ContextProviderElement)element).Child]);
                     break;
 
@@ -409,8 +407,10 @@ public sealed class ReactorRoot
     {
         // Readers are marked dirty first, so the descent below re-renders them in place even when
         // their props did not change.
+        // Always the current value: an equal but distinct one is what a reader that re-renders for
+        // another reason must see. Equality only decides which readers re-render now.
+        node.Provided![next.Context] = next.Value;
         var changed = !Equals(previous.Value, next.Value);
-        if (changed) node.Provided = new() { [next.Context] = next.Value };
         var readers = changed && node.Subscribers is { Count: > 0 } ? node.Subscribers.ToArray() : [];
         foreach (var reader in readers)
             if (reader.Root == this && !reader.Unmounted) reader.Dirty = true;
@@ -560,22 +560,14 @@ public sealed class ReactorRoot
     /// Pushes the values of the providers above <paramref name="node"/> onto the context scope,
     /// outermost first so the nearest wins. Returns how many entries to pop.
     /// </summary>
-    private int PushProviders(Node node)
-    {
-        if (_mountedProviders == 0 && ContextParent is null) return 0;
-        List<Node>? providers = null;
-        for (var ancestor = node.ContextAncestor; ancestor is not null; ancestor = ancestor.ContextAncestor)
-            if (ancestor.Kind == NodeKind.Provider) (providers ??= []).Add(ancestor);
-        if (providers is null) return 0;
+    private int PushProviders(Node node) => node.NearestProvider is { } provider ? PushFrom(provider) : 0;
 
-        var pushed = 0;
-        for (var i = providers.Count - 1; i >= 0; i--)
-        {
-            var values = providers[i].Provided!;
-            _contextScope.Push(values);
-            pushed += values.Count;
-        }
-        return pushed;
+    private int PushFrom(Node provider)
+    {
+        var pushed = provider.NearestProvider is { } outer ? PushFrom(outer) : 0;
+        var values = provider.Provided!;
+        _contextScope.Push(values);
+        return pushed + values.Count;
     }
 
     /// <summary>Subscribes the node to the nearest provider of each context its last render read.</summary>
@@ -583,12 +575,11 @@ public sealed class ReactorRoot
     {
         foreach (var hook in context.ContextHooks)
         {
-            for (var ancestor = node.ContextAncestor; ancestor is not null; ancestor = ancestor.ContextAncestor)
+            for (var provider = node.NearestProvider; provider is not null; provider = provider.NearestProvider)
             {
-                if (ancestor.Kind != NodeKind.Provider
-                    || !ReferenceEquals(((ContextProviderElement)ancestor.Element).Context, hook.Context)) continue;
-                (ancestor.Subscribers ??= []).Add(node);
-                (node.Subscriptions ??= []).Add(ancestor);
+                if (!ReferenceEquals(((ContextProviderElement)provider.Element).Context, hook.Context)) continue;
+                (provider.Subscribers ??= []).Add(node);
+                (node.Subscriptions ??= []).Add(provider);
                 break;
             }
         }
@@ -706,7 +697,6 @@ public sealed class ReactorRoot
         foreach (var child in node.Children) Unmount(child, errors);
 
         node.HookContext?.RunCleanupsIsolated(errors.Add);
-        if (node.Kind == NodeKind.Provider) node.Root._mountedProviders--;
         if (node.Subscriptions is { } subscriptions)
             foreach (var provider in subscriptions) provider.Subscribers?.Remove(node);
         if (node.Kind == NodeKind.Host && node.Native is { } native)

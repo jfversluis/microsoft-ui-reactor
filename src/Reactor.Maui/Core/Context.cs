@@ -12,6 +12,16 @@ public static class ContextProviderExtensions
         /// <summary>Makes <paramref name="value"/> the context value for <paramref name="child"/> and its descendants.</summary>
         public ContextProviderElement Provide(T value, Element? child) => new(context, value, child);
     }
+
+    extension(Element element)
+    {
+        /// <summary>
+        /// Makes <paramref name="value"/> the value of <paramref name="context"/> for this element and
+        /// its descendants: WinUI's <c>element.Provide(context, value)</c> shape. It returns the
+        /// provider that wraps the element, so it ends a modifier chain.
+        /// </summary>
+        public ContextProviderElement Provide<T>(Context<T> context, T value) => new(context, value, element);
+    }
 }
 
 /// <summary>Supplies a <see cref="Context{T}"/> value to its subtree. Created by <c>Context&lt;T&gt;.Provide</c>.</summary>

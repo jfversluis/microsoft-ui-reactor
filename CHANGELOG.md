@@ -31,8 +31,8 @@ Conventions for contributors:
 - **Reactor for .NET MAUI, in preview (spec 065).** A new package, `Microsoft.UI.Reactor.Maui`, a
   renderer for Android, iOS and Mac Catalyst. Its components, hooks and context run on
   `Microsoft.UI.Reactor.Core`, the core shared with WinUI (spec 067 §13): the same `RenderContext`,
-  skip gate and render kernel, so a custom hook or view-model component compiles for either
-  renderer. The MAUI package has the
+  skip gate and render kernel, so a custom hook or view-model component written with the core's
+  hooks compiles for either renderer. The MAUI package has the
   standard controls, layouts, `CollectionView`/`CarouselView`, pages, a navigation stack held in
   state, tabs, flyouts and `UseAppTheme`/`UseWindowSize`. It renders primitives and layouts as direct
   views that skip the Controls layer (27–58% faster on bulk work) and falls back to Controls per

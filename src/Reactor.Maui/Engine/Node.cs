@@ -29,6 +29,10 @@ internal sealed class Node : ComponentNode, ILiveElement
         Kind = kind;
         Root = root;
         Depth = parent is null ? 0 : parent.Depth + 1;
+        // Fixed for the node's lifetime: its ancestors never change (a child root's ContextParent
+        // is set before it mounts anything).
+        var above = parent ?? root.ContextParent;
+        NearestProvider = above is null ? null : above.Kind == NodeKind.Provider ? above : above.NearestProvider;
     }
 
     /// <summary>The element this node currently renders.</summary>
@@ -68,6 +72,9 @@ internal sealed class Node : ComponentNode, ILiveElement
 
     public bool IsRenderable => Kind is NodeKind.Component or NodeKind.Func or NodeKind.Memo;
 
-    /// <summary>The next ancestor; a child root's tree continues at the element that created it.</summary>
-    public Node? ContextAncestor => Parent ?? Root.ContextParent;
+    /// <summary>
+    /// The nearest provider above this node; a child root's tree continues at the element that
+    /// created it. Each provider links to the next one up, so context lookups walk providers only.
+    /// </summary>
+    public Node? NearestProvider { get; }
 }

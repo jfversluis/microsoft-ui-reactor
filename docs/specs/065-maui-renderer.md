@@ -231,7 +231,7 @@ The device tier found two bugs the headless tiers could not. Both are fixed:
 An independent review (a different model family) of the navigation code found more, each
 reproduced before it was fixed and covered by a fixture that fails without the fix:
 - An accepted back navigation re-pushed the page once (a visible flicker on iOS and Android). The
-  handler ran the navigator from `Update`, which the core calls before syncing the new children,
+  handler ran the navigator from `Update`, which the engine calls before syncing the new children,
   so it reconciled against the previous declaration. It now runs only for an unchanged element
   (the restore after a refused pop).
 - iOS raises `Popped` before it removes the page, so a refused pop could be judged "already
@@ -263,7 +263,7 @@ and the direct-renderer todos page were checked on the iPhone simulator.
   Controls-only setting) still lists only its Controls children in the visual tree. Only
   `DirectViewHost` re-implements that.
 - **Components never own a native control.** WinUI Reactor can wrap a component in a control so
-  modifiers such as `Component<T>().Margin(8)` apply to it. This core treats components as
+  modifiers such as `Component<T>().Margin(8)` apply to it. The MAUI engine treats components as
   purely compositional, so WinUI convergence needs a renderer-owned wrapper extension point.
 - **Hot reload is verified headlessly only**, by invoking the metadata-update handler. It has not
   been exercised from an IDE session.

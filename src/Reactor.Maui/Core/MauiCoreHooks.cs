@@ -16,7 +16,13 @@ public static class MauiCoreHooks
         /// </summary>
         public TDelegate UseCallback<TDelegate>(TDelegate callback, params object?[] dependencies)
             where TDelegate : Delegate
-            => context.UseMemo(() => callback, dependencies!);
+        {
+            // A ref rather than UseMemo(() => callback, …), which would allocate a closure every render.
+            var slot = context.UseRef<CallbackSlot<TDelegate>?>(null);
+            if (slot.Current is not { } current || !RenderContext.DepsEqual(current.Dependencies, dependencies!))
+                slot.Current = current = new CallbackSlot<TDelegate>(callback, [.. dependencies]);
+            return current.Callback;
+        }
 
         /// <summary>A navigation stack in state, starting at <paramref name="root"/>.</summary>
         public RouteStack<T> UseRouteStack<T>(T root)
@@ -81,4 +87,10 @@ public static class MauiCoreHooks
     }
 
     private sealed record ResourceState<T>(bool IsLoading, T? Value, Exception? Error);
+
+    private sealed class CallbackSlot<TDelegate>(TDelegate callback, object?[] dependencies)
+    {
+        public TDelegate Callback { get; } = callback;
+        public object?[] Dependencies { get; } = dependencies;
+    }
 }
