@@ -1,10 +1,10 @@
-# Scratch (not for merge): isolates the phase 2a skip-floor delta. Compares two pinned SHAs
+# Scratch (not for merge): isolates a /perf delta between two phases. Compares two pinned SHAs
 # interleaved on one runner with the trusted main-branch Run-PerfBenchmark.ps1, plus an A/A
 # control (head vs head) on a separate runner to show this leg's noise.
 name: Perf isolate (scratch)
 on:
   push:
-    branches: [perf/isolate-2a, perf/isolate-2b]
+    branches: [perf/isolate-2a, perf/isolate-2b, perf/isolate-3a]
 permissions:
   contents: read
 jobs:
@@ -16,14 +16,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: floor-phase2a-vs-phase2b
-            kind: floor
-            base: 8c458598d2f68361f07e71f097090e023a0e90a7
-            head: 57a61e38
-          - name: micro-phase2a-vs-phase2b
+          - name: stocks50-phase2c-vs-phase3a
+            kind: stocks50
+            base: d17672c40ad3763c69eb99581821f6eaada68053
+            head: d3514dce0843f1324ff9c24323ff190939a29e6f
+          - name: stocks50-aa-phase3a
+            kind: stocks50
+            base: d3514dce0843f1324ff9c24323ff190939a29e6f
+            head: d3514dce0843f1324ff9c24323ff190939a29e6f
+          - name: micro-phase2c-vs-phase3a
             kind: micro
-            base: 8c458598d2f68361f07e71f097090e023a0e90a7
-            head: 57a61e38
+            base: d17672c40ad3763c69eb99581821f6eaada68053
+            head: d3514dce0843f1324ff9c24323ff190939a29e6f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -41,7 +45,7 @@ jobs:
           BASE: ${{ matrix.base }}
           HEAD: ${{ matrix.head }}
         run: |
-          git fetch --no-tags origin main maui/phase-01-core-design maui/phase-02a-foundations maui/phase-02b-engine 2>&1 | Out-Host
+          git fetch --no-tags origin main maui/phase-02c-protocol maui/phase-03a-rehost 2>&1 | Out-Host
           $b = (git rev-parse $env:BASE).Trim(); $h = (git rev-parse $env:HEAD).Trim()
           $bt = Join-Path $env:RUNNER_TEMP 'base-tree'; $ht = Join-Path $env:RUNNER_TEMP 'head-tree'
           git worktree add --force --detach $bt $b 2>&1 | Out-Host
@@ -60,7 +64,13 @@ jobs:
           KIND: ${{ matrix.kind }}
           OUT_DIR: ${{ github.workspace }}/perf-out
         run: |
-          if ($env:KIND -eq 'floor') {
+          if ($env:KIND -eq 'stocks50') {
+            ./tests/stress_perf/ci/Run-PerfBenchmark.ps1 -Root $env:HT -BaselineRoot $env:BT `
+              -Percent 50 -Duration 10 -Reps 30 -Warmup 2 -PinAffinity `
+              -IncludeMicro $false -IncludeSkipFloor $false -IncludeKeyedList $false `
+              -IncludeFlex $false -IncludeDataGrid $false -IncludeRowMemo $false `
+              -Apps ReactorOptimized -DefenderExclude -HeadSha $env:HS -BaseSha $env:BS -OutDir $env:OUT_DIR
+          } elseif ($env:KIND -eq 'floor') {
             ./tests/stress_perf/ci/Run-PerfBenchmark.ps1 -Root $env:HT -BaselineRoot $env:BT `
               -Percent 0 -Duration 10 -Reps 30 -Warmup 2 -PinAffinity `
               -IncludeMicro $false -IncludeSkipFloor $false -IncludeKeyedList $false `
