@@ -356,6 +356,7 @@ public sealed class ReactorRoot
             // Nothing else can reach this half-mounted node; release what it acquired. The
             // original error stays the one that propagates.
             var errors = new List<Exception>();
+            NoteRemoved(node);
             Unmount(node, errors);
             ReportSecondary(errors, primary);
             throw;
@@ -471,7 +472,11 @@ public sealed class ReactorRoot
         boundary.Children = [];
         boundary.ChildElements = [];
         var errors = new List<Exception>();
-        foreach (var child in failed) Unmount(child, errors);
+        foreach (var child in failed)
+        {
+            NoteRemoved(child);
+            Unmount(child, errors);
+        }
         ReportSecondary(errors, error);
         // A throwing fallback propagates to the next boundary up.
         ReconcileChildren(boundary, [((ErrorBoundaryElement)boundary.Element).Fallback(error)]);

@@ -728,4 +728,30 @@ public class ControlDescriptorEntryTests
         Input("after");
         Assert.Empty(reported);
     }
+
+    private sealed record FailingProps(bool Fail);
+
+    private sealed class MaybeFailing : Component<FailingProps>
+    {
+        public override Element Render() =>
+            Props.Fail ? throw new InvalidOperationException("render failed") : SearchBar("s", _ => { });
+    }
+
+    [Fact]
+    public void ASubtreeAnErrorBoundaryReplaces_IsReleased_AndItsFallbackIsNot()
+    {
+        var released = new List<object>();
+        var registry = MauiHandlers.CreateRegistry();
+        registry.ReleaseNative = released.Add;
+        Element Tree(bool fail) => VStack(ErrorBoundary(Component<MaybeFailing, FailingProps>(new(fail)), _ => Label("fallback")));
+        var host = new TestHost(registry).Render(Tree(false));
+        var stack = (IList<IView>)host.RootView!;
+        var search = stack[0];
+
+        host.Render(Tree(true));
+
+        Assert.IsType<MauiLabel>(stack[0]);
+        Assert.Equal([search], released);
+    }
 }
+

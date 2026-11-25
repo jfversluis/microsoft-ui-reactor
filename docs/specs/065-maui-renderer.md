@@ -212,7 +212,7 @@ restored when a callback rejects input, `CanUpdate` remounts, and hot reload re-
 root, and errors a handler reports from its own asynchronous work (`HandlerContext.ReportError`)
 reaching boundaries. A boundary test fails if the core references anything but `System.*`.
 
-**Renderer, headless** (`tests/Reactor.Maui.Tests`, 51 tests). Real Controls objects and direct
+**Renderer, headless** (`tests/Reactor.Maui.Tests`, 52 tests). Real Controls objects and direct
 views, no platform handlers: modifiers, every control's props and echo-free events, the hybrid
 fallback and mixed trees, `CollectionView` cells as child roots, pages, toolbar items, the
 navigation stack's reconcile, the user-pop rule (below), tabs and flyout (including swapping the
