@@ -218,7 +218,7 @@ fallback and mixed trees, `CollectionView` cells as child roots, pages, toolbar 
 navigation stack's reconcile, the user-pop rule (below), tabs and flyout (including swapping the
 two flyout pages between slots).
 
-**Device tier** (`tests/Reactor.Maui.DeviceTests`, 39 fixtures). All pass on Mac Catalyst (macOS 26,
+**Device tier** (`tests/Reactor.Maui.DeviceTests`, 40 fixtures). All pass on Mac Catalyst (macOS 26,
 Apple silicon), an iPhone 18 Pro simulator (iOS 27) and the Android API 37 emulator; the 25 earlier
 ones also ran on a Pixel 10 (Android 16). They check what the
 native views show, not the virtual tree:
