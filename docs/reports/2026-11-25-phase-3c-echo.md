@@ -47,7 +47,7 @@ phase fixes it. PR #9, stacked on #8.
 | MAUI device, iPhone 18 Pro simulator (iOS 27) | 25 | 34 | |
 | MAUI device, Android API 37 emulator | 25 | 34 | see Flakes |
 | MAUI Release build | 0 warnings | 0 warnings | |
-| WinUI CI | green | CI_STATUS | no WinUI code changed |
+| CI (WinUI tiers and MAUI incl. device tests on Mac Catalyst and iOS) | green | green (CI 45567434236, MAUI 45567434391) | no WinUI code changed |
 
 **Reproduced first.** On the 3b head, the after-unmount fixture logged
 `entry after, switch True, slider 0.7` on all three platforms and both renderers.
