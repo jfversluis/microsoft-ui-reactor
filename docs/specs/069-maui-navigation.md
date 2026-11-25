@@ -323,10 +323,16 @@ return Shell(tab, setTab,
   `ShellSection`) with one `ShellContent`. `content` is a `Page(...)` or a `NavigationHost(...)`.
   - With a `NavigationHost`, the host's root route is the content's page, and the routes above it
     are pushed onto the section's stack (§4.2).
-  - Top tabs: `ShellTab(key, title, icon, params ShellContentElement[])`, where each
-    `ShellContent(key, title, icon, content)` has its own key. A section has one stack, so only the
-    current top tab's content may be a `NavigationHost` that is deeper than its root.
-- **Keys** identify items across renders. Reactor always builds the items itself and never relies
+  - A section has exactly one stack owner.
+- **Top tabs:** `ShellTab(key, title, icon, params ShellContentElement[])`, where each
+  `ShellContent(key, title, icon, page)` holds a page. In 4b-2 top-tab contents are pages, not
+  navigation hosts. A section has one stack, shared by its contents, so independent per-top-tab
+  histories would need saving and restoring stacks on every switch. None of the seven ports uses
+  top tabs with a stack; this waits for one that does.
+- **Keys** identify items across renders and are the selection's vocabulary. Every `TabBar`,
+  `FlyoutItem`, `ShellTab` and `ShellContent` takes a key (`TabBar` and `FlyoutItem` default to
+  their position). Selectable keys (tabs and top tabs) are unique across the whole Shell, and a
+  duplicate throws when the Shell renders. Reactor always builds the items itself and never relies
   on MAUI's implicit wrapping (a content added straight to `Shell.Items`), so it owns their
   identity.
 - **Shell properties:**
@@ -339,48 +345,80 @@ return Shell(tab, setTab,
   a Shell):
   - `NavBarIsVisible`, `TabBarIsVisible`, `TitleView` and `SearchHandler` update live;
   - `PresentationMode` is read only when the page is pushed, so it is set before the push;
-  - `BackButtonBehavior`: text and icon overrides, and visibility.
+  - `BackButtonBehavior`: text and icon overrides, visibility, and `IsEnabled` (which disables the
+    back button and the iOS swipe).
 
 ### 4.2 Navigation inside a tab
 
-- **An adapter per section.** A section's stack is driven through `ShellSection.Navigation`
-  (`PushAsync`, `PopAsync`, `InsertPageBefore`, `RemovePage`), which needs no registered route.
-  - The adapter reconciles the declared pages against `ShellSection.Stack` the way `StackNavigator`
-    reconciles a `NavigationPage`.
-  - It runs one operation at a time. MAUI's handler-based sections throw if two overlap, and rapid
-    overlapping operations have left blank pages on iOS.
-  - It completes an operation when its task does, which is after the platform animation.
-- **The same host.** `NavigationHost` inside a `ShellTab` uses the same binding as on a
-  `NavigationPage` (§2.4): keys, proposals, lifecycle, the guard and `Animated`. Only the native
-  adapter differs.
-- **A user's back is guarded before anything moves.** Shell reports every user back as
-  `Navigating` with source `Pop`, and that event can be cancelled. This covers the iOS back button
-  and swipe, the Android toolbar back, and the Android back key.
-  - The host runs the guard synchronously in `Navigating`.
-  - **Accepted:** it updates the model (`GoBack`) and lets the platform pop go ahead, so the iOS swipe
-    stays interactive.
-  - **Refused:** it cancels the event, so no page moves on any platform. This replaces the
-    pop-then-restore path that a `NavigationPage` needs.
+- **A native-neutral binding.** The 4b-1 binding talks to `ReactorNavigationPage` and
+  `StackNavigator` directly. 4b-2 puts an internal surface interface between the host and the
+  native stack, implemented by the `NavigationPage` navigator and by a new section adapter. The
+  interface covers: declare pages with an animation flag, report user pops, report the back key,
+  report idle, and record the last operation's animation flag. The host finds its surface through
+  the element it renders. Inside a `ShellTab`, the host renders a section stack, never a
+  `NavigationPage`, which MAUI doesn't allow inside Shell.
+- **The section adapter** reconciles the declared pages against the section:
+  - **The root is the content's page.** `ShellSection.Stack[0]` is a null sentinel, and the root
+    belongs to `ShellContent.Content`. The adapter sets the declared root as the content's page,
+    which also replaces the root on `Reset` or `Replace`. The pages above the root go through
+    `ShellSection.Navigation`, which needs no registered route.
+  - **Operations.** The adapter uses `PushAsync` and `PopAsync` (awaited; they complete after the
+    platform animation) and `PopToRootAsync`. It never inserts or removes pages below the top
+    (MAUI's `InsertPageBefore` and `RemovePage` complete synchronously in Shell's state but not on
+    the platform). A change below the top pops to the deepest page that is still the same, then
+    pushes the rest, so every operation it issues has a task to await.
+  - **One operation at a time.** Each operation is awaited before the next one starts. MAUI's
+    handler-based sections throw if two overlap, and rapid overlapping operations have left blank
+    pages on iOS.
+  - **Origin tagging.** Before each operation, the adapter records it as its own, by expected source
+    and depth. The `Navigating` and `Navigated` events that match are its own, and are never
+    treated as the user's.
+- **A user's back: preflight in `Navigating`, commit on completion.** Shell reports every user back
+  as `Navigating` with source `Pop`, which can be cancelled. This covers the iOS back button and
+  swipe, the Android toolbar back, and the Android back key.
+  - **Preflight**, synchronously in `Navigating`, for a pop that isn't the adapter's own:
+    - the departing page's `onNavigatingFrom`;
+    - the destination's `onNavigatingTo`. The destination is the page below, already mounted.
+    - If either refuses, the event is cancelled and no page moves on any platform.
+    - If both accept, nothing is committed yet; the approval is recorded with the section, its
+      depth and the model's version.
+  - **Commit** when the section's stack has lost the page: `Navigated` with source `Pop` for that
+    section, at the approved depth. The model then moves back by the levels the user popped, without
+    running the guard again. A navigation the app started in the meantime (the model's version
+    changed) voids the approval, and the host reconciles to the model, as on a `NavigationPage`.
+  - **Abandon.** An iOS swipe can be cancelled after `Navigating`. Then no `Navigated` follows, and
+    the next `Navigating` replaces the approval, so the model never moves for a gesture that didn't
+    complete.
+  - **At the root**, Shell raises `Navigating(Pop)` with an empty target to offer the back key. The
+    adapter leaves it alone, so the key reaches the app or the OS.
   - `BackButtonBehavior.Command` isn't used for interception, because MAUI doesn't run it for the
     Android back key.
-- **Completion** uses `Shell.Navigated`, raised after the platform operation. Inside Shell, this
-  replaces the 3-second platform-pop window (spec 068 §3).
+- **Completion** of the adapter's own operations is its awaited task. A user pop completes at
+  `Navigated`. Inside Shell, this replaces the 3-second platform-pop window (spec 068 §3).
 - **A deselected tab keeps its stack.** MAUI doesn't reset a section's stack when the selection
   changes, and neither does Reactor: the app's handle for that tab still holds its routes.
+- **Window swaps.** `WindowPageSetter` treats a Shell whose section adapters are busy like a
+  navigating `NavigationPage`, and waits before replacing the window's page.
 
 ### 4.3 Selection
 
 - **The app holds the selected key.** From code, Reactor sets `Shell.CurrentItem` (a different
   item), `ShellItem.CurrentItem` (a tab) or `ShellSection.CurrentItem` (a top tab). MAUI raises
-  `Navigating` with `CanCancel = false` for these, followed by `Navigated`.
-- **A user's switch** (a tab tap, a flyout item, a top-tab swipe) arrives as `Navigating` with
-  `CanCancel = true`. Reactor lets it happen and reports the new key through `onSelected`.
+  `Navigating` with `CanCancel = false` for these, followed by `Navigated`. Reactor tags these as its
+  own, as the adapter does.
+- **A user's switch** (a tab tap, a flyout item, a top-tab swipe) is reported when it is committed:
+  `onSelected` runs from `Navigated`, with the key of the selection now shown. Reactor doesn't
+  report from `Navigating`, which is only a proposal.
 - **A refused switch is restored**, like any controlled control (spec 067 §14). If the app doesn't
-  change state, the selection is set back once state settles. Cancelling instead would leave Windows
-  `NavigationView` showing the new tab, whose revert on cancel is unverified.
-- **The item shown is never removed before a new one is selected.** Reactor sets the new
-  `CurrentItem` before removing the old item, because MAUI's own fallback re-navigates
-  asynchronously.
+  change state, the latest declared selection is set back once state settles. Each restore has a
+  generation, so rapid switches restore only to the latest declaration. Cancelling in `Navigating`
+  isn't used, because Windows' `NavigationView` has already changed visually by then.
+- **A tab switch isn't a navigation** in the model, so `UseNavigationLifecycle` guards don't run
+  for it. An app that wants to refuse a switch refuses it in `onSelected`.
+- **Structural changes are staged:** add new items, select, let the selection settle, then remove
+  old items. MAUI's own fallback for a removed current item re-navigates asynchronously, which
+  Reactor never relies on. A removed section's adapter stops. An empty Shell, or a selected key that
+  no longer exists, selects the first selectable item and reports it through `onSelected`.
 - **Swapping `ShellItem`s is heavy** (a new native item renderer on iOS, a fragment swap on
   Android). Apps with tabs should use one `TabBar` and change its tabs, which MAUI updates
   incrementally.
@@ -407,15 +445,28 @@ return Shell(tab, setTab,
 - **Headless tests:** building, updating and removing items, tabs and top tabs; selection from code
   and from the user, including a refused switch; per-tab stacks and their persistence across
   selection; a guarded user back, accepted and refused; page attached properties; flyout state.
-- **Device fixtures on Mac Catalyst, iOS and Android:**
-  - a tab tap reported and restored when refused;
-  - push and pop in a tab, reaching `ShellSection.Stack`;
-  - native back (the button, the iOS swipe by `PopViewController`, the Android back dispatcher) both
-    accepted and refused, with no page moving on refusal;
+- **Device fixtures on Mac Catalyst, iOS and Android**, asserting the native displayed page and
+  depth, not only `ShellSection.Stack`:
+  - a tab tap reported and restored when refused, including rapid switches;
+  - push, pop, `Reset` and root replacement in a tab;
+  - a restored multi-page history;
+  - native back (the back button, the Android back dispatcher), accepted and refused, with the guard
+    running exactly once and no page moving on refusal;
+  - a refusal by the destination, and back at the root reaching the app or the OS;
   - stacks kept across tab switches;
+  - rapid push, switch and back;
+  - removing and reordering the selected tab;
   - `NavBarIsVisible` and `TabBarIsVisible` live;
+  - a live change to the flyout header and custom flyout content;
   - the flyout opened by the user, reported;
-  - a deep link selecting a tab and a stack.
+  - a modal pushed from a Shell page;
+  - a deep link selecting a tab and a stack;
+  - the typed equivalents of an absolute reset (`//route`) and of a relative back with a query
+    (`..?refresh=true`).
+- **The interactive iOS swipe**, completed and cancelled, can't be driven from inside the app. Its
+  logic (preflight, then completion or abandonment) is covered headlessly by raising MAUI's events
+  in the order the iOS renderer raises them. The real gesture is checked by the phase 5 Appium
+  harness. Validation is pinned to the MAUI version the workload ships.
 - **WinUI tiers** green (no WinUI change is expected), and `/perf` within noise.
 
 ## 5. Outline: 4b-3, dialogs, back button, lifecycle
