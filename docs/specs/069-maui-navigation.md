@@ -294,27 +294,129 @@ return NavigationHost(nav, route => route switch
 3. **Android hardware back is consumed by the host when there is a page to go back to,** and passed
    on at the root.
 
-## 4. Outline: 4b-2, declarative Shell
+## 4. 4b-2: declarative Shell
 
-These are detailed in this spec before implementation starts.
+MAUI's Shell is a tree of `ShellItem`s (a `FlyoutItem` or a `TabBar`), each holding `ShellSection`s
+(tabs), each holding `ShellContent`s (top tabs, each with a root page). Every section has its own
+navigation stack. Reactor builds that tree from elements, holds the selection and every stack as
+app state, and leaves MAUI's string routing to the deep-link boundary. The facts below are from
+MAUI's source (`src/Controls/src/Core/Shell`), as cited in the 4b-2 research notes.
 
-- **Elements:**
-  - `Shell(items...)`, with the selected item as state;
-  - `TabBar(...)`, `FlyoutItem(...)`, `ShellTab(...)` and `ShellContent(route, page)`;
-  - flyout header, footer and custom content; `FlyoutBehavior` and `FlyoutIsPresented`;
-  - per-page `NavBarIsVisible`, `TabBarIsVisible`, presentation mode, `BackButtonBehavior` and the
-    search handler.
-- **Navigation inside a tab** uses the same model and lifecycle, but a separate adapter over the
-  tab's `ShellSection` navigation, because MAUI doesn't allow a `NavigationPage` inside Shell. 4b-2
-  specifies:
-  - which navigations `Shell.Navigating` guards, and when cancelling it means no page moves;
-  - whether a tab keeps its stack when it is deselected;
-  - absolute routes, which reset a tab or select another, and relative ones.
-- **Typed routes.** The selected tab is a value the app holds. A query parameter is a field of a
-  route record. Deep links go through `DeepLinkMap`, and only at the app boundary.
-- **Platform pops** are tracked with MAUI's navigation-completed signal, which retires the
-  3-second cutoff (spec 068 §3).
-- **Scope** follows the ports' census (spec 068 §2, Shell row).
+### 4.1 Elements
+
+```csharp
+var (tab, setTab) = UseState("home");
+var homeNav = UseNavigation<HomeRoute>(new HomeRoute.List());
+return Shell(tab, setTab,
+    TabBar(
+        ShellTab("home", "Home", Icons.Home, NavigationHost(homeNav, MapHome)),
+        ShellTab("settings", "Settings", Icons.Settings, Page("Settings", SettingsView()))))
+    .FlyoutBehavior(FlyoutBehavior.Disabled);
+```
+
+- **`Shell(string selected, Action<string>? onSelected, params Element[] items)`** renders a
+  `Shell`. `selected` is the key of the tab (or top tab) shown. Items are `TabBar(...)`,
+  `FlyoutItem(...)` and `MenuItem(...)` elements.
+- **`TabBar(params ShellTabElement[])`** and **`FlyoutItem(string title, ImageSource? icon, params
+  ShellTabElement[])`** render a `TabBar` and a `FlyoutItem`.
+- **`ShellTab(string key, string? title, ImageSource? icon, Element content)`** renders a `Tab` (a
+  `ShellSection`) with one `ShellContent`. `content` is a `Page(...)` or a `NavigationHost(...)`.
+  - With a `NavigationHost`, the host's root route is the content's page, and the routes above it
+    are pushed onto the section's stack (§4.2).
+  - Top tabs: `ShellTab(key, title, icon, params ShellContentElement[])`, where each
+    `ShellContent(key, title, icon, content)` has its own key. A section has one stack, so only the
+    current top tab's content may be a `NavigationHost` that is deeper than its root.
+- **Keys** identify items across renders. Reactor always builds the items itself and never relies
+  on MAUI's implicit wrapping (a content added straight to `Shell.Items`), so it owns their
+  identity.
+- **Shell properties:**
+  - `FlyoutBehavior`;
+  - `FlyoutIsPresented` with `OnFlyoutIsPresentedChanged`;
+  - `FlyoutHeader`, `FlyoutFooter` and `FlyoutContent`, as elements. MAUI binds the header and
+    footer one time, so a changed header element is reconciled inside the same native header.
+  - The appearance colors: `BackgroundColor`, `ForegroundColor`, `TitleColor`, and `TabBar*`.
+- **Page properties** (on `PageElement`, applied as Shell's attached properties when the page is in
+  a Shell):
+  - `NavBarIsVisible`, `TabBarIsVisible`, `TitleView` and `SearchHandler` update live;
+  - `PresentationMode` is read only when the page is pushed, so it is set before the push;
+  - `BackButtonBehavior`: text and icon overrides, and visibility.
+
+### 4.2 Navigation inside a tab
+
+- **An adapter per section.** A section's stack is driven through `ShellSection.Navigation`
+  (`PushAsync`, `PopAsync`, `InsertPageBefore`, `RemovePage`), which needs no registered route.
+  - The adapter reconciles the declared pages against `ShellSection.Stack` the way `StackNavigator`
+    reconciles a `NavigationPage`.
+  - It runs one operation at a time. MAUI's handler-based sections throw if two overlap, and rapid
+    overlapping operations have left blank pages on iOS.
+  - It completes an operation when its task does, which is after the platform animation.
+- **The same host.** `NavigationHost` inside a `ShellTab` uses the same binding as on a
+  `NavigationPage` (§2.4): keys, proposals, lifecycle, the guard and `Animated`. Only the native
+  adapter differs.
+- **A user's back is guarded before anything moves.** Shell reports every user back as
+  `Navigating` with source `Pop`, and that event can be cancelled. This covers the iOS back button
+  and swipe, the Android toolbar back, and the Android back key.
+  - The host runs the guard synchronously in `Navigating`.
+  - **Accepted:** it updates the model (`GoBack`) and lets the platform pop go ahead, so the iOS swipe
+    stays interactive.
+  - **Refused:** it cancels the event, so no page moves on any platform. This replaces the
+    pop-then-restore path that a `NavigationPage` needs.
+  - `BackButtonBehavior.Command` isn't used for interception, because MAUI doesn't run it for the
+    Android back key.
+- **Completion** uses `Shell.Navigated`, raised after the platform operation. Inside Shell, this
+  replaces the 3-second platform-pop window (spec 068 §3).
+- **A deselected tab keeps its stack.** MAUI doesn't reset a section's stack when the selection
+  changes, and neither does Reactor: the app's handle for that tab still holds its routes.
+
+### 4.3 Selection
+
+- **The app holds the selected key.** From code, Reactor sets `Shell.CurrentItem` (a different
+  item), `ShellItem.CurrentItem` (a tab) or `ShellSection.CurrentItem` (a top tab). MAUI raises
+  `Navigating` with `CanCancel = false` for these, followed by `Navigated`.
+- **A user's switch** (a tab tap, a flyout item, a top-tab swipe) arrives as `Navigating` with
+  `CanCancel = true`. Reactor lets it happen and reports the new key through `onSelected`.
+- **A refused switch is restored**, like any controlled control (spec 067 §14). If the app doesn't
+  change state, the selection is set back once state settles. Cancelling instead would leave Windows
+  `NavigationView` showing the new tab, whose revert on cancel is unverified.
+- **The item shown is never removed before a new one is selected.** Reactor sets the new
+  `CurrentItem` before removing the old item, because MAUI's own fallback re-navigates
+  asynchronously.
+- **Swapping `ShellItem`s is heavy** (a new native item renderer on iOS, a fragment swap on
+  Android). Apps with tabs should use one `TabBar` and change its tabs, which MAUI updates
+  incrementally.
+
+### 4.4 Deep links and typed routes
+
+- A deep link is a URI resolved by the app with `DeepLinkMap<TRoute>` into a route: the selected tab
+  plus the routes for that tab's handle. The app then sets that state. Reactor never calls
+  `GoToAsync` with a string.
+- A query parameter is a field of the route record.
+
+### 4.5 Not in 4b-2
+
+- **Shell's search handler** is a class the app subclasses, so it maps poorly to elements. 4b-2
+  exposes `SearchHandler` as an object the app passes, live. A declarative search element can follow
+  if the ports need one; none of the seven uses it.
+- **A modal pushed from a Shell page** goes through the section's modal path (MAUI turns it into
+  `GoToAsync`). It is covered for `NavigationHost` modals, and MAUI's known modal issues (#14858,
+  #7522, #22444) are worked around only if a fixture reproduces them.
+- **Windows** is validated in 4g.
+
+### 4.6 Gate for 4b-2
+
+- **Headless tests:** building, updating and removing items, tabs and top tabs; selection from code
+  and from the user, including a refused switch; per-tab stacks and their persistence across
+  selection; a guarded user back, accepted and refused; page attached properties; flyout state.
+- **Device fixtures on Mac Catalyst, iOS and Android:**
+  - a tab tap reported and restored when refused;
+  - push and pop in a tab, reaching `ShellSection.Stack`;
+  - native back (the button, the iOS swipe by `PopViewController`, the Android back dispatcher) both
+    accepted and refused, with no page moving on refusal;
+  - stacks kept across tab switches;
+  - `NavBarIsVisible` and `TabBarIsVisible` live;
+  - the flyout opened by the user, reported;
+  - a deep link selecting a tab and a stack.
+- **WinUI tiers** green (no WinUI change is expected), and `/perf` within noise.
 
 ## 5. Outline: 4b-3, dialogs, back button, lifecycle
 
