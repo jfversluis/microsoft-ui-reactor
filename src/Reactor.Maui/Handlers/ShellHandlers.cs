@@ -89,6 +89,17 @@ internal sealed class ReactorShell : Shell
 
     private bool _writing;
 
+    /// <summary>Navigators that left their section while still busy; listed until they settle.</summary>
+    internal HashSet<ShellSectionNavigator> Lingering { get; } = [];
+
+    /// <summary>
+    /// Whether the back key is one guarded back of the model (<see cref="OnBackButtonPressed"/>) rather
+    /// than a pop preflighted in <c>Navigating</c>. On Android the key and the toolbar back both reach
+    /// <c>OnBackButtonPressed</c>; on iOS and Mac Catalyst the back button does too, but the swipe
+    /// doesn't, so both keep the preflight. Tests set it.
+    /// </summary>
+    internal bool BackKeyIsModelBack { get; set; } = OperatingSystem.IsAndroid();
+
     internal ContentView? FlyoutHeaderHost;
     internal ContentView? FlyoutFooterHost;
     internal ContentView? FlyoutContentHost;
@@ -108,7 +119,22 @@ internal sealed class ReactorShell : Shell
                         yield return navigator;
                 }
             }
+            foreach (var lingering in Lingering.ToList())
+                if (!ReferenceEquals(lingering, visible) && (lingering.Section is null || !ReferenceEquals(ShellNatives.GetNavigator(lingering.Section), lingering)))
+                    yield return lingering;
         }
+    }
+
+    protected override bool OnBackButtonPressed()
+    {
+        if (BackKeyIsModelBack && CurrentItem?.CurrentItem is { } section && section.Navigation.ModalStack.Count == 0
+            && ShellNatives.GetNavigator(section) is { } navigator)
+        {
+            // A page that handles the key itself goes first, as in Shell.
+            if (CurrentPage?.SendBackButtonPressed() == true) return true;
+            if (navigator.OnBackKey()) return true;
+        }
+        return base.OnBackButtonPressed();
     }
 
     protected override void OnNavigating(ShellNavigatingEventArgs args)
@@ -280,7 +306,7 @@ internal sealed class ShellHandler : Reactor.Hosting.IElementHandler<ShellElemen
         var node = context.Node;
         shell.ReportSelected = key =>
         {
-            if (context.Live is { } live) live.OnSelected?.Invoke(key);
+            if (context.Live is { } live) live.OnSelectedChanged?.Invoke(key);
         };
         shell.Post = node.Root.Post;
         shell.RequestRestore = context.RestoreAfterEvent;
@@ -388,7 +414,7 @@ internal sealed class ShellHandler : Reactor.Hosting.IElementHandler<ShellElemen
 }
 
 /// <summary>A <c>TabBar</c> or <c>FlyoutItem</c>'s tabs, synced in stages through the Shell.</summary>
-internal sealed class ShellItemChildren<TElement, TItem>(Func<TElement, ShellTabElement[]> tabs) : IChildrenStrategy<TElement, TItem>
+internal sealed class ShellItemChildren<TElement, TItem>(Func<TElement, ShellTabElement?[]> tabs) : IChildrenStrategy<TElement, TItem>
     where TElement : Element
     where TItem : ShellItem
 {
@@ -474,7 +500,7 @@ internal sealed class ShellTabHandler : Reactor.Hosting.IElementHandler<ShellTab
         Apply(control, oldElement, newElement);
     }
 
-    public void Unmount(Tab control) => ShellNatives.GetNavigator(control)?.DetachSection(control);
+    public void Unmount(Tab control) => ShellNatives.GetNavigator(control)?.DetachSection(control, popToRoot: false);
 
     internal static string KeyOf(Element element) => element.Key ?? throw new InvalidOperationException(
         $"A {element.GetType().Name} needs a key: it is how the Shell's selection names it.");
@@ -500,7 +526,7 @@ internal sealed class ShellTabHandler : Reactor.Hosting.IElementHandler<ShellTab
             var navigator = ShellNatives.GetNavigator(tab);
             if (element.Contents.Length > 0)
             {
-                navigator?.DetachSection(tab);
+                navigator?.DetachSection(tab, popToRoot: true);
                 var contents = slots.SelectMany(static s => s).Select(n => n as ShellContent ?? throw new InvalidOperationException(
                     $"A ShellTab's top tabs are ShellContent elements, but one rendered a {n.GetType().Name}.")).ToList();
                 if (shell is not null) ReactorShell.ValidateKeys(shell.Items);
@@ -524,13 +550,13 @@ internal sealed class ShellTabHandler : Reactor.Hosting.IElementHandler<ShellTab
             switch (native)
             {
                 case ShellSectionNavigator stack:
-                    if (!ReferenceEquals(navigator, stack)) navigator?.DetachSection(tab);
+                    if (!ReferenceEquals(navigator, stack)) navigator?.DetachSection(tab, popToRoot: true);
                     // The navigator sets the root page as it reconciles.
                     ReactorShell.Stage(tab.Items, [owned], shell, () => tab.CurrentItem);
                     stack.Attach(tab, owned);
                     break;
                 case null or Page:
-                    navigator?.DetachSection(tab);
+                    navigator?.DetachSection(tab, popToRoot: true);
                     if (native is Page page and (NavigationPage or TabbedPage or FlyoutPage))
                         throw new InvalidOperationException(
                             $"A ShellTab holds a page or a NavigationHost, but its content rendered a {page.GetType().Name}, which Shell can't host.");
@@ -581,12 +607,10 @@ internal sealed class ShellContentHandler : Reactor.Hosting.IElementHandler<Shel
 
 internal sealed class ShellSectionStackHandler : Reactor.Hosting.IElementHandler<ShellSectionStackElement, ShellSectionNavigator>
 {
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ShellSectionNavigator, EventHandler<ModalPoppedEventArgs>> ModalHandlers = new();
-
     public ShellSectionNavigator Mount(HandlerContext<ShellSectionStackElement> context, ShellSectionStackElement element)
     {
         var navigator = new ShellSectionNavigator { OnError = context.ReportError, Binding = element.HostBinding };
-        EventHandler<ModalPoppedEventArgs> modalPopped = (_, e) =>
+        navigator.ModalPoppedHandler = (_, e) =>
         {
             if (!navigator.IsUserModalPop(e.Modal, out var remaining))
             {
@@ -596,8 +620,7 @@ internal sealed class ShellSectionStackHandler : Reactor.Hosting.IElementHandler
             context.Live?.OnModalDismissed?.Invoke(remaining);
             context.RestoreAfterEvent();
         };
-        ModalHandlers.AddOrUpdate(navigator, modalPopped);
-        if (Application.Current is { } app) app.ModalPopped += modalPopped;
+        if (Application.Current is { } app) app.ModalPopped += navigator.ModalPoppedHandler;
         element.HostBinding?.Attach(context.Node, navigator);
         return navigator;
     }
@@ -616,7 +639,8 @@ internal sealed class ShellSectionStackHandler : Reactor.Hosting.IElementHandler
 
     public void Unmount(ShellSectionNavigator control)
     {
-        if (Application.Current is { } app && ModalHandlers.TryGetValue(control, out var handler)) app.ModalPopped -= handler;
+        if (Application.Current is { } app && control.ModalPoppedHandler is { } handler) app.ModalPopped -= handler;
+        control.ModalPoppedHandler = null;
         control.Binding?.Detach(control);
         control.Stop();
     }
@@ -631,6 +655,14 @@ internal sealed class ShellSectionStackHandler : Reactor.Hosting.IElementHandler
         {
             var pages = slots.Take(element.Pages.Length).SelectMany(static s => s).Select(NavigationStackHandler.AsPage).ToList();
             var modals = slots.Skip(element.Pages.Length).SelectMany(static s => s).Select(NavigationStackHandler.AsPage).ToList();
+            for (var i = 1; i < pages.Count; i++)
+            {
+                // Shell would present it on the window's modal stack, which isn't this stack.
+                if ((Shell.GetPresentationMode(pages[i]) & PresentationMode.Modal) != 0)
+                    throw new InvalidOperationException(
+                        $"The page '{pages[i].Title}' is a route of a Shell tab's NavigationHost, so it can't have a modal PresentationMode. " +
+                        "Show a modal page through the host's Modals: NavigationHost(nav, map, s => s with { Modals = [...] }).");
+            }
             if (element.HostBinding is { } binding && element.HostDeclaration is { } declaration)
                 binding.Sync(declaration, element.Animated, pages, modals, control);
             else

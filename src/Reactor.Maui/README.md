@@ -120,7 +120,7 @@ and refine them with modifiers. Elements are immutable records, so `with` works 
 | Input | `Button`, `ImageButton`, `Entry`, `Editor`, `SearchBar`, `CheckBox`, `Switch`, `Slider`, `Stepper`, `Picker`, `DatePicker`, `TimePicker`, `RadioButton` |
 | Layout | `VStack`, `HStack`, `Grid`, `FlexLayout`, `AbsoluteLayout`, `ScrollView`, `Border`, `RefreshView`, `SwipeView` |
 | Lists | `CollectionView`, `CarouselView` (virtualized; each item is its own tree) |
-| Pages and navigation | `Page`, `NavigationHost`, `NavigationStack`, `Tabs`, `Flyout`, `Shell` (`TabBar`, `FlyoutItem`, `ShellTab`, `ShellContent`, `MenuItem`) |
+| Pages and navigation | `Page`, `NavigationHost`, `NavigationStack`, `Tabs`, `Flyout`, `Shell` (`TabBar`, `FlyoutItem`, `ShellTab`, `ShellContent`, `ShellMenuItem`) |
 | Composition | `Component<T>()`, `Component<T, TProps>(props)`, `Group`, `Empty`, `Memo`, `ErrorBoundary`, `Context.Provide` |
 
 Common modifiers: `.Margin()`, `.Padding()`, `.Width()`, `.Height()`, `.Size()`,
@@ -247,29 +247,38 @@ public sealed class App : Component
         var homeNav = UseNavigation<HomeRoute>(new HomeRoute.List());
         return Shell(tab, setTab,
             TabBar(
-                ShellTab("home", "Home", null, NavigationHost(homeNav, route => route switch
+                ShellTab("home", "Home", NavigationHost(homeNav, route => route switch
                 {
                     HomeRoute.Detail d => Page($"Item {d.Id}", Label($"Item {d.Id}")),
                     _ => Page("Home", Button("Open", () => homeNav.Navigate(new HomeRoute.Detail(1)))),
                 })),
-                ShellTab("settings", "Settings", null, Page("Settings", Label("Settings")))))
+                ShellTab("settings", "Settings", Page("Settings", Label("Settings")))))
             .FlyoutBehavior(FlyoutBehavior.Disabled);
     }
 }
 ```
 
-- **Items.** `TabBar(tabs…)`, `FlyoutItem(title, icon, tabs…)` and `MenuItem(text, onClick)`. A
-  `ShellTab(key, title, icon, content)` holds a page or a `NavigationHost`; `ShellTab(key, title, icon,
-  ShellContent(key, title, icon, page)…)` has top tabs, each holding a page. Tab and top-tab keys
-  name the selection and are unique across the Shell (a duplicate throws).
-- **Selection.** `Shell(selected, onSelected, …)` shows the tab or top tab whose key is `selected`.
-  A user's switch is reported to `onSelected` once Shell shows it; if the app doesn't take it, the
-  declared tab is shown again. A key that matches nothing shows the first tab and reports it once.
+- **Items.** `TabBar(tabs…)`, `FlyoutItem(title, tabs…)` (with `.Icon(…)`) and
+  `ShellMenuItem(text, onClick)`. A `ShellTab(key, title, content, icon)` holds a page or a
+  `NavigationHost`; `ShellTab(key, title, ShellContent(key, title, page, icon)…)` has top tabs, each
+  holding a page. Icons are optional, and a null tab or top tab is skipped, so one can be
+  conditional (`isAdmin ? ShellTab(…) : null`). Tab and top-tab keys name the selection and are
+  unique across the Shell (a duplicate throws).
+- **Selection.** `Shell(selected, onSelectedChanged, …)` shows the tab or top tab whose key is
+  `selected`. A user's switch is reported to `onSelectedChanged` once Shell shows it; if the app doesn't
+  take it, the declared tab is shown again. A key that matches nothing shows the first tab and reports
+  it once.
 - **Stacks.** A `NavigationHost` in a tab renders the tab's own stack (the root is the tab's page).
   The back button, the iOS swipe and the Android back key run the guards before any page moves, so
   a refused back moves nothing; an app navigation made during the user's back waits until it
-  finishes. A tab keeps its stack while another is shown. A deep link is the selected tab plus the
-  routes for that tab's handle (`SetState`); Reactor never navigates Shell by URI.
+  finishes, and so does a page change while one of the tab's modals is shown. A tab keeps its stack
+  while another is shown. The host's third argument sets its modals and `Animated` here; the tab's
+  title and icon come from `ShellTab`, the bar colors from the Shell. A route page can't have a modal
+  `PresentationMode`: show it through the host's `Modals`.
+- **Routes with results.** A deep link is the selected tab plus the routes for that tab's handle
+  (`SetState`); Reactor never navigates Shell by URI. For a back with a result (`..?refresh=true`),
+  put the result in app state or a context the destination reads, then `GoBack()`: the destination
+  stays mounted. (A result in the destination's route, through `PopTo` and `Replace`, remounts it.)
 - **Shell properties.** `.FlyoutBehavior(…)`, `.FlyoutIsPresented(isPresented, onChanged)`,
   `.FlyoutHeader(…)`, `.FlyoutFooter(…)`, `.FlyoutContent(…)` (elements, updated in place) and the
   appearance colors (`with { TabBarBackgroundColor = … }`).

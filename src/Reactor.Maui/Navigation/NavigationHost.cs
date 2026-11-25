@@ -1,4 +1,5 @@
 using Microsoft.UI.Reactor.Core;
+using Microsoft.UI.Reactor.Core.Diagnostics;
 using Microsoft.UI.Reactor.Hosting;
 using Microsoft.UI.Reactor.Maui;
 using Microsoft.UI.Reactor.Maui.Handlers;
@@ -56,6 +57,12 @@ internal sealed class NavigationHostComponent<TRoute> : Component<NavigationHost
         if (Props.Configure is { } configure) stack = configure(stack);
         if (inShellTab)
         {
+            if (!binding.WarnedShellTabStack && (stack.Title is not null || stack.Icon is not null || stack.BarBackgroundColor is not null || stack.BarTextColor is not null))
+            {
+                binding.WarnedShellTabStack = true;
+                DiagnosticLog.Warning(LogCategory.Navigation, "NavigationHost.ShellTab",
+                    "A NavigationHost in a ShellTab ignores its stack's Title, Icon and bar colors: the tab's title and icon come from ShellTab, the colors from the Shell's appearance.");
+            }
             // In a Shell tab the pages are the section's stack (spec 069 §4.2). A host nested in one
             // of them renders its own stack again.
             return NavigationContext<TRoute>.Instance.Provide(Props.Navigation, ShellTabScope.Context.Provide(false, new ShellSectionStackElement(pages)
@@ -190,6 +197,9 @@ internal sealed class NavigationHostBinding
 
     /// <summary>Re-renders the host component.</summary>
     public Action? Rerender { get; set; }
+
+    /// <summary>Whether the host warned that a Shell tab ignores its stack's title, icon and bar colors.</summary>
+    public bool WarnedShellTabStack { get; set; }
 
     /// <summary>The stack's <c>OnPopped</c>: the user went back to the given declared depth.</summary>
     public Action<int> OnUserPop { get; }
@@ -625,7 +635,7 @@ internal sealed class NavigationHostBinding
     private void Complete()
     {
         _completionPosted = false;
-        if (_surface is not { IsIdle: true, HasPendingPlatformPops: false }) return;
+        if (_surface is not { IsIdle: true, HasPendingPlatformPops: false, IsHolding: false }) return;
         // A change the host hasn't shown yet may supersede these: complete them once it is shown
         // (the navigator goes idle again after that sync).
         if (_proposal is not null || (_handle is { } handle && handle.Version != _renderedVersion && handle.Version != _refusedVersion)) return;

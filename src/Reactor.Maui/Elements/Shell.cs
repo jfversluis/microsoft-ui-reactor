@@ -5,10 +5,10 @@ namespace Microsoft.UI.Reactor.Maui;
 /// <summary>
 /// A MAUI <see cref="Microsoft.Maui.Controls.Shell"/> (spec 069 §4): items (<c>TabBar</c>,
 /// <c>FlyoutItem</c>, <c>MenuItem</c>), each holding tabs. <see cref="Selected"/> is the key of the
-/// tab (or top tab) shown, held by the app; <see cref="OnSelected"/> receives the key the user
+/// tab (or top tab) shown, held by the app; <see cref="OnSelectedChanged"/> receives the key the user
 /// switched to once Shell has shown it. A switch the app doesn't accept is undone.
 /// </summary>
-public sealed record ShellElement(string? Selected, Action<string>? OnSelected, Element?[] Items) : Element
+public sealed record ShellElement(string? Selected, Action<string>? OnSelectedChanged, Element?[] Items) : Element
 {
     public string? Title { get; init; }
     public FlyoutBehavior? FlyoutBehavior { get; init; }
@@ -41,12 +41,16 @@ public sealed record ShellElement(string? Selected, Action<string>? OnSelected, 
     public Color? TabBarDisabledColor { get; init; }
 }
 
-/// <summary>A Shell item shown as a bottom tab bar. Keyed by its position unless given a key.</summary>
-public sealed record TabBarElement(ShellTabElement[] Tabs) : Element;
+/// <summary>A Shell item shown as a bottom tab bar. Keyed by its position unless given a key. A null tab is skipped.</summary>
+public sealed record TabBarElement(ShellTabElement?[] Tabs) : Element;
 
-/// <summary>A Shell item listed in the flyout, whose tabs show at the bottom. Keyed by its position unless given a key.</summary>
-public sealed record FlyoutItemElement(string? Title, ImageSource? Icon, ShellTabElement[] Tabs) : Element
+/// <summary>
+/// A Shell item listed in the flyout, whose tabs show at the bottom. Keyed by its position unless given
+/// a key. A null tab is skipped.
+/// </summary>
+public sealed record FlyoutItemElement(string? Title, ShellTabElement?[] Tabs) : Element
 {
+    public ImageSource? Icon { get; init; }
     public FlyoutDisplayOptions? DisplayOptions { get; init; }
 }
 
@@ -54,14 +58,19 @@ public sealed record FlyoutItemElement(string? Title, ImageSource? Icon, ShellTa
 /// A Shell tab (a <see cref="Tab"/>): one page or <c>NavigationHost</c> in <see cref="Content"/>, or top
 /// tabs in <see cref="Contents"/>. Its <see cref="ReactorElement.Key"/> is its selection key, unique in the Shell.
 /// </summary>
-public sealed record ShellTabElement(string? Title, ImageSource? Icon, Element? Content) : Element
+public sealed record ShellTabElement(string? Title, Element? Content) : Element
 {
-    /// <summary>Top tabs, each holding a page. When set, <see cref="ShellTabElement.Content"/> isn't used.</summary>
-    public ShellContentElement[] Contents { get; init; } = [];
+    public ImageSource? Icon { get; init; }
+
+    /// <summary>Top tabs, each holding a page (a null one is skipped). When set, <see cref="ShellTabElement.Content"/> isn't used.</summary>
+    public ShellContentElement?[] Contents { get; init; } = [];
 }
 
 /// <summary>A top tab of a <see cref="ShellTabElement"/>. Its <see cref="ReactorElement.Key"/> is its selection key.</summary>
-public sealed record ShellContentElement(string? Title, ImageSource? Icon, Element? Page) : Element;
+public sealed record ShellContentElement(string? Title, Element? Page) : Element
+{
+    public ImageSource? Icon { get; init; }
+}
 
 /// <summary>An item in the Shell's flyout that runs an action instead of showing a page.</summary>
 public sealed record ShellMenuItemElement(string Text, Action? OnClick) : Element
@@ -80,6 +89,15 @@ public sealed record ShellBackButton(string? Text = null, ImageSource? Icon = nu
 public static class ShellElementExtensions
 {
     public static ShellElement FlyoutBehavior(this ShellElement shell, FlyoutBehavior behavior) => shell with { FlyoutBehavior = behavior };
+
+    /// <summary>The tab's icon in the tab bar.</summary>
+    public static ShellTabElement Icon(this ShellTabElement tab, ImageSource? icon) => tab with { Icon = icon };
+
+    /// <summary>The top tab's icon.</summary>
+    public static ShellContentElement Icon(this ShellContentElement content, ImageSource? icon) => content with { Icon = icon };
+
+    /// <summary>The item's icon in the flyout.</summary>
+    public static FlyoutItemElement Icon(this FlyoutItemElement item, ImageSource? icon) => item with { Icon = icon };
 
     /// <summary>Controls whether the flyout is open; <paramref name="onChanged"/> receives the user's changes.</summary>
     public static ShellElement FlyoutIsPresented(this ShellElement shell, bool isPresented, Action<bool>? onChanged) =>

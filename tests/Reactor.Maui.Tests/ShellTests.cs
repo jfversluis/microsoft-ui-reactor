@@ -33,9 +33,9 @@ public sealed class ShellLab
     public static Element DefaultBuild(ShellLab lab) =>
         Shell(lab.Tab, lab.OnSelected,
             TabBar(
-                ShellTab("a", "A", null, lab.Host(lab.A)),
-                ShellTab("b", "B", null, lab.Host(lab.B)),
-                ShellTab("c", "C", null, Page("C", Label("c")))));
+                ShellTab("a", "A", lab.Host(lab.A)),
+                ShellTab("b", "B", lab.Host(lab.B)),
+                ShellTab("c", "C", Page("C", Label("c")))));
 }
 
 public sealed record ShellLabProps(ShellLab Lab, int Generation);
@@ -69,12 +69,12 @@ public sealed class ReadmeShellApp : Component
         var homeNav = UseNavigation<HomeRoute>(new HomeRoute.List());
         return Shell(tab, setTab,
             TabBar(
-                ShellTab("home", "Home", null, NavigationHost(homeNav, route => route switch
+                ShellTab("home", "Home", NavigationHost(homeNav, route => route switch
                 {
                     HomeRoute.Detail d => Page($"Item {d.Id}", Label($"Item {d.Id}")),
                     _ => Page("Home", Button("Open", () => homeNav.Navigate(new HomeRoute.Detail(1)))),
                 })),
-                ShellTab("settings", "Settings", null, Page("Settings", Label("Settings")))))
+                ShellTab("settings", "Settings", Page("Settings", Label("Settings")))))
             .FlyoutBehavior(FlyoutBehavior.Disabled);
     }
 }
@@ -281,12 +281,12 @@ public class ShellTests
     {
         var h = new Harness(lab => lab.Build = l => Shell(l.Tab, l.OnSelected,
             TabBar(
-                ShellTab("a", "A", null, Page("A", null)),
+                ShellTab("a", "A", Page("A", null)),
                 ShellTab("media", "Media", null,
-                    ShellContent("photos", "Photos", null, Page("Photos", null)),
-                    ShellContent("videos", "Videos", null, Page("Videos", null)))),
-            FlyoutItem("More", null, ShellTab("more", "More", null, Page("More", null))),
-            MenuItem("Help", () => l.Selected.Add("help"))) with { TabBarBackgroundColor = Colors.Red, Title = "App" });
+                    ShellContent("photos", "Photos", Page("Photos", null)),
+                    ShellContent("videos", "Videos", Page("Videos", null)))),
+            FlyoutItem("More", ShellTab("more", "More", Page("More", null))),
+            ShellMenuItem("Help", () => l.Selected.Add("help"))) with { TabBarBackgroundColor = Colors.Red, Title = "App" });
 
         var shell = h.Shell;
         Assert.Equal(Colors.Red, MauiShell.GetTabBarBackgroundColor(shell));
@@ -313,8 +313,8 @@ public class ShellTests
         var tops = new[] { "x", "y" };
         var h = new Harness(lab => lab.Build = l => Shell(l.Tab, l.OnSelected,
             TabBar([
-                .. tabs.Select(k => ShellTab(k, k.ToUpperInvariant(), null, Page(k, null))),
-                ShellTab("top", "Top", null, [.. tops.Select(k => ShellContent(k, k, null, Page(k, null)))]),
+                .. tabs.Select(k => ShellTab(k, k.ToUpperInvariant(), Page(k, null))),
+                ShellTab("top", "Top", [.. tops.Select(k => ShellContent(k, k, Page(k, null)))]),
             ])));
         var a = h.Section("a");
         var c = h.Section("c");
@@ -334,11 +334,36 @@ public class ShellTests
     }
 
     [Fact]
+    public void ConditionalTabs_AndTopTabs_SkipNulls()
+    {
+        var more = false;
+        var h = new Harness(lab => lab.Build = l => Shell(l.Tab, l.OnSelected,
+            TabBar(
+                ShellTab("a", "A", Page("A", null), icon: ImageSource.FromFile("a.png")),
+                more ? ShellTab("b", "B", Page("B", null)) : null,
+                ShellTab("top", "Top", ShellContent("x", "X", Page("x", null)), more ? ShellContent("y", "Y", Page("y", null)) : null).Icon(ImageSource.FromFile("t.png"))),
+            FlyoutItem("F", more ? ShellTab("f", "F", Page("f", null)) : null).Icon(ImageSource.FromFile("f.png"))));
+
+        Assert.Equal(["a", "top"], h.Shell.Items[0].Items.Select(ShellNatives.GetKey));
+        Assert.Single(h.Section("top").Items);
+        Assert.Empty(h.Shell.Items[1].Items);
+        Assert.Equal("a.png", ((FileImageSource)h.Section("a").Icon).File);
+        Assert.Equal("f.png", ((FileImageSource)h.Shell.Items[1].Icon).File);
+
+        more = true;
+        h.RenderAgain();
+        Assert.Equal(["a", "b", "top"], h.Shell.Items[0].Items.Select(ShellNatives.GetKey));
+        Assert.Equal(["x", "y"], h.Section("top").Items.Select(ShellNatives.GetKey));
+        Assert.Equal("f", ShellNatives.GetKey(Assert.Single(h.Shell.Items[1].Items)));
+        Assert.Empty(h.Errors);
+    }
+
+    [Fact]
     public void DuplicateKeys_Throw()
     {
         var h = new Harness(lab => lab.Build = l => Shell(l.Tab, l.OnSelected,
-            TabBar(ShellTab("a", "A", null, Page("A", null))),
-            TabBar(ShellTab("x", "X", null, ShellContent("a", "dup", null, Page("dup", null))))));
+            TabBar(ShellTab("a", "A", Page("A", null))),
+            TabBar(ShellTab("x", "X", ShellContent("a", "dup", Page("dup", null))))));
 
         var error = Assert.IsType<InvalidOperationException>(Assert.Single(h.Errors));
         Assert.Contains("'a'", error.Message);
@@ -350,11 +375,11 @@ public class ShellTests
     public void SelectionFromCode_ShowsTheTab_AtEachLevel_WithoutReportingIt()
     {
         var h = new Harness(lab => lab.Build = l => Shell(l.Tab, l.OnSelected,
-            TabBar(ShellTab("a", "A", null, Page("A", null)),
+            TabBar(ShellTab("a", "A", Page("A", null)),
                 ShellTab("media", "Media", null,
-                    ShellContent("photos", "Photos", null, Page("Photos", null)),
-                    ShellContent("videos", "Videos", null, Page("Videos", null)))),
-            FlyoutItem("More", null, ShellTab("more", "More", null, Page("More", null)))));
+                    ShellContent("photos", "Photos", Page("Photos", null)),
+                    ShellContent("videos", "Videos", Page("Videos", null)))),
+            FlyoutItem("More", ShellTab("more", "More", Page("More", null)))));
 
         h.Lab.SetTab("videos");
         h.Settle();
@@ -411,7 +436,7 @@ public class ShellTests
         var h = new Harness(lab =>
         {
             lab.InitialTab = "missing";
-            lab.Build = l => Shell(l.Tab, l.OnSelected, MenuItem("Help", null));
+            lab.Build = l => Shell(l.Tab, l.OnSelected, ShellMenuItem("Help", null));
         });
 
         Assert.Null(h.ShownKey);
@@ -432,7 +457,7 @@ public class ShellTests
         {
             lab.InitialTab = "missing";
             lab.Accept = false;
-            lab.Build = l => Shell(l.Tab, l.OnSelected, TabBar([.. tabs.Select(k => ShellTab(k, k, null, Page(k, null)))]));
+            lab.Build = l => Shell(l.Tab, l.OnSelected, TabBar([.. tabs.Select(k => ShellTab(k, k, Page(k, null)))]));
         });
 
         Assert.Equal("a", h.ShownKey);
@@ -453,7 +478,7 @@ public class ShellTests
     public void RemovingTheSelectedTab_SelectsTheDeclaredOne_BeforeItGoes()
     {
         // The same tab elements each render, so only the tab bar re-syncs, as with memoized tabs.
-        var elements = new[] { "a", "b", "c" }.ToDictionary(k => k, k => ShellTab(k, k, null, Page(k, null)));
+        var elements = new[] { "a", "b", "c" }.ToDictionary(k => k, k => ShellTab(k, k, Page(k, null)));
         var tabs = new[] { "a", "b", "c" };
         var h = new Harness(lab => lab.Build = l => Shell(l.Tab, l.OnSelected, TabBar([.. tabs.Select(k => elements[k])])));
         var changes = new List<string?>();
@@ -659,7 +684,7 @@ public class ShellTests
         Action<bool>? setModal = null;
         var dismissed = new List<int>();
         var h = new Harness(lab => lab.Build = l => Shell(l.Tab, l.OnSelected,
-            TabBar(ShellTab("a", "A", null, Component<ModalHost, ModalHostProps>(new(l, set => setModal = set, dismissed))))));
+            TabBar(ShellTab("a", "A", Component<ModalHost, ModalHostProps>(new(l, set => setModal = set, dismissed))))));
         h.Lab.A.Navigate("a1");
         h.Settle();
         setModal!(true);
@@ -677,6 +702,220 @@ public class ShellTests
         Assert.Empty(h.Lab.Log.Entries);
         Assert.Equal("a1", h.Lab.A.CurrentRoute);
         Assert.False(h.Navigator("a").IsUserBackPending);
+        Assert.Empty(dismissed);
+
+        // The user dismisses the modal (not the navigator): reported, the app drops it, the route stays.
+        _ = section.Navigation.PopModalAsync();
+        h.Settle();
+        Assert.Equal([0], dismissed);
+        Assert.Empty(section.Navigation.ModalStack);
+        Assert.Equal("a1", h.Lab.A.CurrentRoute);
+        Assert.Equal("a0,a1", h.Pages("a"));
+        Assert.Empty(h.Lab.Log.Entries);
+    }
+
+    private static Harness ModalHarness(List<int> dismissed, Func<Action<bool>?> setModal, Action<Action<bool>> report, bool withPageTab = false) =>
+        new(lab => lab.Build = l => Shell(l.Tab, l.OnSelected, TabBar(
+            ShellTab("a", "A", Component<ModalHost, ModalHostProps>(new(l, report, dismissed))),
+            withPageTab ? ShellTab("b", "B", Page("b", null)) : null)));
+
+    [Fact]
+    public void APageChange_WhileTheStacksModalIsShown_WaitsForTheModal()
+    {
+        Action<bool>? setModal = null;
+        var dismissed = new List<int>();
+        var h = ModalHarness(dismissed, () => setModal, set => setModal = set);
+        h.Lab.A.Navigate("a1");
+        h.Settle();
+        setModal!(true);
+        h.Settle();
+        var section = h.Section("a");
+        h.Lab.Log.Entries.Clear();
+
+        h.Lab.A.Navigate("a2");
+        h.Settle();
+        Assert.Single(section.Navigation.ModalStack);
+        Assert.Empty(dismissed);
+        Assert.Equal("a0,a1", h.Pages("a"));
+        Assert.True(h.Navigator("a").IsHolding);
+        // The navigation completes once it is shown, not while it waits.
+        Assert.DoesNotContain("a2:navigatedTo:Push", h.Lab.Log.Entries);
+
+        setModal(false);
+        h.Settle();
+        Assert.Empty(section.Navigation.ModalStack);
+        Assert.Empty(dismissed);
+        Assert.Equal("a0,a1,a2", h.Pages("a"));
+        Assert.Contains("a2:navigatedTo:Push", h.Lab.Log.Entries);
+        Assert.Empty(h.Errors);
+    }
+
+    [Fact]
+    public void RemovingAHostTab_WithItsModalShown_DismissesTheModal_AndLetsGoOfTheSection()
+    {
+        Action<bool>? setModal = null;
+        var dismissed = new List<int>();
+        var tabs = true;
+        var h = new Harness(lab => lab.Build = l => Shell(l.Tab, l.OnSelected, TabBar(
+            tabs ? ShellTab("a", "A", Component<ModalHost, ModalHostProps>(new(l, set => setModal = set, dismissed))) : null,
+            ShellTab("b", "B", Page("b", null)))));
+        h.Lab.A.Navigate("a1");
+        h.Settle();
+        setModal!(true);
+        h.Settle();
+        var section = h.Section("a");
+        Assert.Single(section.Navigation.ModalStack);
+        h.Lab.Log.Entries.Clear();
+
+        tabs = false;
+        h.Lab.SetTab("b");
+        h.Settle();
+
+        Assert.Empty(section.Navigation.ModalStack);
+        Assert.Null(ShellNatives.GetNavigator(section));
+        Assert.Empty(h.Shell.Lingering);
+        Assert.Empty(dismissed);
+        Assert.Equal("b", h.ShownKey);
+        Assert.Empty(h.Lab.Log.Entries);
+        Assert.Empty(h.Errors);
+    }
+
+    [Fact]
+    public void UnmountingTheShell_WithAStacksModalShown_DismissesIt()
+    {
+        Action<bool>? setModal = null;
+        var dismissed = new List<int>();
+        var h = ModalHarness(dismissed, () => setModal, set => setModal = set);
+        setModal!(true);
+        h.Settle();
+        var window = h.Window!;
+        Assert.Single(window.Navigation.ModalStack);
+
+        h.Lab.Build = _ => Page("next", null);
+        h.RenderAgain();
+
+        Assert.Empty(window.Navigation.ModalStack);
+        Assert.Empty(dismissed);
+        Assert.Empty(h.Errors);
+    }
+
+    [Fact]
+    public void RemovingAHostTab_MidPush_RunsNoLifecycleAfter_AndSettles()
+    {
+        var tabs = true;
+        var h = new Harness(lab => lab.Build = l => Shell(l.Tab, l.OnSelected, TabBar(
+            tabs ? ShellTab("a", "A", l.Host(l.A)) : null,
+            ShellTab("b", "B", Page("b", null)))));
+        ShellNavigatingDeferral? deferral = null;
+        h.Shell.Navigating += (_, e) =>
+        {
+            if (e.Source == ShellNavigationSource.Push && deferral is null) deferral = e.GetDeferral();
+        };
+        h.Lab.A.Navigate("a1");
+        h.Settle();
+        var navigator = h.Navigator("a");
+        Assert.False(navigator.IsIdle);
+        h.Lab.Log.Entries.Clear();
+
+        tabs = false;
+        h.Lab.SetTab("b");
+        h.Settle();
+        // Still running its push: the Shell keeps listing it as busy.
+        Assert.Contains(navigator, h.Shell.Navigators);
+
+        deferral!.Complete();
+        h.Settle();
+        Assert.True(navigator.IsIdle);
+        Assert.Empty(h.Shell.Lingering);
+        Assert.DoesNotContain(h.Lab.Log.Entries, e => e.Contains("navigatedTo"));
+        Assert.Empty(h.Errors);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ATabsContentChangingFromADeepHost_PopsTheSectionToItsRoot(bool toTopTabs)
+    {
+        var host = true;
+        var h = new Harness(lab => lab.Build = l => Shell(l.Tab, l.OnSelected, TabBar(
+            host ? ShellTab("a", "A", l.Host(l.A))
+            : toTopTabs ? ShellTab("a", "A", ShellContent("x", "X", Page("x", null)), ShellContent("y", "Y", Page("y", null)))
+            : ShellTab("a", "A", Page("plain", null)))));
+        h.Lab.A.Navigate("a1");
+        h.Lab.A.Navigate("a2");
+        h.Settle();
+        Assert.Equal(3, h.Section("a").Stack.Count);
+
+        host = false;
+        h.RenderAgain();
+
+        var section = h.Section("a");
+        Assert.Single(section.Stack);
+        Assert.Equal(toTopTabs ? "x" : "plain", ((Page)section.CurrentItem.Content).Title);
+        Assert.Null(ShellNatives.GetNavigator(section));
+        Assert.Empty(h.Errors);
+    }
+
+    [Fact]
+    public void ANestedHostInAShellTabsPage_RendersItsOwnNavigationPage()
+    {
+        var h = new Harness(lab => lab.Build = l => Shell(l.Tab, l.OnSelected, TabBar(
+            ShellTab("a", "A", NavigationHost(l.A, _ => Flyout(Page("menu", null), NavigationHost(l.B, r => Page(r, null)), false))))));
+        var section = h.Section("a");
+        var flyout = Assert.IsType<ReactorFlyoutPage>(section.CurrentItem.Content);
+        var inner = Assert.IsType<ReactorNavigationPage>(flyout.Detail);
+
+        h.Lab.B.Navigate("b1");
+        h.Settle();
+
+        Assert.Equal(["b0", "b1"], inner.Navigation.NavigationStack.Select(p => p.Title));
+        Assert.Single(section.Stack);
+        Assert.Empty(h.Errors);
+    }
+
+    [Fact]
+    public void ModalRoutePage_InAShellTab_IsRejected()
+    {
+        var h = new Harness(lab => lab.Build = l => Shell(l.Tab, l.OnSelected, TabBar(
+            ShellTab("a", "A", NavigationHost(l.A, r => r == "sheet" ? Page(r, null) with { PresentationMode = PresentationMode.ModalAnimated } : Page(r, null))))));
+
+        var section = h.Section("a");
+
+        h.Lab.A.Navigate("sheet");
+        h.Settle();
+
+        var error = Assert.IsType<InvalidOperationException>(Assert.Single(h.Errors));
+        Assert.Contains("Modals", error.Message);
+        Assert.Empty(section.Navigation.ModalStack);
+        Assert.Single(section.Stack);
+    }
+
+    [Fact]
+    public void RootSwap_WhileASectionIsBusy_WaitsForIt()
+    {
+        var h = new Harness();
+        h.Lab.A.Navigate("a1");
+        h.Settle();
+        var shell = h.Shell;
+        var setter = new WindowPageSetter(h.Window!, h.Errors.Add) { WaitForNavigation = true };
+        h.Host.RootNativeChanged = native =>
+        {
+            if (native is Page page) setter.Set(page);
+        };
+        Assert.True(h.SwipeBegins("a"));
+
+        // The root renders a page instead of the Shell: the Shell's tree unmounts before the swap.
+        h.Lab.Build = _ => Page("next", null);
+        h.RenderAgain();
+        Assert.True(setter.IsPending);
+        Assert.Same(shell, h.Window!.Page);
+
+        h.Transitions.End(cancelled: true);
+        h.Settle();
+        Assert.False(setter.IsPending);
+        Assert.Equal("next", h.Window.Page?.Title);
+        Assert.Empty(shell.Lingering);
+        Assert.Empty(h.Errors);
     }
 
     private sealed record ModalHostProps(ShellLab Lab, Action<Action<bool>> Report, List<int> Dismissed);
@@ -697,6 +936,161 @@ public class ShellTests
                 },
             });
         }
+    }
+
+    [Fact]
+    public void AndroidBackKey_IsOneGuardedModelBack_AndTheNavigatorPopsAsItsOwn()
+    {
+        var h = new Harness();
+        h.Shell.BackKeyIsModelBack = true;
+        h.Lab.A.Navigate("a1");
+        h.Lab.A.Navigate("a2");
+        h.Settle();
+        h.Lab.Log.Entries.Clear();
+        var offered = new List<ShellNavigationSource>();
+        h.Shell.Navigating += (_, e) => offered.Add(e.Source);
+
+        // The pop is held by a Navigating deferral, so the platform hasn't moved yet.
+        ShellNavigatingDeferral? deferral = null;
+        h.Shell.Navigating += (_, e) =>
+        {
+            if (e.Source is ShellNavigationSource.Pop or ShellNavigationSource.PopToRoot && deferral is null) deferral = e.GetDeferral();
+        };
+
+        Assert.True(h.Shell.SendBackButtonPressed());
+        // Nothing waits on the platform: the model moved at once, and the navigator pops as its own.
+        Assert.Equal("a1", h.Lab.A.CurrentRoute);
+        Assert.False(h.Navigator("a").IsUserBackPending);
+        h.Settle();
+        deferral!.Complete();
+        h.Settle();
+
+        Assert.Equal("a0,a1", h.Pages("a"));
+        Assert.Equal(
+            "a2:navigatingFrom:Pop a1:navigatingTo:Pop a1:navigatedTo:Pop a2:navigatedFrom:Pop",
+            string.Join(" ", h.Lab.Log.Entries));
+        Assert.All(offered, source => Assert.NotEqual(ShellNavigationSource.Unknown, source));
+    }
+
+    [Fact]
+    public void AndroidBackKey_RefusedByEitherGuard_MovesNothing_AndAtTheRootIsPassedOn()
+    {
+        var h = new Harness();
+        h.Shell.BackKeyIsModelBack = true;
+        Assert.False(h.Shell.SendBackButtonPressed());
+
+        h.Lab.A.Navigate("a1");
+        h.Settle();
+        h.Lab.Log.Entries.Clear();
+        var navigations = 0;
+        h.Shell.Navigated += (_, _) => navigations++;
+        h.Lab.Log.RefuseTo.Add("a0");
+
+        Assert.True(h.Shell.SendBackButtonPressed());
+        h.Settle();
+        Assert.Equal("a1:navigatingFrom:Pop a0:navigatingTo:Pop", string.Join(" ", h.Lab.Log.Entries));
+        Assert.Equal("a1", h.Lab.A.CurrentRoute);
+
+        h.Lab.Log.RefuseTo.Clear();
+        h.Lab.Log.RefuseFrom.Add("a1");
+        Assert.True(h.Shell.SendBackButtonPressed());
+        h.Settle();
+        Assert.Equal("a1", h.Lab.A.CurrentRoute);
+        Assert.Equal("a0,a1", h.Pages("a"));
+        Assert.Equal(0, navigations);
+    }
+
+    [Fact]
+    public void ABackBeforeTheModelsChangeIsShown_IsOneGuardedBackOfTheModel()
+    {
+        var h = new Harness();
+        h.Lab.A.Navigate("a1");
+        h.Settle();
+        h.Lab.Log.Entries.Clear();
+
+        // A push the host hasn't shown yet, then the user's back: it supersedes the push.
+        h.Lab.A.Navigate("a2");
+        h.Shell.SendBackButtonPressed();
+        h.Settle();
+
+        Assert.Equal("a1", h.Lab.A.CurrentRoute);
+        Assert.Equal("a0,a1", h.Pages("a"));
+        Assert.Equal(1, h.Lab.Log.Entries.Count(e => e.EndsWith(":navigatingFrom:Pop")));
+        Assert.False(h.Navigator("a").IsUserBackPending);
+    }
+
+    [Fact]
+    public void ABackDuringThePush_IsOneGuardedBackOfTheModel_AndTheStackFollows()
+    {
+        var h = new Harness();
+        h.Lab.A.Navigate("a1");
+        h.Settle();
+        ShellNavigatingDeferral? deferral = null;
+        h.Shell.Navigating += (_, e) =>
+        {
+            if (e.Source == ShellNavigationSource.Push && deferral is null) deferral = e.GetDeferral();
+        };
+        h.Lab.A.Navigate("a2");
+        h.Settle();
+        Assert.False(h.Navigator("a").IsIdle);
+        h.Lab.Log.Entries.Clear();
+
+        var back = new ShellNavigatingEventArgs(h.Shell.CurrentState, "..", ShellNavigationSource.Pop, true);
+        h.Shell.SendNavigatingForTest(back);
+        Assert.True(back.Cancelled);
+        Assert.Equal("a1", h.Lab.A.CurrentRoute);
+
+        deferral!.Complete();
+        h.Settle();
+        Assert.Equal("a0,a1", h.Pages("a"));
+        Assert.Equal(1, h.Lab.Log.Entries.Count(e => e.EndsWith(":navigatingFrom:Pop")));
+        Assert.Empty(h.Errors);
+    }
+
+    [Fact]
+    public void ASecondBackOffered_WhileOneIsPending_IsCancelled()
+    {
+        var h = new Harness();
+        h.Lab.A.Navigate("a1");
+        h.Lab.A.Navigate("a2");
+        h.Settle();
+        h.Lab.Log.Entries.Clear();
+        Assert.True(h.SwipeBegins("a"));
+
+        var again = new ShellNavigatingEventArgs(h.Shell.CurrentState, "..", ShellNavigationSource.Pop, true);
+        h.Shell.SendNavigatingForTest(again);
+        Assert.True(again.Cancelled);
+
+        h.SwipeCompletes("a");
+        Assert.Equal("a0,a1", h.Pages("a"));
+        Assert.Equal("a1", h.Lab.A.CurrentRoute);
+        Assert.Equal(1, Count(h.Lab.Log, "a2:navigatingFrom:Pop"));
+    }
+
+    [Fact]
+    public void ADeferredBack_LongerThanTheWarning_CommitsWhenItCompletes()
+    {
+        var h = new Harness();
+        h.Lab.A.Navigate("a1");
+        h.Settle();
+        ShellNavigatingDeferral? deferral = null;
+        h.Shell.Navigating += (_, e) =>
+        {
+            if (e.Source is ShellNavigationSource.Pop or ShellNavigationSource.PopToRoot && deferral is null) deferral = e.GetDeferral();
+        };
+
+        h.Shell.SendBackButtonPressed();
+        h.Now += 10_000;
+        h.Settle();
+        // No transition signal: the back stays pending (the warning is only logged).
+        Assert.True(h.Navigator("a").IsUserBackPending);
+        Assert.Equal("a0,a1", h.Pages("a"));
+
+        deferral!.Complete();
+        h.Settle();
+        Assert.False(h.Navigator("a").IsUserBackPending);
+        Assert.Equal("a0", h.Lab.A.CurrentRoute);
+        Assert.Equal("a0", h.Pages("a"));
     }
 
     // ── The iOS swipe's state machine ───────────────────────────────────────
@@ -812,6 +1206,26 @@ public class ShellTests
     }
 
     [Fact]
+    public void Swipe_WhoseTransitionEndsWithoutNavigated_CommitsWhenThePageLeft()
+    {
+        var h = new Harness();
+        h.Lab.A.Navigate("a1");
+        h.Settle();
+        Assert.True(h.SwipeBegins("a"));
+        h.Settle();
+
+        // UIKit finished the pop (MAUI removed the page) but Shell never navigated.
+        ((IShellSectionController)h.Section("a")).SendPopping(new TaskCompletionSource().Task);
+        h.Transitions.Running = false;
+        h.Now += 10_000;
+        h.Settle();
+
+        Assert.False(h.Navigator("a").IsUserBackPending);
+        Assert.Equal("a0", h.Lab.A.CurrentRoute);
+        Assert.Equal("a0", h.Pages("a"));
+    }
+
+    [Fact]
     public void ACancelByAnotherHandler_SettlesAsCancelled_OnTheNextTurn()
     {
         var h = new Harness();
@@ -858,7 +1272,7 @@ public class ShellTests
         var search = new SearchHandler();
         var visible = true;
         var h = new Harness(lab => lab.Build = l => Shell(l.Tab, l.OnSelected,
-            TabBar(ShellTab("a", "A", null, Page("A", null) with
+            TabBar(ShellTab("a", "A", Page("A", null) with
             {
                 NavBarIsVisible = visible,
                 TabBarIsVisible = !visible,
@@ -897,7 +1311,7 @@ public class ShellTests
         var reported = new List<bool>();
         var header = "one";
         var h = new Harness(lab => lab.Build = l => Shell(l.Tab, l.OnSelected,
-                FlyoutItem("A", null, ShellTab("a", "A", null, Page("A", null))))
+                FlyoutItem("A", ShellTab("a", "A", Page("A", null))))
             .FlyoutIsPresented(presented, reported.Add)
             .FlyoutHeader(Label(header))
             .FlyoutFooter(Label("footer"))

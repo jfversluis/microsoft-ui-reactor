@@ -138,6 +138,9 @@ internal interface INativeStack
     /// <summary>Whether a page the platform popped may still be listed in MAUI's stacks.</summary>
     bool HasPendingPlatformPops { get; }
 
+    /// <summary>Whether a declared page change is held back (a Shell section's, while its modal is shown).</summary>
+    bool IsHolding { get; }
+
     /// <summary>The animation argument of the last operation the stack started.</summary>
     bool? LastOperationAnimated { get; }
 }
@@ -164,11 +167,8 @@ internal sealed class StackNavigator(NavigationPage navigationPage) : INativeSta
     private bool _stopped;
 
     // The window's modal stack is shared by every navigation stack in it; this one manages only the
-    // modals it presented.
-    private readonly HashSet<Page> _ownedModals = new(ReferenceEqualityComparer.Instance);
-
-    // MAUI pops only the top modal, so reordering modals pops ones that are still declared.
-    private Page? _poppingModal;
+    // modals it presented. (MAUI pops only the top modal, so reordering modals pops ones that are still declared.)
+    private readonly OwnedModals _ownedModals = new();
 
     // Pages the platform popped that may still be listed in MAUI's stacks, with when.
     private readonly List<(Page Page, long At)> _platformPops = [];
@@ -187,7 +187,7 @@ internal sealed class StackNavigator(NavigationPage navigationPage) : INativeSta
     public bool IsUserPop(Page popped, bool modal, out int depth)
     {
         depth = 0;
-        if (_stopped || (modal && ReferenceEquals(popped, _poppingModal))) return false;
+        if (_stopped || (modal && ReferenceEquals(popped, _ownedModals.Popping))) return false;
         var declared = modal ? _modals : _pages;
         for (depth = 0; depth < declared.Count; depth++)
             if (ReferenceEquals(declared[depth], popped)) return true;
@@ -201,7 +201,7 @@ internal sealed class StackNavigator(NavigationPage navigationPage) : INativeSta
     public void NotePlatformPop(Page page) => _platformPops.Add((page, Environment.TickCount64));
 
     /// <summary>A modal left the window's stack, whoever popped it.</summary>
-    public void ForgetModal(Page modal) => _ownedModals.Remove(modal);
+    public void ForgetModal(Page modal) => _ownedModals.Forget(modal);
 
     /// <summary>True when no reconcile is running, including a platform operation started before <see cref="Stop"/>.</summary>
     public bool IsIdle => !_running;
@@ -211,6 +211,8 @@ internal sealed class StackNavigator(NavigationPage navigationPage) : INativeSta
 
     /// <summary>Whether a page the platform popped may still be listed in MAUI's stacks (within its window).</summary>
     public bool HasPendingPlatformPops => PendingPlatformPops(out _);
+
+    public bool IsHolding => false;
 
     /// <summary>Whether the operations toward the current declaration animate.</summary>
     internal bool Animated => _animated;
@@ -253,7 +255,7 @@ internal sealed class StackNavigator(NavigationPage navigationPage) : INativeSta
     {
         if (_stopped) return;
         _stopped = true;
-        // A running loop calls CleanUpOwnedModals when its current operation finishes.
+        // A running loop cleans up when its current operation finishes.
         if (!_running) CleanUpOwnedModals();
     }
 
@@ -365,7 +367,7 @@ internal sealed class StackNavigator(NavigationPage navigationPage) : INativeSta
         // Modals need the page to be in a window.
         if (navigationPage.Window is null) return null;
         var stack = navigation.ModalStack;
-        var actual = stack.Where(_ownedModals.Contains).ToList();
+        var actual = _ownedModals.In(stack);
         var common = 0;
         while (common < actual.Count && common < _modals.Count && ReferenceEquals(actual[common], _modals[common])) common++;
         if (common < actual.Count)
@@ -373,90 +375,17 @@ internal sealed class StackNavigator(NavigationPage navigationPage) : INativeSta
             var top = actual[^1];
             // Another navigation stack's modal is above this one's: wait until it is dismissed.
             if (!ReferenceEquals(stack[^1], top)) return null;
-            return async () =>
-            {
-                _poppingModal = top;
-                try
-                {
-                    await navigation.PopModalAsync(Started(_animated));
-                }
-                finally
-                {
-                    _poppingModal = null;
-                }
-            };
+            return () => _ownedModals.Pop(navigation, top, Started(_animated));
         }
         if (common < _modals.Count)
         {
             var next = _modals[common];
-            return () =>
-            {
-                _ownedModals.Add(next);
-                _modalWindow = navigationPage.Window;
-                return navigation.PushModalAsync(next, Started(_animated));
-            };
+            return () => _ownedModals.Push(navigation, navigationPage.Window, next, Started(_animated));
         }
         return null;
     }
 
-    private bool _cleaning;
-    private Application? _cleanupApp;
-
-    // The window this navigator presented modals in. Cleanup goes through it: by then the
-    // navigation page may have left the window, and its own Navigation no longer reaches the modals.
-    private Window? _modalWindow;
-
-    /// <summary>
-    /// Dismisses the modals this (stopped) navigator presented, top down while they are on top.
-    /// One covered by another stack's modal is left until that modal goes: the navigator keeps
-    /// listening to <see cref="Application.ModalPopped"/> until all of its modals are gone.
-    /// </summary>
-    private async void CleanUpOwnedModals()
-    {
-        if (_cleaning) return;
-        _cleaning = true;
-        try
-        {
-            // No window left: the modals went with it.
-            var navigation = (_modalWindow ?? navigationPage.Window)?.Navigation;
-            if (navigation is null) _ownedModals.Clear();
-            while (navigation is not null && navigation.ModalStack.Count > 0 && _ownedModals.Contains(navigation.ModalStack[^1]))
-            {
-                var top = navigation.ModalStack[^1];
-                _ownedModals.Remove(top);
-                await navigation.PopModalAsync(animated: false);
-            }
-            if (navigation is not null) _ownedModals.RemoveWhere(m => !navigation.ModalStack.Contains(m));
-        }
-        catch (Exception)
-        {
-            // The window is closing or another owner is mid-transition; there is no tree left to report to.
-        }
-        finally
-        {
-            _cleaning = false;
-        }
-
-        if (_ownedModals.Count > 0)
-        {
-            if (_cleanupApp is null && Application.Current is { } app)
-            {
-                _cleanupApp = app;
-                app.ModalPopped += OnModalPoppedWhileStopped;
-            }
-        }
-        else if (_cleanupApp is { } subscribed)
-        {
-            subscribed.ModalPopped -= OnModalPoppedWhileStopped;
-            _cleanupApp = null;
-        }
-    }
-
-    private void OnModalPoppedWhileStopped(object? sender, ModalPoppedEventArgs e)
-    {
-        _ownedModals.Remove(e.Modal);
-        CleanUpOwnedModals();
-    }
+    private void CleanUpOwnedModals() => _ownedModals.CleanUp(() => navigationPage.Window?.Navigation);
 
     private static Func<Task> Sync(Action action) => () =>
     {
