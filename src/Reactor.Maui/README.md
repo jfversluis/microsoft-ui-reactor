@@ -78,6 +78,22 @@ var registry = MauiHandlers.CreateRegistry()
     .RegisterForDerivedTypes(new ChipHandler()); // every record derived from ChipBase
 ```
 
+The simplest way to write a handler for your own element is a `ControlDescriptor`. It writes the
+element's values, applies the shared modifiers (margin, size, gestures, semantics…) and handles
+controlled values, so the view always shows what the element declares:
+
+```csharp
+public sealed record RatingElement(int Value, Action<int>? OnChanged = null) : ViewElement;
+
+var rating = new ControlDescriptor<RatingElement, Stepper>(static _ => new Stepper { Maximum = 5 })
+    .Controlled(
+        static e => (double)e.Value,                       // what the element declares
+        static v => v.Value,                               // what the view shows
+        static (v, value) => v.Value = value,              // show a value
+        static (v, report) => v.ValueChanged += (_, e) => report(e.NewValue),
+        static e => e.OnChanged is { } changed ? value => changed((int)value) : null);
+```
+
 `RegisterForDerivedTypes` covers a family of element records with a non-generic base, such as the
 closed types of a generic `Chip<T> : ChipBase`. A registration for exactly one type wins over it.
 Unlike WinUI's process-wide `ControlRegistry`, where the first registration wins, a MAUI registry

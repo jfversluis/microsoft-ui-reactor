@@ -60,39 +60,6 @@ internal sealed class ImageHandler : ViewHandler<ImageElement, MauiImage>
     }
 }
 
-internal sealed class BoxViewHandler : ViewHandler<BoxViewElement, MauiBoxView>
-{
-    protected override MauiBoxView Create(HandlerContext<BoxViewElement> context, BoxViewElement element) => new();
-
-    protected override void Apply(HandlerContext<BoxViewElement> context, MauiBoxView view, BoxViewElement? previous, BoxViewElement next)
-    {
-        Props.SetRef(view, MauiBoxView.ColorProperty, previous?.Color, next.Color);
-        Props.Set(view, MauiBoxView.CornerRadiusProperty, previous?.CornerRadius, next.CornerRadius);
-    }
-}
-
-internal sealed class ActivityIndicatorHandler : ViewHandler<ActivityIndicatorElement, MauiActivityIndicator>
-{
-    protected override MauiActivityIndicator Create(HandlerContext<ActivityIndicatorElement> context, ActivityIndicatorElement element) => new();
-
-    protected override void Apply(HandlerContext<ActivityIndicatorElement> context, MauiActivityIndicator view, ActivityIndicatorElement? previous, ActivityIndicatorElement next)
-    {
-        if (previous?.IsRunning != next.IsRunning) view.IsRunning = next.IsRunning;
-        Props.SetRef(view, MauiActivityIndicator.ColorProperty, previous?.Color, next.Color);
-    }
-}
-
-internal sealed class ProgressBarHandler : ViewHandler<ProgressBarElement, MauiProgressBar>
-{
-    protected override MauiProgressBar Create(HandlerContext<ProgressBarElement> context, ProgressBarElement element) => new();
-
-    protected override void Apply(HandlerContext<ProgressBarElement> context, MauiProgressBar view, ProgressBarElement? previous, ProgressBarElement next)
-    {
-        if (previous?.Progress != next.Progress) view.Progress = next.Progress;
-        Props.SetRef(view, MauiProgressBar.ProgressColorProperty, previous?.ProgressColor, next.ProgressColor);
-    }
-}
-
 internal sealed class GraphicsViewHandler : ViewHandler<GraphicsViewElement, MauiGraphicsView>
 {
     protected override MauiGraphicsView Create(HandlerContext<GraphicsViewElement> context, GraphicsViewElement element) => new();
@@ -193,100 +160,6 @@ internal sealed class EntryHandler : ViewHandler<EntryElement, MauiEntry>
         Props.Set(view, MauiEntry.IsSpellCheckEnabledProperty, previous?.IsSpellCheckEnabled, next.IsSpellCheckEnabled);
         // Compared with the control, not the old element: the user may have typed since the last render.
         if ((view.Text ?? "") != next.Text) context.WriteSuppressed(view, () => view.Text = next.Text);
-    }
-}
-
-internal sealed class EditorHandler : ViewHandler<EditorElement, MauiEditor>
-{
-    protected override MauiEditor Create(HandlerContext<EditorElement> context, EditorElement element)
-    {
-        var view = new MauiEditor();
-        view.TextChanged += (_, e) =>
-        {
-            if (context.IsEchoing(view)) return;
-            context.Live?.OnTextChanged?.Invoke(e.NewTextValue ?? "");
-            context.RestoreAfterEvent();
-        };
-        view.Completed += (_, _) => context.Live?.OnCompleted?.Invoke();
-        return view;
-    }
-
-    protected override void Apply(HandlerContext<EditorElement> context, MauiEditor view, EditorElement? previous, EditorElement next)
-    {
-        Props.ApplyText(view, previous, next);
-        Props.SetRef(view, MauiEditor.PlaceholderProperty, previous?.Placeholder, next.Placeholder);
-        Props.SetRef(view, MauiEditor.PlaceholderColorProperty, previous?.PlaceholderColor, next.PlaceholderColor);
-        Props.Set(view, MauiEditor.IsReadOnlyProperty, previous?.IsReadOnly, next.IsReadOnly);
-        Props.Set(view, MauiEditor.MaxLengthProperty, previous?.MaxLength, next.MaxLength);
-        Props.SetRef(view, MauiEditor.KeyboardProperty, previous?.Keyboard, next.Keyboard);
-        Props.Set(view, MauiEditor.AutoSizeProperty, previous?.AutoSize, next.AutoSize);
-        if ((view.Text ?? "") != next.Text) context.WriteSuppressed(view, () => view.Text = next.Text);
-    }
-}
-
-internal sealed class SearchBarHandler : ViewHandler<SearchBarElement, MauiSearchBar>
-{
-    protected override MauiSearchBar Create(HandlerContext<SearchBarElement> context, SearchBarElement element)
-    {
-        var view = new MauiSearchBar();
-        view.TextChanged += (_, e) =>
-        {
-            if (context.IsEchoing(view)) return;
-            context.Live?.OnTextChanged?.Invoke(e.NewTextValue ?? "");
-            context.RestoreAfterEvent();
-        };
-        view.SearchButtonPressed += (_, _) => context.Live?.OnSearch?.Invoke(view.Text ?? "");
-        return view;
-    }
-
-    protected override void Apply(HandlerContext<SearchBarElement> context, MauiSearchBar view, SearchBarElement? previous, SearchBarElement next)
-    {
-        Props.ApplyText(view, previous, next);
-        Props.SetRef(view, MauiSearchBar.PlaceholderProperty, previous?.Placeholder, next.Placeholder);
-        if ((view.Text ?? "") != next.Text) context.WriteSuppressed(view, () => view.Text = next.Text);
-    }
-}
-
-internal sealed class CheckBoxHandler : ViewHandler<CheckBoxElement, MauiCheckBox>
-{
-    protected override MauiCheckBox Create(HandlerContext<CheckBoxElement> context, CheckBoxElement element)
-    {
-        var view = new MauiCheckBox();
-        view.CheckedChanged += (_, e) =>
-        {
-            if (context.IsEchoing(view)) return;
-            context.Live?.OnCheckedChanged?.Invoke(e.Value);
-            context.RestoreAfterEvent();
-        };
-        return view;
-    }
-
-    protected override void Apply(HandlerContext<CheckBoxElement> context, MauiCheckBox view, CheckBoxElement? previous, CheckBoxElement next)
-    {
-        Props.SetRef(view, MauiCheckBox.ColorProperty, previous?.Color, next.Color);
-        if (view.IsChecked != next.IsChecked) context.WriteSuppressed(view, () => view.IsChecked = next.IsChecked);
-    }
-}
-
-internal sealed class SwitchHandler : ViewHandler<SwitchElement, MauiSwitch>
-{
-    protected override MauiSwitch Create(HandlerContext<SwitchElement> context, SwitchElement element)
-    {
-        var view = new MauiSwitch();
-        view.Toggled += (_, e) =>
-        {
-            if (context.IsEchoing(view)) return;
-            context.Live?.OnToggled?.Invoke(e.Value);
-            context.RestoreAfterEvent();
-        };
-        return view;
-    }
-
-    protected override void Apply(HandlerContext<SwitchElement> context, MauiSwitch view, SwitchElement? previous, SwitchElement next)
-    {
-        Props.SetRef(view, MauiSwitch.OnColorProperty, previous?.OnColor, next.OnColor);
-        Props.SetRef(view, MauiSwitch.ThumbColorProperty, previous?.ThumbColor, next.ThumbColor);
-        if (view.IsToggled != next.IsToggled) context.WriteSuppressed(view, () => view.IsToggled = next.IsToggled);
     }
 }
 
@@ -430,29 +303,6 @@ internal sealed class TimePickerHandler : ViewHandler<TimePickerElement, MauiTim
         Props.ApplyText(view, previous, next);
         Props.SetRef(view, MauiTimePicker.FormatProperty, previous?.Format, next.Format);
         if (view.Time != next.Time) context.WriteSuppressed(view, () => view.Time = next.Time);
-    }
-}
-
-internal sealed class RadioButtonHandler : ViewHandler<RadioButtonElement, MauiRadioButton>
-{
-    protected override MauiRadioButton Create(HandlerContext<RadioButtonElement> context, RadioButtonElement element)
-    {
-        var view = new MauiRadioButton();
-        view.CheckedChanged += (_, e) =>
-        {
-            if (context.IsEchoing(view)) return;
-            context.Live?.OnCheckedChanged?.Invoke(e.Value);
-            context.RestoreAfterEvent();
-        };
-        return view;
-    }
-
-    protected override void Apply(HandlerContext<RadioButtonElement> context, MauiRadioButton view, RadioButtonElement? previous, RadioButtonElement next)
-    {
-        if (previous?.Content != next.Content) view.Content = next.Content;
-        Props.ApplyText(view, previous, next);
-        Props.SetRef(view, MauiRadioButton.GroupNameProperty, previous?.GroupName, next.GroupName);
-        if (view.IsChecked != next.IsChecked) context.WriteSuppressed(view, () => view.IsChecked = next.IsChecked);
     }
 }
 

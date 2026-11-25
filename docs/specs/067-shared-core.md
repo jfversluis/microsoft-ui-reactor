@@ -846,3 +846,50 @@ was resolved under, and lookups accept only the current one. Its registration la
 explicitly (`MauiHandlers.CreateRegistry()`, `DirectHandlers.CreateRegistry()`), and nothing a
 latch does populates a MAUI root.
 
+## 16. Phase 3e: descriptors
+
+Spec §12.3's descriptor gate covers the order of props and children, live-element access in
+events, restore-after-event and hybrid remounts. §12.2 judged extracting WinUI's descriptor
+interpreter "shaped by one consumer". Writing MAUI's confirms it. What WinUI's entries mostly do is
+WinUI's:
+
+- clear a `DependencyProperty` so value precedence falls back;
+- subscribe routed or typed events through the per-control trampoline that pooling needs;
+- arm the value-diff echo for late echoes;
+- bridge flyouts through `MountContext`.
+
+MAUI has none of those. Its entries are a bindable-property write or clear, an echo scope (§14), and
+`HandlerContext.Live`. So descriptors converge on the authoring surface, not on shared code.
+
+MAUI gets a public `ControlDescriptor<TElement, TView>` (`src/Reactor.Maui/Handlers/ControlDescriptor.cs`).
+It is a handler built from entries, with WinUI's verbs:
+
+| Verb | WinUI | MAUI |
+|---|---|---|
+| A value Reactor owns | `OneWay` (and `OneWay` with `Optional<T>`, which clears the DP) | `OneWay`; `Property(BindableProperty, get)`, which clears when the value is `null` |
+| Written once | `Initial` / `InitialOnly` | `Initial` |
+| A value the user changes and the element declares | `Controlled` | `Controlled(get, read, write, subscribe, callback)` |
+| Anything else the control reports | `HandCodedEvent`, `Imperative` | `Event((context, view) => …)` |
+| Teardown, remount | `WithUnmount`, the handler's `CanUpdate` | `WithUnmount`, `WithCanUpdate` |
+| Children | children strategies | `WithChildren(IChildrenStrategy)` |
+
+The gate's four points, on MAUI:
+
+- **Order.** On mount, a descriptor creates the view, then every entry writes its initial value, then
+  the element's modifiers are applied, and only then are events wired. This is WinUI's KD-1b rule:
+  no initial write can be reported as input. Children are reconciled after the handler returns, so
+  props come before children, as on WinUI.
+- **Live element.** A controlled entry reports through `HandlerContext.Live`, and an `Event` entry
+  gets the context to do the same, so nothing reaches an unmounted element (§14).
+- **Restore-after-event.** A controlled entry compares the view's value with the declared one, not
+  with the old element's. The restore after a refused input (an update with the same element on both
+  sides) therefore puts the declared value back, inside the echo scope.
+- **Hybrid remounts.** A descriptor is an ordinary handler, so `DirectHandlers`' hybrids wrap it as
+  they did the hand-written handlers. `WithCanUpdate` gives third-party controls the same remount hook.
+
+Eight built-in Controls handlers are now descriptors (`ControlDescriptors`): `BoxView`,
+`ActivityIndicator`, `ProgressBar`, `CheckBox`, `Switch`, `RadioButton`, `Editor` and `SearchBar`.
+Controls with coercion or several coupled values (`Entry`'s text and selection, `Slider`, `Stepper`,
+the pickers) stay hand-written for now; the same applies to WinUI's hand-coded handlers. The
+descriptor is what phase 4's MAUI wrapper generator emits for third-party controls.
+

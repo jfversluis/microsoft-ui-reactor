@@ -251,3 +251,51 @@ public static partial class Fixtures
         Equal("", string.Join(", ", log), "after the app pops the page");
     }
 }
+
+public static partial class Fixtures
+{
+    // A theme change reaches every input view MAUI still knows about. One Reactor removed must not
+    // crash it (Android: SIGSEGV in SearchBarHandler.MapPlaceholderColor on a released native view).
+    private static IEnumerable<Fixture> TeardownFixtures() => Renderers.Select(r =>
+        new Fixture($"Theme_ChangeAfterInputViewsAreRemoved_DoesNotCrash [{r.Name}]", c => ThemeAfterRemoval(c, r.Create())));
+
+    private static async Task ThemeAfterRemoval(FixtureContext c, ElementHandlerRegistry registry)
+    {
+        var app = Application.Current!;
+        var original = app.UserAppTheme;
+        try
+        {
+            for (var round = 0; round < 12; round++)
+            {
+                c.Show(VStack(
+                    SearchBar("s", _ => { }, placeholder: "search").AutomationId("search"),
+                    SearchBar("t", _ => { }),
+                    SearchBar("u", _ => { }, placeholder: "more"),
+                    Entry("e", _ => { }, placeholder: "entry"),
+                    Editor("d", _ => { }, placeholder: "editor")), registry);
+                var search = (VisualElement)await Loaded<ISearchBar>(c, "search");
+                await c.Settle(200);
+                await c.WaitFor(() => search.Handler is not null, "the search bar to have a handler while shown");
+                c.Unmount();
+                // The mechanism: a removed input view is disconnected, so an app-wide event can't reach its native views.
+                await c.WaitFor(() => search.Handler is null, "the removed search bar's handler to be disconnected");
+                for (var i = 0; i < 3; i++)
+                {
+                    GC.Collect();
+                    GC.WaitForPendingFinalizers();
+#if ANDROID
+                    Java.Lang.JavaSystem.Gc();
+#endif
+                    await c.Settle(200);
+                }
+                app.UserAppTheme = round % 2 == 0 ? AppTheme.Dark : AppTheme.Light;
+                await c.Settle(300);
+            }
+        }
+        finally
+        {
+            app.UserAppTheme = original;
+        }
+        Check(c.UnhandledErrors.Count == 0, $"no unhandled errors, got {string.Join("; ", c.UnhandledErrors.Select(e => e.Message))}");
+    }
+}

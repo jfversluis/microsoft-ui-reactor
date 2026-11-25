@@ -453,3 +453,121 @@ public class CollectionViewTests
         Assert.Equal("b", ((ItemBox)view.SelectedItem!).Key);
     }
 }
+
+public sealed record RatingElement(int Value, Action<int>? OnChanged = null) : ViewElement
+{
+    public Color? Color { get; init; }
+    public string? Hint { get; init; }
+    public bool Large { get; init; }
+}
+
+public class ControlDescriptorTests
+{
+    // A third-party control described the way the built-ins are: a stepper showing a rating.
+    private static ControlDescriptor<RatingElement, Microsoft.Maui.Controls.Stepper> Rating(List<string> log) =>
+        new ControlDescriptor<RatingElement, Microsoft.Maui.Controls.Stepper>(e => { log.Add($"create {(e.Large ? "large" : "small")}"); return new() { Maximum = 10 }; })
+            .Property(VisualElement.BackgroundColorProperty, static e => e.Color)
+            .Initial(static e => e.Hint, static (v, hint) => v.AutomationId = hint)
+            .Controlled(
+                static e => (double)e.Value,
+                static v => v.Value,
+                static (v, value) => v.Value = value,
+                static (v, report) => v.ValueChanged += (_, e) => report(e.NewValue),
+                static e => e.OnChanged is { } changed ? value => changed((int)value) : null)
+            .Event((context, v) => v.Focused += (_, _) => { if (context.Live is { } live) log.Add($"focused {live.Value}"); })
+            .WithCanUpdate(static (a, b) => a.Large == b.Large)
+            .WithUnmount(v => log.Add($"unmount {v.Value}"));
+
+    private sealed record RatingProps(int Initial, bool Accept, List<string> Log);
+
+    private sealed class RatingApp : Component<RatingProps>
+    {
+        public override Element Render()
+        {
+            var (value, setValue) = UseState(Props.Initial);
+            var log = Props.Log;
+            return new RatingElement(value, v => { log.Add($"changed {v}"); if (Props.Accept) setValue(v); }) { Hint = $"hint {value}" }.Margin(4);
+        }
+    }
+
+    private static (TestHost Host, Microsoft.Maui.Controls.Stepper View) Mount(RatingProps props)
+    {
+        var host = new TestHost(MauiHandlers.CreateRegistry().Register(Rating(props.Log))).Render(Component<RatingApp, RatingProps>(props));
+        return (host, (Microsoft.Maui.Controls.Stepper)host.RootView!);
+    }
+
+    [Fact]
+    public void Mount_WritesTheValues_AppliesModifiers_AndReportsNothing()
+    {
+        var log = new List<string>();
+        var (_, view) = Mount(new(3, true, log));
+
+        Assert.Equal(3, view.Value);
+        Assert.Equal("hint 3", view.AutomationId);
+        Assert.Equal(new Thickness(4), view.Margin);
+        Assert.Equal(["create small"], log);
+    }
+
+    [Fact]
+    public void AcceptedInput_IsReportedOnce_AndKept_AndInitialValuesAreNotRewritten()
+    {
+        var log = new List<string>();
+        var (host, view) = Mount(new(3, true, log));
+
+        view.Value = 5;
+        host.Scheduler.Drain();
+
+        Assert.Equal(["create small", "changed 5"], log);
+        Assert.Equal(5, view.Value);
+        Assert.Equal("hint 3", view.AutomationId);
+    }
+
+    [Fact]
+    public void RefusedInput_IsReportedOnce_AndTheViewReturnsToTheDeclaredValue()
+    {
+        var log = new List<string>();
+        var (host, view) = Mount(new(3, false, log));
+
+        view.Value = 7;
+        host.Scheduler.Drain();
+
+        Assert.Equal(["create small", "changed 7"], log);
+        Assert.Equal(3, view.Value);
+    }
+
+    [Fact]
+    public void PropertiesClear_WhenUnset_AndCanUpdateRemounts_AndUnmountRuns()
+    {
+        var log = new List<string>();
+        var host = new TestHost(MauiHandlers.CreateRegistry().Register(Rating(log)))
+            .Render(new RatingElement(1) { Color = Colors.Red });
+        var view = (Microsoft.Maui.Controls.Stepper)host.RootView!;
+        Assert.Equal(Colors.Red, view.BackgroundColor);
+
+        host.Render(new RatingElement(2));
+        Assert.Same(view, host.RootView);
+        Assert.Null(view.BackgroundColor);
+        Assert.Equal(2, view.Value);
+
+        host.Render(new RatingElement(2) { Large = true });
+        Assert.NotSame(view, host.RootView);
+        Assert.Equal(["create small", "unmount 2", "create large"], log);
+    }
+
+    [Fact]
+    public void Events_ReachTheLiveElement_AndNothingAfterUnmount()
+    {
+        var log = new List<string>();
+        var (host, view) = Mount(new(3, false, log));
+        ((IView)view).IsFocused = true;
+        Assert.Contains("focused 3", log);
+        log.Clear();
+
+        host.Root.Unmount();
+        ((IView)view).IsFocused = false;
+        ((IView)view).IsFocused = true;
+        view.Value = 9;
+
+        Assert.Equal(["unmount 3"], log);
+    }
+}

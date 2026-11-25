@@ -26,7 +26,14 @@ internal abstract class ViewHandler<TElement, TView> : Reactor.Hosting.IElementH
         ViewApplier.Apply(context, control, oldElement.Modifiers, newElement.Modifiers);
     }
 
-    public virtual void Unmount(TView control) { }
+    public void Unmount(TView control)
+    {
+        OnUnmount(control);
+        ViewApplier.DisconnectWhenRemoved(control);
+    }
+
+    /// <summary>Releases what <see cref="Create"/> acquired. Default: nothing.</summary>
+    protected virtual void OnUnmount(TView control) { }
 
     public virtual IChildrenStrategy<TElement, TView>? Children => null;
 
@@ -104,6 +111,23 @@ internal static class Props
 /// <summary>Applies <see cref="ViewModifiers"/> to a Controls view.</summary>
 internal static class ViewApplier
 {
+    /// <summary>
+    /// Disconnects the handlers of a view Reactor unmounted, once the pass that removes it has run.
+    /// MAUI keeps a removed view's handler otherwise, and some views stay subscribed to app-wide
+    /// events: on Android a theme change then reached a removed <c>SearchBar</c>'s released native
+    /// views and crashed (SIGSEGV in <c>SearchBarHandler.MapPlaceholderColor</c>). Reactor never reuses
+    /// an unmounted view, so this is final. The view's own subtree is included (cells, wrappers);
+    /// MAUI's <c>HandlerDisconnectPolicy.Manual</c> opts a view out.
+    /// </summary>
+    public static void DisconnectWhenRemoved(View view)
+    {
+        if (view.Dispatcher is not { } dispatcher) return;
+        dispatcher.Dispatch(() =>
+        {
+            if (view.Handler is not null) view.DisconnectHandlers();
+        });
+    }
+
     private sealed class GestureState
     {
         public TapGestureRecognizer? Tap;

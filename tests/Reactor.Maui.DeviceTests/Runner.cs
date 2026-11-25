@@ -116,7 +116,9 @@ public static class Runner
     public static async Task RunAsync(Window window, string? filter)
     {
         var fixtures = Fixtures.All
-            .Where(f => string.IsNullOrEmpty(filter) || f.Name.Contains(filter, StringComparison.OrdinalIgnoreCase))
+            // "a|b" runs the fixtures matching either substring, in their usual order.
+            .Where(f => string.IsNullOrEmpty(filter)
+                || filter.Split('|').Any(part => part.Length > 0 && f.Name.Contains(part, StringComparison.OrdinalIgnoreCase)))
             .ToList();
         var report = new List<string>();
         void Emit(string line)

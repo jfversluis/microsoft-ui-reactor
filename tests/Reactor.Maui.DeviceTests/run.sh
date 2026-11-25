@@ -5,7 +5,7 @@
 #   tests/Reactor.Maui.DeviceTests/run.sh ios [simulator-udid]      (default: the booted simulator)
 #   tests/Reactor.Maui.DeviceTests/run.sh android [adb-serial]      (default: the only device)
 #
-# REACTOR_DEVICE_TEST_FILTER=<substring> runs only matching fixtures.
+# REACTOR_DEVICE_TEST_FILTER=<substring>[|<substring>...] runs only matching fixtures.
 # The TAP report is written to artifacts/device-tests/<platform>.tap.
 set -euo pipefail
 
@@ -68,7 +68,7 @@ case "$platform" in
     "${adb_cmd[@]}" install -r "$apk"
     activity="$("${adb_cmd[@]}" shell cmd package resolve-activity --brief "$app_id" | tail -1 | tr -d '\r')"
     "${adb_cmd[@]}" logcat -c
-    "${adb_cmd[@]}" shell am start -n "$activity" ${REACTOR_DEVICE_TEST_FILTER:+-e REACTOR_DEVICE_TEST_FILTER "$REACTOR_DEVICE_TEST_FILTER"} > /dev/null
+    "${adb_cmd[@]}" shell am start -n "$activity" ${REACTOR_DEVICE_TEST_FILTER:+-e REACTOR_DEVICE_TEST_FILTER "'$REACTOR_DEVICE_TEST_FILTER'"} > /dev/null
     deadline=$((SECONDS + timeout_seconds))
     until "${adb_cmd[@]}" logcat -d -s DOTNET:I | grep -q "$done_marker"; do
       if (( SECONDS > deadline )); then echo "Timed out waiting for the device tests." >&2; break; fi
