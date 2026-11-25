@@ -2,21 +2,46 @@ using Microsoft.UI.Reactor.Core;
 
 namespace Microsoft.UI.Reactor.Hosting;
 
-/// <summary>The element-type to handler map a renderer hands to a <see cref="ReactorRoot"/>.</summary>
+/// <summary>
+/// The element-type to handler map a renderer hands to a <see cref="ReactorRoot"/>. A later
+/// registration for the same type replaces the earlier one, so an app can override a built-in
+/// handler. An element type with no registration of its own uses the handler registered for its
+/// nearest base type with <see cref="RegisterForDerivedTypes"/>. The lookup is the shared core's
+/// (spec 067 §15), the one WinUI's <c>ControlRegistry</c> uses.
+/// </summary>
 public sealed class ElementHandlerRegistry
 {
-    private readonly Dictionary<Type, IHandlerAdapter> _handlers = [];
+    private readonly HandlerTable<IHandlerAdapter> _handlers = new();
 
+    /// <summary>Registers <paramref name="handler"/> for exactly <typeparamref name="TElement"/>, replacing any earlier one.</summary>
     public ElementHandlerRegistry Register<TElement, TControl>(IElementHandler<TElement, TControl> handler)
         where TElement : Element
         where TControl : class
     {
-        _handlers[typeof(TElement)] = new HandlerAdapter<TElement, TControl>(handler);
+        ArgumentNullException.ThrowIfNull(handler);
+        _handlers.Set(typeof(TElement), new HandlerAdapter<TElement, TControl>(handler));
+        return this;
+    }
+
+    /// <summary>
+    /// Registers <paramref name="handler"/> for every element type derived from
+    /// <typeparamref name="TBase"/> that has no registration of its own, replacing any earlier one
+    /// for <typeparamref name="TBase"/>'s derived types. Use it for a family of element records,
+    /// such as the closed types of a generic element, that one handler renders. An exact
+    /// <see cref="Register{TElement, TControl}"/> wins over it, and the nearest base type wins over
+    /// a more distant one.
+    /// </summary>
+    public ElementHandlerRegistry RegisterForDerivedTypes<TBase, TControl>(IElementHandler<TBase, TControl> handler)
+        where TBase : Element
+        where TControl : class
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        _handlers.Set(typeof(TBase), new HandlerAdapter<TBase, TControl>(handler), forDerivedTypes: true);
         return this;
     }
 
     internal IHandlerAdapter Get(Type elementType) =>
-        _handlers.TryGetValue(elementType, out var handler)
+        _handlers.TryResolve(elementType, out var handler)
             ? handler
             : throw new InvalidOperationException(
                 $"No handler is registered for {elementType.Name}. Register one on the renderer's ElementHandlerRegistry.");

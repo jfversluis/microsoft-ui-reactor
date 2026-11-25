@@ -2,7 +2,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
-using System.Linq;
 using Microsoft.UI.Xaml;
 
 namespace Microsoft.UI.Reactor.Core.V1Protocol;
@@ -44,23 +43,20 @@ namespace Microsoft.UI.Reactor.Core.V1Protocol;
 /// </summary>
 public static class ControlRegistry
 {
-    // Spec §8 — backed by ConcurrentDictionary<Type, Func<IV1HandlerEntry>>.
-    // The value is a *factory of the type-erased adapter* so the dispatcher
-    // can produce a fresh adapter on first per-host hit without re-running
-    // the generic dance. The factory itself is allocated once, inside the
-    // generic Register<E,C> below, and never references the handler/control
-    // type from any path the trimmer can see outside that generic frame.
-    private static readonly ConcurrentDictionary<Type, Func<IV1HandlerEntry>> s_entries = new();
-
-    // Spec 048 §3.4 — base-derived global path. Mirrors V1HandlerRegistry's
-    // _baseEntries / _baseCache pair so a single registration on a non-generic
-    // intermediate base routes every closed-T variant (the T-erasure pattern
-    // used by TemplatedListElementBase, LazyStackElementBase, ItemsRepeater,
-    // and ItemsView). Lookup falls back to a BaseType walk after exact-match
-    // miss; results are memoised (including null markers) so steady-state is
-    // O(1) per derived type.
-    private static readonly ConcurrentDictionary<Type, Func<IV1HandlerEntry>> s_baseEntries = new();
-    private static readonly ConcurrentDictionary<Type, Func<IV1HandlerEntry>?> s_baseCache = new();
+    // Spec §8 — each value is a *factory of the type-erased adapter* so the
+    // dispatcher can produce a fresh adapter on first per-host hit without
+    // re-running the generic dance. The factory itself is allocated once,
+    // inside the generic Register<E,C> below, and never references the
+    // handler/control type from any path the trimmer can see outside that
+    // generic frame.
+    //
+    // Spec 048 §3.4 — registrations for derived types route every closed-T
+    // variant of a non-generic intermediate base (the T-erasure pattern used by
+    // TemplatedListElementBase, LazyStackElementBase, ItemsRepeater, and
+    // ItemsView). The lookup (exact, then a memoised BaseType walk) is the core's
+    // HandlerTable, shared with the MAUI renderer (spec 067 §15); first-wins is
+    // this registry's policy (TryAdd).
+    private static readonly HandlerTable<Func<IV1HandlerEntry>> s_table = new();
     private static readonly ConcurrentDictionary<Type, (int Generation, IV1SourceTargetResolver? Resolver)> s_sourceTargetResolvers = new();
 
     /// <summary>
@@ -140,7 +136,7 @@ public static class ControlRegistry
         // First-wins: TryAdd silently no-ops on repeat. Lock-free — relies on
         // ConcurrentDictionary's per-bucket fine-grained locking, not a
         // process-wide monitor.
-        if (s_entries.TryAdd(typeof(TElement), adapterFactory))
+        if (s_table.TryAdd(typeof(TElement), adapterFactory))
         {
             // Invalidate + bump: a new registration changes what TryResolve returns for
             // this type, so any cached source-target resolution for it is stale.
@@ -226,7 +222,7 @@ public static class ControlRegistry
         Func<IV1HandlerEntry> adapterFactory = () =>
             new V1DecoratorHandlerAdapter<TElement>(handlerFactory());
 
-        if (s_entries.TryAdd(typeof(TElement), adapterFactory))
+        if (s_table.TryAdd(typeof(TElement), adapterFactory))
         {
             s_sourceTargetResolvers.TryRemove(typeof(TElement), out _);
             global::System.Threading.Interlocked.Increment(ref s_registryGeneration);
@@ -262,13 +258,9 @@ public static class ControlRegistry
         Func<IV1HandlerEntry> adapterFactory = () =>
             new V1HandlerAdapter<TBase, TControl>(handlerFactory());
 
-        if (s_baseEntries.TryAdd(typeof(TBase), adapterFactory))
+        if (s_table.TryAdd(typeof(TBase), adapterFactory, forDerivedTypes: true))
         {
-            // Invalidate any prior "no base match" cache entries so a
-            // derived type that previously missed will pick this base up
-            // on its next dispatch. Exact-match cache entries don't apply
-            // here (s_entries is consulted before s_baseCache).
-            s_baseCache.Clear();
+            // The table has already dropped its cached base lookups.
             s_sourceTargetResolvers.Clear();
             global::System.Threading.Interlocked.Increment(ref s_registryGeneration);
         }
@@ -286,9 +278,8 @@ public static class ControlRegistry
         Func<IV1HandlerEntry> adapterFactory = () =>
             new V1DecoratorHandlerAdapter<TBase>(handlerFactory());
 
-        if (s_baseEntries.TryAdd(typeof(TBase), adapterFactory))
+        if (s_table.TryAdd(typeof(TBase), adapterFactory, forDerivedTypes: true))
         {
-            s_baseCache.Clear();
             s_sourceTargetResolvers.Clear();
             global::System.Threading.Interlocked.Increment(ref s_registryGeneration);
 
@@ -317,34 +308,7 @@ public static class ControlRegistry
     internal static bool TryResolve(
         Type elementType,
         [NotNullWhen(true)] out Func<IV1HandlerEntry>? entry)
-    {
-        if (s_entries.TryGetValue(elementType, out entry)) return true;
-        // §3.4 base-derived fallback. Skip the walk fast-path when no
-        // base-derived entries have ever been registered.
-        if (s_baseEntries.IsEmpty) { entry = null; return false; }
-        if (s_baseCache.TryGetValue(elementType, out var cached))
-        {
-            entry = cached;
-            return cached is not null;
-        }
-        for (var t = elementType.BaseType; t is not null && t != typeof(object); t = t.BaseType)
-        {
-            if (s_baseEntries.TryGetValue(t, out var found))
-            {
-                if (!elementType.IsCollectible)
-                    s_baseCache.TryAdd(elementType, found);
-                entry = found;
-                return true;
-            }
-        }
-        // Cache the negative result so subsequent dispatches don't walk
-        // the inheritance chain again. Never for a collectible plug-in's type: this cache
-        // lives for the process and would keep its load context from unloading.
-        if (!elementType.IsCollectible)
-            s_baseCache.TryAdd(elementType, null);
-        entry = null;
-        return false;
-    }
+        => s_table.TryResolve(elementType, out entry);
 
     /// <summary>
     /// Resolves the source-map target for a globally registered decorator
@@ -416,7 +380,7 @@ public static class ControlRegistry
     /// only — for the §3.4 base-derived effective-dispatch check use
     /// <see cref="ContainsForType"/>.
     /// </summary>
-    internal static bool Contains(Type elementType) => s_entries.ContainsKey(elementType);
+    internal static bool Contains(Type elementType) => s_table.ContainsExact(elementType);
 
     /// <summary>
     /// Spec 048 §3.4 — true if dispatch is wired for <paramref name="elementType"/>
@@ -432,7 +396,7 @@ public static class ControlRegistry
     /// registered via <see cref="RegisterForDerivedTypes{TBase,TControl}"/> /
     /// <see cref="RegisterDecoratorForDerivedTypes{TBase}"/>.
     /// </summary>
-    internal static bool ContainsBase(Type baseType) => s_baseEntries.ContainsKey(baseType);
+    internal static bool ContainsBase(Type baseType) => s_table.ContainsBase(baseType);
 
     /// <summary>
     /// Spec 048 §3.4 — snapshot of every element type registered via an
@@ -441,7 +405,7 @@ public static class ControlRegistry
     /// catalog-drift guard for <c>ReactorApp.RegisterAllBuiltIns()</c> compares
     /// this against its expected built-in set.
     /// </summary>
-    internal static IReadOnlyCollection<Type> RegisteredElementTypes => s_entries.Keys.ToArray();
+    internal static IReadOnlyCollection<Type> RegisteredElementTypes => s_table.ExactTypes;
 
     /// <summary>
     /// Spec 048 §3.4 — snapshot of every base type registered via a base-derived
@@ -449,6 +413,6 @@ public static class ControlRegistry
     /// <see cref="RegisterDecoratorForDerivedTypes{TBase}"/>). Test/diagnostic
     /// surface; companion to <see cref="RegisteredElementTypes"/>.
     /// </summary>
-    internal static IReadOnlyCollection<Type> RegisteredBaseElementTypes => s_baseEntries.Keys.ToArray();
+    internal static IReadOnlyCollection<Type> RegisteredBaseElementTypes => s_table.BaseTypes;
 
 }

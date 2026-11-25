@@ -813,3 +813,30 @@ Two consequences for MAUI apps:
 (`ReactorBinding<TElement>`). A single `HandlerContext` dispatch helper would make the pattern
 correct by construction for third-party handlers; it is part of the shared handler protocol work
 (§12.3, descriptors).
+
+## 15. Phase 3d: the handler registry
+
+Spec §12.3's registry gate: state stays per renderer or per root, and each renderer owns its
+duplicate and override policy. What the two registries share is the lookup, now one core type,
+`HandlerTable<TValue>` (`src/Reactor.Core/Engine/HandlerTable.cs`):
+
+- an element type resolves to the value registered for exactly that type;
+- otherwise to the value registered for its nearest base type "for derived types" (spec 048 §3.4);
+- base-type results, misses included, are cached per element type, except for collectible types,
+  whose load context the cache would keep alive. A registration for derived types clears the cache.
+
+The table has no duplicate policy: `TryAdd` keeps the first value, `Set` replaces it.
+
+| | WinUI `ControlRegistry` | MAUI `ElementHandlerRegistry` |
+|---|---|---|
+| Scope | Process-wide, filled lazily by the factories' registration latches | One per renderer, passed to each root |
+| Duplicates | First wins (`TryAdd`) | Last wins (`Set`), so an app overrides a built-in handler |
+| Derived types | `RegisterForDerivedTypes` (existing) | `RegisterForDerivedTypes` (new) |
+| Value | A factory for the per-host adapter | The adapter |
+
+WinUI's per-host `V1HandlerRegistry` keeps its own `Dictionary`-based copy of the lookup. It runs on
+every dispatch and is single-threaded, so it stays where it is; `ControlRegistry` is consulted only
+when the per-host cache misses. Its registration latches stay WinUI's: MAUI's registries are built
+explicitly (`MauiHandlers.CreateRegistry()`, `DirectHandlers.CreateRegistry()`), and nothing a
+latch does populates a MAUI root.
+

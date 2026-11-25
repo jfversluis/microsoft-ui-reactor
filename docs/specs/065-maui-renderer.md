@@ -173,6 +173,10 @@ Design choices that differ from today's WinUI Reactor, and why:
   teardown reaches no callback.
 - **Native controls are `object` to the engine.** Each handler is strongly typed; the
   registry erases the types. Natives are always reference types, so nothing is boxed.
+- **The registry is per root, and the last registration wins**, so an app overrides a built-in
+  handler by registering its own. `RegisterForDerivedTypes` registers one handler for a family of
+  element records (the closed types of a generic element); an exact registration wins over it. The
+  lookup is the shared core's (spec 067 §15).
 - **Components and groups produce no native control.** After reconciling, the engine
   flattens each host's descendants into the ordered native children it should have and
   hands that list to the children strategy, which moves only what changed.
@@ -197,7 +201,7 @@ restored when a callback rejects input, `CanUpdate` remounts, and hot reload re-
 root, and errors a handler reports from its own asynchronous work (`HandlerContext.ReportError`)
 reaching boundaries. A boundary test fails if the core references anything but `System.*`.
 
-**Renderer, headless** (`tests/Reactor.Maui.Tests`, 39 tests). Real Controls objects and direct
+**Renderer, headless** (`tests/Reactor.Maui.Tests`, 40 tests). Real Controls objects and direct
 views, no platform handlers: modifiers, every control's props and echo-free events, the hybrid
 fallback and mixed trees, `CollectionView` cells as child roots, pages, toolbar items, the
 navigation stack's reconcile, the user-pop rule (below), tabs and flyout (including swapping the
