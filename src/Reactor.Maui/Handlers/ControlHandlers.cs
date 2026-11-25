@@ -110,7 +110,7 @@ internal sealed class WebViewHandler : ViewHandler<WebViewElement, MauiWebView>
     protected override MauiWebView Create(HandlerContext<WebViewElement> context, WebViewElement element)
     {
         var view = new MauiWebView();
-        view.Navigated += (_, e) => context.Current.OnNavigated?.Invoke(e.Url);
+        view.Navigated += (_, e) => context.Live?.OnNavigated?.Invoke(e.Url);
         return view;
     }
 
@@ -129,7 +129,7 @@ internal sealed class ButtonHandler : ViewHandler<ButtonElement, MauiButton>
     {
         var view = new MauiButton();
         // Subscribed once; reads the current element so a re-render never needs to re-subscribe.
-        view.Clicked += (_, _) => context.Current.OnClick?.Invoke();
+        view.Clicked += (_, _) => context.Live?.OnClick?.Invoke();
         return view;
     }
 
@@ -150,7 +150,7 @@ internal sealed class ImageButtonHandler : ViewHandler<ImageButtonElement, MauiI
     protected override MauiImageButton Create(HandlerContext<ImageButtonElement> context, ImageButtonElement element)
     {
         var view = new MauiImageButton();
-        view.Clicked += (_, _) => context.Current.OnClick?.Invoke();
+        view.Clicked += (_, _) => context.Live?.OnClick?.Invoke();
         return view;
     }
 
@@ -171,10 +171,10 @@ internal sealed class EntryHandler : ViewHandler<EntryElement, MauiEntry>
         view.TextChanged += (_, e) =>
         {
             if (context.IsEchoing(view)) return;
-            context.Current.OnTextChanged?.Invoke(e.NewTextValue ?? "");
+            context.Live?.OnTextChanged?.Invoke(e.NewTextValue ?? "");
             context.RestoreAfterEvent();
         };
-        view.Completed += (_, _) => context.Current.OnCompleted?.Invoke();
+        view.Completed += (_, _) => context.Live?.OnCompleted?.Invoke();
         return view;
     }
 
@@ -204,10 +204,10 @@ internal sealed class EditorHandler : ViewHandler<EditorElement, MauiEditor>
         view.TextChanged += (_, e) =>
         {
             if (context.IsEchoing(view)) return;
-            context.Current.OnTextChanged?.Invoke(e.NewTextValue ?? "");
+            context.Live?.OnTextChanged?.Invoke(e.NewTextValue ?? "");
             context.RestoreAfterEvent();
         };
-        view.Completed += (_, _) => context.Current.OnCompleted?.Invoke();
+        view.Completed += (_, _) => context.Live?.OnCompleted?.Invoke();
         return view;
     }
 
@@ -232,10 +232,10 @@ internal sealed class SearchBarHandler : ViewHandler<SearchBarElement, MauiSearc
         view.TextChanged += (_, e) =>
         {
             if (context.IsEchoing(view)) return;
-            context.Current.OnTextChanged?.Invoke(e.NewTextValue ?? "");
+            context.Live?.OnTextChanged?.Invoke(e.NewTextValue ?? "");
             context.RestoreAfterEvent();
         };
-        view.SearchButtonPressed += (_, _) => context.Current.OnSearch?.Invoke(view.Text ?? "");
+        view.SearchButtonPressed += (_, _) => context.Live?.OnSearch?.Invoke(view.Text ?? "");
         return view;
     }
 
@@ -255,7 +255,7 @@ internal sealed class CheckBoxHandler : ViewHandler<CheckBoxElement, MauiCheckBo
         view.CheckedChanged += (_, e) =>
         {
             if (context.IsEchoing(view)) return;
-            context.Current.OnCheckedChanged?.Invoke(e.Value);
+            context.Live?.OnCheckedChanged?.Invoke(e.Value);
             context.RestoreAfterEvent();
         };
         return view;
@@ -276,7 +276,7 @@ internal sealed class SwitchHandler : ViewHandler<SwitchElement, MauiSwitch>
         view.Toggled += (_, e) =>
         {
             if (context.IsEchoing(view)) return;
-            context.Current.OnToggled?.Invoke(e.Value);
+            context.Live?.OnToggled?.Invoke(e.Value);
             context.RestoreAfterEvent();
         };
         return view;
@@ -298,10 +298,10 @@ internal sealed class SliderHandler : ViewHandler<SliderElement, MauiSlider>
         view.ValueChanged += (_, e) =>
         {
             if (context.IsEchoing(view)) return;
-            context.Current.OnValueChanged?.Invoke(e.NewValue);
+            context.Live?.OnValueChanged?.Invoke(e.NewValue);
             context.RestoreAfterEvent();
         };
-        view.DragCompleted += (_, _) => context.Current.OnDragCompleted?.Invoke();
+        view.DragCompleted += (_, _) => context.Live?.OnDragCompleted?.Invoke();
         return view;
     }
 
@@ -324,7 +324,7 @@ internal sealed class StepperHandler : ViewHandler<StepperElement, MauiStepper>
         view.ValueChanged += (_, e) =>
         {
             if (context.IsEchoing(view)) return;
-            context.Current.OnValueChanged?.Invoke(e.NewValue);
+            context.Live?.OnValueChanged?.Invoke(e.NewValue);
             context.RestoreAfterEvent();
         };
         return view;
@@ -358,7 +358,7 @@ internal sealed class PickerHandler : ViewHandler<PickerElement, MauiPicker>
         view.SelectedIndexChanged += (_, _) =>
         {
             if (context.IsEchoing(view)) return;
-            context.Current.OnSelectedIndexChanged?.Invoke(view.SelectedIndex);
+            context.Live?.OnSelectedIndexChanged?.Invoke(view.SelectedIndex);
             context.RestoreAfterEvent();
         };
         return view;
@@ -389,7 +389,7 @@ internal sealed class DatePickerHandler : ViewHandler<DatePickerElement, MauiDat
         view.DateSelected += (_, e) =>
         {
             if (context.IsEchoing(view) || e.NewDate is not { } date) return;
-            context.Current.OnDateSelected?.Invoke(date);
+            context.Live?.OnDateSelected?.Invoke(date);
             context.RestoreAfterEvent();
         };
         return view;
@@ -419,7 +419,7 @@ internal sealed class TimePickerHandler : ViewHandler<TimePickerElement, MauiTim
         view.TimeSelected += (_, e) =>
         {
             if (context.IsEchoing(view) || e.NewTime is not { } time) return;
-            context.Current.OnTimeSelected?.Invoke(time);
+            context.Live?.OnTimeSelected?.Invoke(time);
             context.RestoreAfterEvent();
         };
         return view;
@@ -441,7 +441,7 @@ internal sealed class RadioButtonHandler : ViewHandler<RadioButtonElement, MauiR
         view.CheckedChanged += (_, e) =>
         {
             if (context.IsEchoing(view)) return;
-            context.Current.OnCheckedChanged?.Invoke(e.Value);
+            context.Live?.OnCheckedChanged?.Invoke(e.Value);
             context.RestoreAfterEvent();
         };
         return view;

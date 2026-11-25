@@ -100,7 +100,7 @@ internal sealed class ScrollViewHandler : ViewHandler<ScrollViewElement, MauiScr
     protected override MauiScrollView Create(HandlerContext<ScrollViewElement> context, ScrollViewElement element)
     {
         var view = new MauiScrollView();
-        view.Scrolled += (_, e) => context.Current.OnScrolled?.Invoke(e.ScrollX, e.ScrollY);
+        view.Scrolled += (_, e) => context.Live?.OnScrolled?.Invoke(e.ScrollX, e.ScrollY);
         return view;
     }
 
@@ -124,7 +124,7 @@ internal sealed class RefreshViewHandler : ViewHandler<RefreshViewElement, MauiR
         view.Refreshing += (_, _) =>
         {
             if (context.IsEchoing(view)) return;
-            context.Current.OnRefresh?.Invoke();
+            context.Live?.OnRefresh?.Invoke();
             context.RestoreAfterEvent();
         };
         return view;
@@ -165,7 +165,8 @@ internal sealed class SwipeViewHandler : ViewHandler<SwipeViewElement, MauiSwipe
             if (action.BackgroundColor is { } color) item.BackgroundColor = color;
             item.Invoked += (_, _) =>
             {
-                var current = select(context.Current);
+                if (context.Live is not { } live) return;
+                var current = select(live);
                 if (index < current.Length) current[index].OnInvoked();
             };
             items.Add(item);

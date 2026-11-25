@@ -98,7 +98,7 @@ public static class DirectHandlers
         protected override DirectButton Create(ButtonElement element) => new();
 
         protected override void Wire(HandlerContext<ButtonElement> context, DirectButton view) =>
-            view.OnClicked = () => context.Current.OnClick?.Invoke();
+            view.OnClicked = () => context.Live?.OnClick?.Invoke();
 
         protected override void Apply(HandlerContext<ButtonElement> context, DirectButton view, ButtonElement? previous, ButtonElement next) => view.Apply(next);
     }
@@ -112,10 +112,10 @@ public static class DirectHandlers
             view.OnTextChanged = text =>
             {
                 if (context.IsEchoing(view)) return;
-                context.Current.OnTextChanged?.Invoke(text);
+                context.Live?.OnTextChanged?.Invoke(text);
                 context.RestoreAfterEvent();
             };
-            view.OnCompleted = () => context.Current.OnCompleted?.Invoke();
+            view.OnCompleted = () => context.Live?.OnCompleted?.Invoke();
         }
 
         protected override void Apply(HandlerContext<EntryElement> context, DirectEntry view, EntryElement? previous, EntryElement next)
@@ -133,7 +133,7 @@ public static class DirectHandlers
             view.OnCheckedChanged = value =>
             {
                 if (context.IsEchoing(view)) return;
-                context.Current.OnCheckedChanged?.Invoke(value);
+                context.Live?.OnCheckedChanged?.Invoke(value);
                 context.RestoreAfterEvent();
             };
 
@@ -152,7 +152,7 @@ public static class DirectHandlers
             view.OnToggled = value =>
             {
                 if (context.IsEchoing(view)) return;
-                context.Current.OnToggled?.Invoke(value);
+                context.Live?.OnToggled?.Invoke(value);
                 context.RestoreAfterEvent();
             };
 
@@ -172,10 +172,10 @@ public static class DirectHandlers
             view.OnValueChanged = value =>
             {
                 if (context.IsEchoing(view)) return;
-                context.Current.OnValueChanged?.Invoke(value);
+                context.Live?.OnValueChanged?.Invoke(value);
                 context.RestoreAfterEvent();
             };
-            view.OnDragCompleted = () => context.Current.OnDragCompleted?.Invoke();
+            view.OnDragCompleted = () => context.Live?.OnDragCompleted?.Invoke();
         }
 
         protected override void Apply(HandlerContext<SliderElement> context, DirectSlider view, SliderElement? previous, SliderElement next)

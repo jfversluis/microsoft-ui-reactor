@@ -113,6 +113,72 @@ public class ControlledControlTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void InputAfterTheControlIsUnmounted_IsNotReported(bool direct)
+    {
+        var reported = new List<string>();
+        var host = new TestHost(direct ? DirectHandlers.CreateRegistry() : MauiHandlers.CreateRegistry())
+            .Render(VStack(
+                Entry("a", v => reported.Add($"entry {v}")),
+                Switch(false, v => reported.Add($"switch {v}")),
+                Button("b", () => reported.Add("click"))));
+        var children = (IList<IView>)host.RootView!;
+        var (entry, toggle, button) = ((IEntry)children[0], (ISwitch)children[1], (IButton)children[2]);
+
+        // What the platform handlers do on input. While mounted, each is reported.
+        entry.Text = "typed";
+        toggle.IsOn = true;
+        button.Clicked();
+        host.Scheduler.Drain();
+        Assert.Equal(["entry typed", "switch True", "click"], reported);
+        reported.Clear();
+
+        host.Root.Unmount();
+        entry.Text = "after";
+        toggle.IsOn = false;
+        button.Clicked();
+        host.Scheduler.Drain();
+
+        Assert.Empty(reported);
+    }
+
+    private sealed record CustomInputElement(string Text, Action<string> OnChanged) : Element;
+
+    // A third-party handler that follows the documented pattern: IsEchoing first, then Current.
+    private sealed class CustomInputHandler : Microsoft.UI.Reactor.Hosting.IElementHandler<CustomInputElement, Microsoft.Maui.Controls.Entry>
+    {
+        public Microsoft.Maui.Controls.Entry Mount(Microsoft.UI.Reactor.Hosting.HandlerContext<CustomInputElement> context, CustomInputElement element)
+        {
+            var view = new Microsoft.Maui.Controls.Entry { Text = element.Text };
+            view.TextChanged += (_, e) =>
+            {
+                if (context.IsEchoing(view)) return;
+                context.Current.OnChanged(e.NewTextValue ?? "");
+            };
+            return view;
+        }
+
+        public void Update(Microsoft.UI.Reactor.Hosting.HandlerContext<CustomInputElement> context, CustomInputElement oldElement, CustomInputElement newElement, Microsoft.Maui.Controls.Entry control) { }
+    }
+
+    [Fact]
+    public void AHandlerThatChecksIsEchoing_DoesNotReportInputAfterItsControlIsUnmounted()
+    {
+        var reported = new List<string>();
+        var registry = MauiHandlers.CreateRegistry().Register(new CustomInputHandler());
+        var host = new TestHost(registry).Render(new CustomInputElement("a", reported.Add));
+        var entry = (Microsoft.Maui.Controls.Entry)host.RootView!;
+        entry.Text = "typed";
+        Assert.Equal(["typed"], reported);
+
+        host.Root.Unmount();
+        entry.Text = "after";
+
+        Assert.Equal(["typed"], reported);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void Slider_MovesToADisjointRange_WithoutAnInvalidIntermediateState(bool direct)
     {
         var host = new TestHost(direct ? DirectHandlers.CreateRegistry() : MauiHandlers.CreateRegistry());

@@ -52,14 +52,29 @@ public readonly struct HandlerContext<TElement> where TElement : Element
     public TElement Current => (TElement)_live.Element;
 
     /// <summary>
+    /// <see cref="Current"/> while the element is mounted, and <see langword="null"/> once it has
+    /// been unmounted. Invoke callbacks through it in event handlers
+    /// (<c>context.Live?.OnClick?.Invoke()</c>): a control can still raise events after Reactor
+    /// unmounts it (the platform tears it down, or something else holds it), and an unmounted
+    /// component's callbacks must not run.
+    /// </summary>
+    public TElement? Live => IsMounted ? Current : null;
+
+    /// <summary>Whether the element is still mounted. False once Reactor has unmounted it.</summary>
+    public bool IsMounted => !((Node)_live).Unmounted;
+
+    /// <summary>
     /// Writes a value to <paramref name="control"/> without the change event that
     /// write raises reaching the element's callback. Check <see cref="IsEchoing"/>
     /// in the event handler.
     /// </summary>
     public void WriteSuppressed(object control, Action write) => _echo.WriteSuppressed(control, write);
 
-    /// <summary>Whether <paramref name="control"/> is inside a <see cref="WriteSuppressed"/> write.</summary>
-    public bool IsEchoing(object control) => _echo.IsSuppressed(control);
+    /// <summary>
+    /// Whether a change event on <paramref name="control"/> must not be reported: it is inside a
+    /// <see cref="WriteSuppressed"/> write, or the element has been unmounted.
+    /// </summary>
+    public bool IsEchoing(object control) => !IsMounted || _echo.IsSuppressed(control);
 
     /// <summary>
     /// Creates a separate tree that renders through the same renderer and inherits this element's

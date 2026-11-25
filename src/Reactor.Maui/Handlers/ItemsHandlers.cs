@@ -196,10 +196,10 @@ internal sealed class CollectionViewHandler : ViewHandler<CollectionViewElement,
         {
             if (context.IsEchoing(view)) return;
             var keys = e.CurrentSelection.OfType<ItemBox>().Select(static b => b.Key).ToArray();
-            context.Current.OnSelectionChanged?.Invoke(keys);
+            context.Live?.OnSelectionChanged?.Invoke(keys);
             context.RestoreAfterEvent();
         };
-        view.RemainingItemsThresholdReached += (_, _) => context.Current.OnRemainingItemsThresholdReached?.Invoke();
+        view.RemainingItemsThresholdReached += (_, _) => context.Live?.OnRemainingItemsThresholdReached?.Invoke();
         return view;
     }
 
@@ -289,7 +289,7 @@ internal sealed class CarouselViewHandler : ViewHandler<CarouselViewElement, Rea
         view.PositionChanged += (_, e) =>
         {
             if (context.IsEchoing(view)) return;
-            context.Current.OnPositionChanged?.Invoke(e.CurrentPosition);
+            context.Live?.OnPositionChanged?.Invoke(e.CurrentPosition);
             context.RestoreAfterEvent();
         };
         return view;

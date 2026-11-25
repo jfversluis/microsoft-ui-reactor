@@ -8,8 +8,8 @@ internal sealed class PageHandler : Reactor.Hosting.IElementHandler<PageElement,
     {
         var page = new ContentPage();
         if (element.AutomationId is { } automationId) page.AutomationId = automationId;
-        page.Appearing += (_, _) => context.Current.OnAppearing?.Invoke();
-        page.Disappearing += (_, _) => context.Current.OnDisappearing?.Invoke();
+        page.Appearing += (_, _) => context.Live?.OnAppearing?.Invoke();
+        page.Disappearing += (_, _) => context.Live?.OnDisappearing?.Invoke();
         Apply(context, page, null, element);
         return page;
     }
@@ -38,8 +38,7 @@ internal sealed class PageHandler : Reactor.Hosting.IElementHandler<PageElement,
                 // Reads the current element, so a re-render that only swaps the callback keeps the item.
                 item.Clicked += (_, _) =>
                 {
-                    var items = context.Current.ToolbarItems;
-                    if (index < items.Length) items[index].OnClick();
+                    if (context.Live?.ToolbarItems is { } items && index < items.Length) items[index].OnClick();
                 };
                 page.ToolbarItems.Add(item);
             }
@@ -380,7 +379,7 @@ internal sealed class NavigationStackHandler : Reactor.Hosting.IElementHandler<N
         {
             if (!navigator.IsUserPop(popped, modal: false, out var depth)) return;
             navigator.NotePlatformPop(popped);
-            context.Current.OnPopped?.Invoke(depth);
+            context.Live?.OnPopped?.Invoke(depth);
             // A pop the app did not accept is undone once state has settled (Update with the same element).
             context.RestoreAfterEvent();
         };
@@ -395,7 +394,7 @@ internal sealed class NavigationStackHandler : Reactor.Hosting.IElementHandler<N
                 return;
             }
             navigator.NotePlatformPop(e.Modal);
-            context.Current.OnModalDismissed?.Invoke(remaining);
+            context.Live?.OnModalDismissed?.Invoke(remaining);
             context.RestoreAfterEvent();
         };
         if (Application.Current is { } app) app.ModalPopped += page.ModalPoppedHandler;
@@ -463,7 +462,7 @@ internal sealed class TabsHandler : Reactor.Hosting.IElementHandler<TabsElement,
         tabs.CurrentPageChanged += (_, _) =>
         {
             if (tabs.Syncing || context.IsEchoing(tabs)) return;
-            context.Current.OnSelectedIndexChanged?.Invoke(tabs.Children.IndexOf(tabs.CurrentPage));
+            context.Live?.OnSelectedIndexChanged?.Invoke(tabs.Children.IndexOf(tabs.CurrentPage));
             context.RestoreAfterEvent();
         };
         Apply(tabs, null, element);
@@ -533,7 +532,7 @@ internal sealed class FlyoutHandler : Reactor.Hosting.IElementHandler<FlyoutElem
         flyout.IsPresentedChanged += (_, _) =>
         {
             if (flyout.Syncing || context.IsEchoing(flyout)) return;
-            context.Current.OnIsPresentedChanged?.Invoke(flyout.IsPresented);
+            context.Live?.OnIsPresentedChanged?.Invoke(flyout.IsPresented);
             context.RestoreAfterEvent();
         };
         Props.Set(flyout, FlyoutPage.FlyoutLayoutBehaviorProperty, null, element.LayoutBehavior);

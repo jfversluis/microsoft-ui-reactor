@@ -755,3 +755,37 @@ unhandled error does, depends on its renderer. Duplicate keys throw on MAUI beca
 would otherwise move one child's state to another silently; WinUI keeps reporting them, since
 throwing would break apps that render with them today. The hook-count check (§13.3) is MAUI-only for the
 same reason: turning it on for WinUI would throw in apps that call hooks conditionally today.
+
+## 14. Phase 3c: echo
+
+Spec §12.3 asks for echo to be characterized before anything is shared. The MAUI device tier now
+does that on Mac Catalyst, the iOS simulator and the Android emulator, for both renderers
+(`tests/Reactor.Maui.DeviceTests/EchoFixtures.cs`):
+
+| Case | What MAUI does |
+|---|---|
+| Reactor writes a controlled control (text, check box, switch, radio button, slider, stepper, picker, date, time) | Its change event fires synchronously inside the write and is suppressed. Nothing arrives later. |
+| Two renders in one batch, or a render that writes nothing | One write, or none; nothing is reported. |
+| A write the control coerces (slider or stepper value out of range, `Entry` longer than `MaxLength`, picker index past the last item) | The control shows the coerced value; nothing is reported; re-rendering the same value doesn't loop. |
+| User input the app refuses | Reported once, with the platform's value; the control returns to the declared value, and the restore isn't reported. |
+| Input after the element is unmounted | Was reported to the unmounted component's callbacks, on every platform. Now dropped. |
+
+**What this means for sharing.** WinUI needs its value-diff arm and suppress counter because some
+WinUI controls raise their change event after the write returns (`RichEditBox`, `AutoSuggestBox`),
+and because a write can raise several events. No MAUI control does either: a scope around the write
+(`EchoGuard`, the equivalent of WinUI's non-consuming setter scope) is exact. Moving WinUI's
+mechanism into the core would put a seam on WinUI's hot path for no MAUI benefit, so echo stays in
+each renderer, as §12.2 option C allows. What is shared is the contract:
+
+- A programmatic write is never reported as input.
+- A coerced write is not reported; the control shows the coerced value and the app keeps its own.
+  WinUI does the same for its range controls (the counter path).
+- Input after unmount reaches no callback. On MAUI, `HandlerContext.Live` is `null` once the
+  element is unmounted, and `IsEchoing` is true, so third-party handlers that follow the documented
+  pattern are covered too. On WinUI this isn't verified yet: its trampolines read the element from
+  the control's state, which the pool and the items factory clear, but other unmount paths may not.
+  A WinUI fixture for it is a follow-up.
+
+Should a MAUI control turn out to echo late (a future platform handler, or a third-party control),
+the value-diff decision is the piece to extract then, with that control as its second consumer.
+
