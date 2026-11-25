@@ -209,6 +209,26 @@ public class ErrorBoundaryTests
     }
 
     [Fact]
+    public void AHostError_UnmountsTheTreeBeforeItIsReported()
+    {
+        var probe = new Probe();
+        var host = new TestHost().Render(new BoxElement(Component<Sibling, Probe>(probe)));
+        var cleanedUpBeforeReport = false;
+        Exception? reported = null;
+        host.Root.UnhandledException += ex =>
+        {
+            reported = ex;
+            cleanedUpBeforeReport = probe.Log.Contains("sibling cleanup") && host.RootView is null;
+        };
+
+        host.Root.ReportHostError(new InvalidOperationException("page swap failed"));
+
+        Assert.Equal("page swap failed", reported?.Message);
+        Assert.True(cleanedUpBeforeReport);
+        Assert.All(host.Renderer.Mounted, v => Assert.True(v.Unmounted));
+    }
+
+    [Fact]
     public void ThrowingFallback_GoesToTheNextBoundaryUp()
     {
         var host = new TestHost().Render(ErrorBoundary(

@@ -199,7 +199,7 @@ Design choices that differ from today's WinUI Reactor, and why:
 
 ## 6. What has been proven
 
-**Engine, headless** (`tests/Reactor.Maui.Engine.Tests`, 62 tests). It runs the renderer conformance
+**Engine, headless** (`tests/Reactor.Maui.Engine.Tests`, 63 tests). It runs the renderer conformance
 scenarios WinUI runs, with the same expected results (spec 067 §13.6–13.7). Mounting through components and
 groups. A keyed reorder keeps component state *and* the same native controls. Removal unmounts
 and runs effect cleanups. Duplicate keys fail loudly, and changing the root's key remounts it.
