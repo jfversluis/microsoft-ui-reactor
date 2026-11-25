@@ -531,8 +531,11 @@ differs from §4.1–4.6, or §4 left a choice open:
   another `Navigating` handler cancels that pop, the approval is discarded and the model is unchanged.
   A key pressed while that pop is outstanding is consumed and queued, and goes back one more level
   once the model shows the first (its guards run then), so two presses go back two levels with each
-  level's guards running once, as two back-key presses do for a `NavigationPage` (§2.6). A refused or
-  cancelled level drops the presses queued behind it. So Android has no preflighted platform pop to
+  level's guards running once, as two back-key presses do for a `NavigationPage` (§2.6). A refused,
+  cancelled or failed level drops the presses queued behind it; each level's outcome is tracked
+  explicitly, so a pop that completes synchronously isn't taken for a refusal. A pop that throws
+  discards its approval (the model is unchanged), leaves the navigator idle and reports the error
+  through the handler error path (`HandlerContext.ReportError`). So Android has no preflighted platform pop to
   watch and no 16 ms polling. A back
   the host can't preflight is the guarded `GoBack` of §2.6; at the root the key is passed on. iOS and
   Mac Catalyst keep the `Navigating` preflight: the swipe never reaches `OnBackButtonPressed`.
@@ -580,6 +583,9 @@ differs from §4.1–4.6, or §4 left a choice open:
   the current one. Inner syncs (a tab's content) apply the selection too, so a removed current item
   is replaced before it goes even when the tab bar itself didn't change. MAUI's model applies the
   selection synchronously, so "let the selection settle" needed no extra wait on the three platforms.
+- **A section is navigated only once it is in the Shell.** A tab mounts before its item joins the
+  Shell, and MAUI can't push onto a detached section, so a host whose handle already has a history
+  (a Shell mounted over it, a tab added later) waits; the Shell runs its navigators when it adds items.
 - **A new root** (`Reset`, `Replace` at the root) pops the section to its root without animation and
   then sets `ShellContent.Content`; the device fixtures check the platform shows the new page.
 - **A navigator outlives its section until it settles.** When its tab goes, its content changes or
@@ -629,7 +635,7 @@ differs from §4.1–4.6, or §4 left a choice open:
   `IShellItemController.ProposeSection`, which the tab bars call; the native back is
   `ShellSectionRenderer.ShouldPopItem` (the back button's path; a direct `PopViewController` bypasses
   Shell) on iOS and Mac Catalyst, and the activity's back dispatcher on Android.
-- **Gate evidence.** Headless: `tests/Reactor.Maui.Tests/ShellTests.cs` (55 tests). Device: the 17
+- **Gate evidence.** Headless: `tests/Reactor.Maui.Tests/ShellTests.cs` (58 tests). Device: the 17
   `Shell_*` fixtures pass on Mac Catalyst, the iOS simulator and the Android emulator, with the rest
   of the suite. Each key oracle was mutation-checked (the code broken, the test seen to fail).
 - **The real iOS edge swipe** was driven through Appium (XCUITest, iPhone 18 Pro simulator, iOS 27)

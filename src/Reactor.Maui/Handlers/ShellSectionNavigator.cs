@@ -250,6 +250,9 @@ internal sealed class ShellSectionNavigator : INativeStack
     {
         var section = _section!;
         var navigation = section.Navigation;
+        // Shell navigates a section only once it is in the Shell (a tab mounts before its item joins);
+        // the Shell runs its navigators when it adds the item.
+        if (ShellNatives.ShellOf(section) is null) return null;
 
         if (_keyBack is { Started: false } keyBack)
         {
@@ -398,7 +401,22 @@ internal sealed class ShellSectionNavigator : INativeStack
     private Func<Task> KeyBackOperation(ShellSection section, KeyBack back)
     {
         var animated = _animated;
-        return Own(OperationKind.Pop, animated, () => section.Navigation.PopAsync(animated), _ =>
+        return Own(OperationKind.Pop, animated, async () =>
+        {
+            try
+            {
+                await section.Navigation.PopAsync(animated);
+            }
+            catch
+            {
+                // The pop failed: nothing waits on it any more. The model is unchanged, the presses
+                // queued behind it are dropped, and the error reaches the handler error path.
+                _keyBack = null;
+                _queuedKeyBacks = 0;
+                Binding?.DiscardBack(back.Approval);
+                throw;
+            }
+        }, _ =>
         {
             // Outstanding until here: a key pressed meanwhile is queued, not run as another back.
             _keyBack = null;
@@ -548,22 +566,25 @@ internal sealed class ShellSectionNavigator : INativeStack
             _queuedKeyBacks++;
             return true;
         }
-        return TryKeyBack(binding) ?? binding.OnBackButton();
+        return TryKeyBack(binding) == KeyBackStart.NotNow ? binding.OnBackButton() : true;
     }
 
-    /// <summary>Starts a guarded key back if the host shows its model: whether it was consumed, or <see langword="null"/> if it can't be preflighted now.</summary>
-    private bool? TryKeyBack(NavigationHostBinding binding)
+    private enum KeyBackStart { NotNow, Refused, Started }
+
+    /// <summary>
+    /// Starts a guarded key back if the host shows its model. <see cref="KeyBackStart.Started"/> means
+    /// its pop has started (it may already have finished, when Shell pops synchronously).
+    /// </summary>
+    private KeyBackStart TryKeyBack(NavigationHostBinding binding)
     {
         var stack = _section!.Stack;
-        if (stack.Count <= 1 || !CanPreflight(stack, _content!, binding)) return null;
+        if (stack.Count <= 1 || !CanPreflight(stack, _content!, binding)) return KeyBackStart.NotNow;
         var depth = stack.Count - 1;
-        if (binding.PreflightBack(depth) is { } approval)
-        {
-            // The navigator pops now, as its own operation; the model follows once Shell has popped.
-            _keyBack = new KeyBack(approval, depth, stack[^1]);
-            Run();
-        }
-        return true;
+        if (binding.PreflightBack(depth) is not { } approval) return KeyBackStart.Refused;
+        // The navigator pops now, as its own operation; the model follows once Shell has popped.
+        _keyBack = new KeyBack(approval, depth, stack[^1]);
+        Run();
+        return KeyBackStart.Started;
     }
 
     private bool StartQueuedKeyBack()
@@ -578,8 +599,8 @@ internal sealed class ShellSectionNavigator : INativeStack
         // Waits until the model is shown (the host re-renders after the previous back's commit).
         if (!CanPreflight(stack, content, binding)) return false;
         _queuedKeyBacks--;
-        TryKeyBack(binding);
-        if (_keyBack is not null) return true;
+        // Started: its own run finishes (and raises idle) even if the pop completed at once.
+        if (TryKeyBack(binding) == KeyBackStart.Started) return true;
         // A refused level ends the presses queued behind it.
         _queuedKeyBacks = 0;
         return false;

@@ -533,6 +533,24 @@ public class ShellTests
     }
 
     [Fact]
+    public void AShellMountedOverAHandleWithAHistory_ShowsIt()
+    {
+        var shellShown = false;
+        var h = new Harness(lab => lab.Build = l => shellShown ? ShellLab.DefaultBuild(l) : Page("away", null));
+        h.Lab.A.Navigate("a1");
+        h.Lab.A.Navigate("a2");
+        h.Settle();
+
+        shellShown = true;
+        h.RenderAgain();
+        h.Settle();
+
+        Assert.Equal("a0,a1,a2", h.Pages("a"));
+        Assert.True(h.Navigator("a").IsIdle);
+        Assert.Empty(h.Errors);
+    }
+
+    [Fact]
     public void TabStacks_PersistAcrossSelection()
     {
         var h = new Harness();
@@ -1212,6 +1230,95 @@ public class ShellTests
         foreach (var guard in new[] { "a2:navigatingFrom:Pop", "a1:navigatingTo:Pop", "a1:navigatingFrom:Pop", "a0:navigatingTo:Pop" })
             Assert.Equal(1, Count(h.Lab.Log, guard));
         Assert.True(h.Navigator("a").IsIdle);
+        Assert.Empty(h.Errors);
+    }
+
+    [Fact]
+    public void AndroidBackKey_PressedThreeTimes_WithLaterPopsCompletingAtOnce_GoesBackThreeLevels()
+    {
+        var h = new Harness();
+        h.Shell.BackKeyIsModelBack = true;
+        h.Lab.A.Navigate("a1");
+        h.Lab.A.Navigate("a2");
+        h.Lab.A.Navigate("a3");
+        h.Settle();
+        h.Lab.Log.Entries.Clear();
+        // Only the first pop is held; the queued ones complete synchronously.
+        ShellNavigatingDeferral? deferral = null;
+        var pops = 0;
+        h.Shell.Navigating += (_, e) =>
+        {
+            if (e.Source is not (ShellNavigationSource.Pop or ShellNavigationSource.PopToRoot)) return;
+            if (++pops == 1) deferral = e.GetDeferral();
+        };
+
+        Assert.True(h.Shell.SendBackButtonPressed());
+        Assert.True(h.Shell.SendBackButtonPressed());
+        Assert.True(h.Shell.SendBackButtonPressed());
+        h.Settle();
+        Assert.Equal("a3", h.Lab.A.CurrentRoute);
+
+        deferral!.Complete();
+        h.Settle();
+
+        Assert.Equal("a0", h.Lab.A.CurrentRoute);
+        Assert.Equal("a0", h.Pages("a"));
+        Assert.Equal(3, pops);
+        foreach (var level in new[] { ("a3", "a2"), ("a2", "a1"), ("a1", "a0") })
+        {
+            Assert.Equal(1, Count(h.Lab.Log, $"{level.Item1}:navigatingFrom:Pop"));
+            Assert.Equal(1, Count(h.Lab.Log, $"{level.Item2}:navigatingTo:Pop"));
+        }
+        Assert.True(h.Navigator("a").IsIdle);
+    }
+
+    [Fact]
+    public void AndroidBackKey_WhosePopThrows_ReportsTheError_AndLeavesTheNavigatorIdle()
+    {
+        var caught = new List<Exception>();
+        var h = new Harness(lab => lab.Build = l => ErrorBoundary(ShellLab.DefaultBuild(l), error =>
+        {
+            caught.Add(error);
+            return ShellLab.DefaultBuild(l);
+        }));
+        h.Shell.BackKeyIsModelBack = true;
+        h.Lab.A.Navigate("a1");
+        h.Settle();
+        var shell = h.Shell;
+        var navigator = h.Navigator("a");
+        var throwOnce = true;
+        shell.Navigating += (_, e) =>
+        {
+            if (throwOnce && e.Source is ShellNavigationSource.Pop or ShellNavigationSource.PopToRoot)
+            {
+                throwOnce = false;
+                throw new InvalidOperationException("pop failed");
+            }
+        };
+        var setter = new WindowPageSetter(h.Window!, h.Errors.Add) { WaitForNavigation = true };
+        h.Host.RootNativeChanged = native =>
+        {
+            if (native is Page page) setter.Set(page);
+        };
+
+        Assert.True(shell.SendBackButtonPressed());
+        h.Settle();
+
+        // Reported through the handler error path (the boundary shows its fallback, a new Shell).
+        Assert.Equal("pop failed", Assert.Single(caught).Message);
+        Assert.True(navigator.IsIdle);
+        Assert.Empty(shell.Lingering);
+        Assert.Equal("a1", h.Lab.A.CurrentRoute);
+        // The window swap to the fallback didn't wait on the failed navigator.
+        Assert.False(setter.IsPending);
+        var replacement = Assert.IsType<ReactorShell>(h.Window!.Page);
+        Assert.NotSame(shell, replacement);
+
+        // A later back works.
+        replacement.BackKeyIsModelBack = true;
+        Assert.True(replacement.SendBackButtonPressed());
+        h.Settle();
+        Assert.Equal("a0", h.Lab.A.CurrentRoute);
         Assert.Empty(h.Errors);
     }
 

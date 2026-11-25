@@ -260,13 +260,22 @@ internal sealed class ReactorShell : Shell
     /// </summary>
     internal static void Stage<T>(IList<T> actual, IReadOnlyList<T> desired, ReactorShell? shell, Func<T?> current) where T : BaseShellItem
     {
+        var added = false;
         for (var i = 0; i < desired.Count; i++)
-            if (!actual.Contains(desired[i])) actual.Insert(Math.Min(i, actual.Count), desired[i]);
+        {
+            if (actual.Contains(desired[i])) continue;
+            actual.Insert(Math.Min(i, actual.Count), desired[i]);
+            added = true;
+        }
 
         var wanted = new HashSet<T>(desired, ReferenceEqualityComparer.Instance);
         var removing = actual.Where(a => !wanted.Contains(a)).ToList();
         if (removing.Count > 0 || shell is not null) shell?.ApplySelection(removing.Count == 0 ? null : [.. removing.Cast<object>()]);
         foreach (var item in removing) actual.Remove(item);
+
+        // Sections that just joined the Shell can now be navigated.
+        if (added && shell is not null)
+            foreach (var navigator in shell.Navigators.ToList()) navigator.Run();
 
         if (actual.SequenceEqual(desired, ReferenceEqualityComparer.Instance)) return;
         var keep = current();

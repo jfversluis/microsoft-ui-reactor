@@ -238,7 +238,7 @@ shared navigation model (spec 069): the stack's operations and guard order, `Pop
 state restored without guards, the lifecycle hook's order and lookup, and a handle over an injected
 scheduler (including one that refuses).
 
-**Renderer, headless** (`tests/Reactor.Maui.Tests`, 151 tests). Real Controls objects and direct
+**Renderer, headless** (`tests/Reactor.Maui.Tests`, 154 tests). Real Controls objects and direct
 views, no platform handlers: modifiers, every control's props and echo-free events, the hybrid
 fallback and mixed trees, `CollectionView` cells as child roots, pages, toolbar items, the
 navigation stack's reconcile, the user-pop rule (below), tabs and flyout (including swapping the
@@ -270,8 +270,9 @@ while one is shown, a user dismissal reported, dismissed when the Shell unmounts
 with its modal shown or mid-push), modal route pages rejected, a tab's content changing from a deep
 host, a host replaced by another (one pop to the root, after the replaced one's operation, also
 through a chain of replacements), an own operation or the Android back key's pop cancelled by another
-handler (not retried, model unchanged; a declaration made meanwhile still tried), two quick back-key
-presses (two levels, each guard once),
+handler (not retried, model unchanged; a declaration made meanwhile still tried), two and three quick
+back-key presses (a level each, each guard once, also when later pops complete at once), a key-back pop
+that throws (reported, the navigator idle and usable), a Shell mounted over a handle with a history,
 a nested host in a tab's page, conditional tabs, the pages' Shell properties, the flyout, and the
 README snippet.
 
@@ -317,7 +318,7 @@ native views show, not the virtual tree:
   reordering and removing the selected tab; `NavBarIsVisible` and `TabBarIsVisible` live (read from
   the native bars on all three); the flyout header and content updated in place and the user's
   flyout reported; a modal from a Shell page, with a push held until it goes; typed reset and a back
-  with a result kept in state; a deep link; and a root swap from the Shell to a page waiting for a busy
+  with a result kept in state; a Shell remounted over a handle with a history; a deep link; and a root swap from the Shell to a page waiting for a busy
   section. Also: tab selection accepted and refused, `CollectionView` virtualizes
   (a few of 200 cells realized) and reports selection, `UseWindowSize` and `UseAppTheme` follow the
   window and the theme, an `ErrorBoundary` catches an event-handler failure, and effects clean up on

@@ -202,6 +202,15 @@ public static partial class Fixtures
         await ShellShows(c, shell, "a", "a0,x,y,z", "the restored history");
         lab.A.GoBack();
         await ShellShows(c, shell, "a", "a0,x,y", "back through the restored history");
+
+        // A Shell mounted over a handle that already has a history shows all of it.
+        lab.Build = _ => Page("away", Label("away page"));
+        RenderAgain(c, lab);
+        await c.WaitFor(() => c.Window.Page is { Title: "away", IsLoaded: true }, "the page in the Shell's place", 10_000);
+        lab.Build = ShellLab.Default;
+        RenderAgain(c, lab);
+        await c.WaitFor(() => c.Window.Page is ReactorShell { IsLoaded: true } again && !ReferenceEquals(again, shell), "a new Shell", 10_000);
+        await ShellShows(c, (ReactorShell)c.Window.Page!, "a", "a0,x,y", "the history in the new Shell");
     }
 
     private static async Task ShellNativeBack(FixtureContext c, bool refuseFrom, bool refuseTo)
