@@ -218,8 +218,14 @@ public class ControlledControlTests
             .Register(new PinnedHandler());
         var host = new TestHost(registry).Render(VStack(new BadgeElement<int>(3), new BadgeElement<string>("x"), new PinnedBadge("p")));
 
-        var texts = ((VerticalStackLayout)host.RootView!).Cast<MauiLabel>().Select(l => l.Text);
-        Assert.Equal(["badge 3", "badge x", "pinned p"], texts);
+        var stack = (VerticalStackLayout)host.RootView!;
+        Assert.Equal(["badge 3", "badge x", "pinned p"], stack.Cast<MauiLabel>().Select(l => l.Text));
+        var first = stack[0];
+
+        // An update goes through the base handler too, in place.
+        host.Render(VStack(new BadgeElement<int>(4), new BadgeElement<string>("x"), new PinnedBadge("p")));
+        Assert.Same(first, stack[0]);
+        Assert.Equal("badge 4", ((MauiLabel)stack[0]).Text);
     }
 
     [Fact]

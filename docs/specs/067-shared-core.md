@@ -821,7 +821,7 @@ duplicate and override policy. What the two registries share is the lookup, now 
 `HandlerTable<TValue>` (`src/Reactor.Core/Engine/HandlerTable.cs`):
 
 - an element type resolves to the value registered for exactly that type;
-- otherwise to the value registered for its nearest base type "for derived types" (spec 048 §3.4);
+- otherwise to the value registered for its nearest base type "for derived types" (spec 048's implementation tasks, `docs/specs/tasks/048-control-registration-and-trimming-implementation.md` §3.4);
 - base-type results, misses included, are cached per element type, except for collectible types,
   whose load context the cache would keep alive. A registration for derived types clears the cache.
 
@@ -829,14 +829,20 @@ The table has no duplicate policy: `TryAdd` keeps the first value, `Set` replace
 
 | | WinUI `ControlRegistry` | MAUI `ElementHandlerRegistry` |
 |---|---|---|
-| Scope | Process-wide, filled lazily by the factories' registration latches | One per renderer, passed to each root |
+| Scope | Process-wide, filled lazily by the factories' registration latches | One per top-level root (shared with its child roots); an app can pass one instance to several roots |
 | Duplicates | First wins (`TryAdd`) | Last wins (`Set`), so an app overrides a built-in handler |
 | Derived types | `RegisterForDerivedTypes` (existing) | `RegisterForDerivedTypes` (new) |
 | Value | A factory for the per-host adapter | The adapter |
 
-WinUI's per-host `V1HandlerRegistry` keeps its own `Dictionary`-based copy of the lookup. It runs on
-every dispatch and is single-threaded, so it stays where it is; `ControlRegistry` is consulted only
-when the per-host cache misses. Its registration latches stay WinUI's: MAUI's registries are built
+WinUI's per-host `V1HandlerRegistry` keeps its own `Dictionary`-based lookup. It is single-threaded
+and lives as long as its host, so it caches collectible types too; it stays where it is. The reconciler
+reaches `ControlRegistry` after both per-host arms miss (`_v1Handlers`, then `_typeRegistry`) and
+caches only hits into `_v1Handlers`, so composition primitives (`ComponentElement`, `FuncElement`, …)
+reach it on every dispatch. That is why the table tests a flag, not `ConcurrentDictionary.IsEmpty`,
+before walking base types: `IsEmpty` takes every lock when the dictionary is empty, the common case.
+A lookup that overlaps a registration for derived types can't leave a result that later lookups use:
+each such registration bumps a generation, every cached result is stamped with the generation it
+was resolved under, and lookups accept only the current one. Its registration latches stay WinUI's: MAUI's registries are built
 explicitly (`MauiHandlers.CreateRegistry()`, `DirectHandlers.CreateRegistry()`), and nothing a
 latch does populates a MAUI root.
 

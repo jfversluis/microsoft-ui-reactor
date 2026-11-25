@@ -175,7 +175,8 @@ Design choices that differ from today's WinUI Reactor, and why:
   registry erases the types. Natives are always reference types, so nothing is boxed.
 - **The registry is per root, and the last registration wins**, so an app overrides a built-in
   handler by registering its own. `RegisterForDerivedTypes` registers one handler for a family of
-  element records (the closed types of a generic element); an exact registration wins over it. The
+  element records that share a non-generic base (for example the closed types of a generic record
+  derived from it); an exact registration wins over it. The
   lookup is the shared core's (spec 067 §15).
 - **Components and groups produce no native control.** After reconciling, the engine
   flattens each host's descendants into the ordered native children it should have and

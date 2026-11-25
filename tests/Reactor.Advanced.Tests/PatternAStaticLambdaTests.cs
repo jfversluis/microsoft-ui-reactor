@@ -40,15 +40,13 @@ public sealed class PatternAStaticLambdaTests
     }
 
     [UnconditionalSuppressMessage("Trimming", "IL2075",
-        Justification = "Test-only: reads ControlRegistry's internal s_entries field (a ConcurrentDictionary<Type, Func<IV1HandlerEntry>>, rooted above via the typeof(ControlRegistry) intrinsic) and calls its public TryGetValue to fetch a registered handler factory. GetType() erases the static ConcurrentDictionary<,> type, but TryGetValue is a public API kept by ordinary dictionary use. Reactor.Advanced.Tests is a headless xUnit runner, not NativeAOT-published.")]
+        Justification = "Test-only: calls ControlRegistry's internal static TryResolve (rooted via the typeof(ControlRegistry) intrinsic) to fetch a registered handler factory. Reactor.Advanced.Tests is a headless xUnit runner, not NativeAOT-published.")]
     private static Delegate GetAdapterFactory(Type elementType)
     {
-        var entriesField = typeof(ControlRegistry).GetField("s_entries", BindingFlags.NonPublic | BindingFlags.Static)!;
-        var entries = entriesField.GetValue(null)!;
-        var tryGetValue = entries.GetType().GetMethod("TryGetValue")!;
+        var tryResolve = typeof(ControlRegistry).GetMethod("TryResolve", BindingFlags.NonPublic | BindingFlags.Static)!;
         var args = new object?[] { elementType, null };
 
-        Assert.True((bool)tryGetValue.Invoke(entries, args)!);
+        Assert.True((bool)tryResolve.Invoke(null, args)!);
         return (Delegate)args[1]!;
     }
 

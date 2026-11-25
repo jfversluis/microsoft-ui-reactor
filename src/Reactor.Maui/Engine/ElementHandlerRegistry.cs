@@ -26,11 +26,16 @@ public sealed class ElementHandlerRegistry
     /// <summary>
     /// Registers <paramref name="handler"/> for every element type derived from
     /// <typeparamref name="TBase"/> that has no registration of its own, replacing any earlier one
-    /// for <typeparamref name="TBase"/>'s derived types. Use it for a family of element records,
-    /// such as the closed types of a generic element, that one handler renders. An exact
-    /// <see cref="Register{TElement, TControl}"/> wins over it, and the nearest base type wins over
-    /// a more distant one.
+    /// for <typeparamref name="TBase"/>'s derived types. Use it for a family of element records that
+    /// one handler renders, such as the closed types <c>Chip&lt;int&gt;</c> and
+    /// <c>Chip&lt;string&gt;</c> of a generic record that derives from a non-generic base
+    /// (<c>abstract record ChipBase : Element</c>): register the handler for that base.
     /// </summary>
+    /// <remarks>
+    /// <typeparamref name="TBase"/> itself is not covered, only the types derived from it. An exact
+    /// <see cref="Register{TElement, TControl}"/> wins over this, and the nearest registered base type
+    /// wins over a more distant one.
+    /// </remarks>
     public ElementHandlerRegistry RegisterForDerivedTypes<TBase, TControl>(IElementHandler<TBase, TControl> handler)
         where TBase : Element
         where TControl : class
@@ -44,7 +49,10 @@ public sealed class ElementHandlerRegistry
         _handlers.TryResolve(elementType, out var handler)
             ? handler
             : throw new InvalidOperationException(
-                $"No handler is registered for {elementType.Name}. Register one on the renderer's ElementHandlerRegistry.");
+                $"No handler is registered for {elementType}. Register one on the renderer's ElementHandlerRegistry"
+                + (elementType.BaseType is { } baseType && baseType != typeof(Element)
+                    ? $", or one for the types derived from {baseType} with RegisterForDerivedTypes."
+                    : "."));
 }
 
 /// <summary>Erases the handler's generic types so the reconciler can dispatch on element type.</summary>
