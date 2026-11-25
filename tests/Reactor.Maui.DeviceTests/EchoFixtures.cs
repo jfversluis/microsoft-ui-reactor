@@ -21,7 +21,7 @@ public static partial class Fixtures
         new($"Echo_CoercedWrites_ShowTheCoercedValue_AndReportNothing [{r.Name}]", c => EchoCoerced(c, r.Create())),
         new($"Echo_InputTheAppRefuses_IsReportedOnce_AndRestored [{r.Name}]", c => EchoRefused(c, r.Create())),
         new($"Echo_InputAfterUnmount_IsNotReported [{r.Name}]", c => EchoAfterUnmount(c, r.Create())),
-    });
+    }).Append(new Fixture("Page_Disappearing_IsReportedWhileDeclared_NotAfterTheAppRemovesIt", PageRemovedByTheApp));
 
     private sealed class EchoLog
     {
@@ -177,9 +177,16 @@ public static partial class Fixtures
         var toggle = c.ById<ISwitch>("switch");
         var slider = c.ById<ISlider>("slider");
         await c.Settle(300);
+
+        // Positive control: the same input, while mounted, is reported.
+        entry.Text = "before";
+        await c.Settle(300);
+        Equal("entry before", string.Join(", ", log.Calls), "input while mounted");
+        log.Calls.Clear();
+
         c.Unmount();
         await c.Settle(300);
-        log.Calls.Clear();
+        Check(log.Calls.Count == 0, $"unmounting reports nothing, got [{string.Join(", ", log.Calls)}]");
 
         entry.Text = "after";
         toggle.IsOn = true;
@@ -187,5 +194,55 @@ public static partial class Fixtures
         await c.Settle(300);
         Check(log.Calls.Count == 0, $"input after unmount reaches no callback, got [{string.Join(", ", log.Calls)}]");
         Check(c.UnhandledErrors.Count == 0, $"no unhandled errors, got {string.Join("; ", c.UnhandledErrors.Select(e => e.Message))}");
+    }
+
+    private sealed record LifecycleProps(List<string> Log, Action<Action<bool>> Publish);
+
+    private sealed class LifecycleStack : Component<LifecycleProps>
+    {
+        public override Element Render()
+        {
+            var (detail, setDetail) = UseState(false);
+            Props.Publish(setDetail);
+            var log = Props.Log;
+            var home = Page("home", Label("home")).WithKey("home");
+            var page = Page("detail", Label("detail")).WithKey("detail") with
+            {
+                OnAppearing = () => log.Add("appearing"),
+                OnDisappearing = () => log.Add("disappearing"),
+            };
+            return detail ? NavigationStack([home, page]) : NavigationStack([home]);
+        }
+    }
+
+    // A page the app removes is unmounted before the platform pops it, so its Disappearing is not
+    // reported; a page that is only covered still reports it (spec 067 §14, PageElement.OnDisappearing).
+    private static async Task PageRemovedByTheApp(FixtureContext c)
+    {
+        var log = new List<string>();
+        Action<bool>? setDetail = null;
+        c.Show(Component<LifecycleStack, LifecycleProps>(new(log, s => setDetail = s)));
+        var navigation = await LoadedPage<NavigationPage>(c);
+        await c.Settle();
+
+        setDetail!(true);
+        await c.WaitFor(() => navigation.CurrentPage?.Title == "detail" && navigation.CurrentPage.IsLoaded, "detail to be shown");
+        await c.WaitFor(() => log.Contains("appearing"), "detail to report its appearance");
+        await c.Settle();
+        Equal("appearing", string.Join(", ", log), "while mounted");
+
+        // Positive control: covering the page with a modal reports its disappearance while declared.
+        var modal = new ContentPage { Title = "modal" };
+        await navigation.Navigation.PushModalAsync(modal, false);
+        await c.WaitFor(() => log.Contains("disappearing"), "the covered page to report its disappearance");
+        await navigation.Navigation.PopModalAsync(false);
+        await c.WaitFor(() => log.Count(e => e == "appearing") == 2, "the uncovered page to report its appearance");
+        await c.Settle();
+        log.Clear();
+
+        setDetail(false);
+        await c.WaitFor(() => navigation.Navigation.NavigationStack.Count == 1, "MAUI's stack to drop the page");
+        await c.Settle(800);
+        Equal("", string.Join(", ", log), "after the app pops the page");
     }
 }

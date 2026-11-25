@@ -25,7 +25,7 @@ namespace Microsoft.UI.Reactor.Maui.Handlers;
 
 // Controlled-value handlers follow one pattern: Apply writes the element's value inside
 // WriteSuppressed, so the change event that write raises is not reported; the event handler
-// reports genuine input through the current element and then calls RestoreAfterEvent, which puts
+// reports genuine input through the live element (null once unmounted) and then calls RestoreAfterEvent, which puts
 // the declared value back if the callback did not accept the input.
 
 internal sealed class LabelHandler : ViewHandler<LabelElement, MauiLabel>

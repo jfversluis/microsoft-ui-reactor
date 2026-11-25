@@ -118,24 +118,30 @@ public class ControlledControlTests
         var reported = new List<string>();
         var host = new TestHost(direct ? DirectHandlers.CreateRegistry() : MauiHandlers.CreateRegistry())
             .Render(VStack(
-                Entry("a", v => reported.Add($"entry {v}")),
+                Entry("a", v => reported.Add($"entry {v}")) with { OnCompleted = () => reported.Add("completed") },
                 Switch(false, v => reported.Add($"switch {v}")),
-                Button("b", () => reported.Add("click"))));
+                Button("b", () => reported.Add("click")),
+                Slider(0.5, _ => { }) with { OnDragCompleted = () => reported.Add("drag completed") }));
         var children = (IList<IView>)host.RootView!;
-        var (entry, toggle, button) = ((IEntry)children[0], (ISwitch)children[1], (IButton)children[2]);
+        var (entry, toggle, button, slider) = ((IEntry)children[0], (ISwitch)children[1], (IButton)children[2], (ISlider)children[3]);
 
-        // What the platform handlers do on input. While mounted, each is reported.
-        entry.Text = "typed";
-        toggle.IsOn = true;
-        button.Clicked();
+        // What the platform handlers do on input. While mounted, each is reported. Completed, Clicked
+        // and DragCompleted have no echo check, so only Live keeps them from an unmounted element.
+        void Input(string text, bool on)
+        {
+            entry.Text = text;
+            entry.Completed();
+            toggle.IsOn = on;
+            button.Clicked();
+            slider.DragCompleted();
+        }
+        Input("typed", true);
         host.Scheduler.Drain();
-        Assert.Equal(["entry typed", "switch True", "click"], reported);
+        Assert.Equal(["entry typed", "completed", "switch True", "click", "drag completed"], reported);
         reported.Clear();
 
         host.Root.Unmount();
-        entry.Text = "after";
-        toggle.IsOn = false;
-        button.Clicked();
+        Input("after", false);
         host.Scheduler.Drain();
 
         Assert.Empty(reported);
@@ -158,6 +164,28 @@ public class ControlledControlTests
         }
 
         public void Update(Microsoft.UI.Reactor.Hosting.HandlerContext<CustomInputElement> context, CustomInputElement oldElement, CustomInputElement newElement, Microsoft.Maui.Controls.Entry control) { }
+    }
+
+    [Fact]
+    public void ToolbarAndSwipeActions_AreNotInvokedAfterUnmount()
+    {
+        var reported = new List<string>();
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(
+            Page("p", SwipeView(Label("row")) with { RightItems = [new SwipeAction("Delete", () => reported.Add("swipe"))] })
+                with { ToolbarItems = [new ToolbarAction("Save", () => reported.Add("toolbar"))] });
+        var page = (Microsoft.Maui.Controls.ContentPage)host.RootView!;
+        var toolbar = (IMenuItemController)page.ToolbarItems[0];
+        var swipe = (Microsoft.Maui.ISwipeItem)((Microsoft.Maui.Controls.SwipeView)page.Content).RightItems[0];
+        toolbar.Activate();
+        swipe.OnInvoked();
+        Assert.Equal(["toolbar", "swipe"], reported);
+        reported.Clear();
+
+        host.Root.Unmount();
+        toolbar.Activate();
+        swipe.OnInvoked();
+
+        Assert.Empty(reported);
     }
 
     [Fact]
@@ -346,6 +374,19 @@ public class CollectionViewTests
         cell.BindingContext = ((System.Collections.IList)view.ItemsSource)[1];
 
         Assert.Equal(expected, Text(cell));
+    }
+
+    [Fact]
+    public void ACellBoundAfterTheListIsUnmounted_StartsNoTree()
+    {
+        var (host, view) = Mount(new([new("a", "A"), new("b", "B")], "red"));
+        // Positive control: a cell bound while mounted renders.
+        Assert.Equal("A red 0", Text(Realize(view, 0)));
+
+        host.Root.Unmount();
+        var late = Realize(view, 1);
+
+        Assert.Null(late.Content);
     }
 
     [Fact]

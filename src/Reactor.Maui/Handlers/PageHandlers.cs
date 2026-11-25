@@ -9,6 +9,8 @@ internal sealed class PageHandler : Reactor.Hosting.IElementHandler<PageElement,
         var page = new ContentPage();
         if (element.AutomationId is { } automationId) page.AutomationId = automationId;
         page.Appearing += (_, _) => context.Live?.OnAppearing?.Invoke();
+        // A page the app removes is unmounted before the platform pops it, so its Disappearing
+        // isn't reported: its component may already have run its cleanups (spec 067 §14).
         page.Disappearing += (_, _) => context.Live?.OnDisappearing?.Invoke();
         Apply(context, page, null, element);
         return page;

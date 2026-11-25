@@ -37,7 +37,8 @@ Conventions for contributors:
   state, tabs, flyouts and `UseAppTheme`/`UseWindowSize`. It renders primitives and layouts as direct
   views that skip the Controls layer (27–58% faster on bulk work) and falls back to Controls per
   element. Custom handlers invoke callbacks through `HandlerContext.Live`, which is `null` once the
-  element is unmounted, so input a control raises after teardown reaches no callback (spec 067 §14).
+  element is unmounted, so input a control raises after teardown reaches no callback; a page the app
+  removes doesn't report `OnDisappearing` (use an effect's cleanup) (spec 067 §14).
   Built with `Reactor.Maui.slnx` and tested in `.github/workflows/maui.yml`, including a
   device tier that runs on the real platform controls. It doesn't change the WinUI packages.
 

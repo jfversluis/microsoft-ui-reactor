@@ -26,7 +26,14 @@ public sealed record PageElement(string? Title, Element? Content) : Element
     public bool? HasNavigationBar { get; init; }
     public bool? HasBackButton { get; init; }
     public string? BackButtonTitle { get; init; }
+    /// <summary>Called when the page becomes visible: shown, or uncovered.</summary>
     public Action? OnAppearing { get; init; }
+
+    /// <summary>
+    /// Called when the page stops being visible while it is still declared: covered by another page,
+    /// or popped by the user before the app's state drops it. Not called once the app has removed the
+    /// page from its state; release resources in an effect's cleanup, which runs then.
+    /// </summary>
     public Action? OnDisappearing { get; init; }
 
     /// <summary>Automation id of the page, applied once at mount.</summary>
