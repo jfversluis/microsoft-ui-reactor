@@ -196,6 +196,46 @@ return NavigationHost(nav, route => route switch
 - **AOT:** a trimmed MAUI build that resolves a deep link and round-trips a snapshot.
 - **The WinUI and perf gates apply to 4b-2 and 4b-3 as well.**
 
+### 2.6 As built (4b-1, MAUI side)
+
+- **`NavigationHost` is a built-in component**, not a host element: it returns a `ComponentElement`
+  that renders `NavigationStack(pages)` under the `NavigationContext<TRoute>` provider. The engine's
+  restore path doesn't re-sync children, so only a component can re-render the declaration; it
+  subscribes to the handle's `RouteChanged`, so a host under a parent that skipped still updates.
+  The route map is `Func<TRoute, Element?>`; a route mapped to `null` keeps its position as an empty
+  page, so a declared depth is always an entry index.
+- **Keys use a prefix rule**: an entry keeps its key while it *and every entry below it* equal the
+  declared ones. Keeping a page above a replaced one would make MAUI reorder pages; the cases §2.4
+  lists behave as specified.
+- **A destination that must be mounted to be asked** (push, forward, replace, a new route from
+  `SetState`) is first declared as a *proposal*: the pages shown plus the destination on top,
+  without telling the navigator. Its `onNavigatingTo` runs once it has mounted. Accepted, the final
+  declaration follows (for a push it is the proposal itself); refused, the destination unmounts and
+  the pages shown were never touched, so a replaced page keeps its state, as WinUI keeps the old
+  page. A destination already mounted (a pop) is asked before the declaration changes. As on WinUI,
+  a refusing destination leaves the model at the new route while the host keeps the previous page.
+- **The previous route** in the lifecycle contexts is the route the host showed. `SetState` runs no
+  guard, as on WinUI, but its departure is reported with mode `Reset` and gets `onNavigatedFrom`
+  (WinUI reports such a change as `Push` without `onNavigatedFrom`).
+- **Completion** runs, posted, when the navigator is idle and no user pop is pending (MAUI no longer
+  lists the page, or its window expired). Navigations still in flight then complete together, in
+  order: every page left gets `onNavigatedFrom`, and only the latest generation's destination gets
+  `onNavigatedTo`. A navigation is tracked from the render that commits it, so one replaced by a
+  newer render before the navigator saw it still reports its departure.
+- **A user's pop** maps to `NavigationStack.PopToIndex`, a new internal core method that `PopTo`
+  now delegates to. It runs only while the model still holds the declared pages below that depth;
+  otherwise the pop is refused and the page restored.
+- **The back key**: `ReactorNavigationPage.OnBackButtonPressed` gives a nested current page the key
+  first, as `NavigationPage` does, then runs the guarded `GoBack` only under a `NavigationHost`; a
+  plain `NavigationStack` keeps MAUI's behaviour.
+- **Diagnostics** are written where WinUI's are: `NavigationCompleted` from `Navigate`, and
+  `NavigationCancelled` ("destination guard") for a refusing destination.
+- **`NavigationMode` is ambiguous** with `Microsoft.Maui.ApplicationModel.NavigationMode` in a file
+  that imports `Microsoft.UI.Reactor.Navigation` under MAUI's implicit usings; such a file aliases it.
+  The package's global usings don't import the navigation namespace.
+- **Not done in 4b-1:** the AOT gate (a trimmed MAUI build resolving a deep link and round-tripping
+  a snapshot) and the core's neutral-harness tests of the model.
+
 ## 3. Decisions to review
 
 1. **Share the model, keep a handle per renderer.** WinUI's API is unchanged, and MAUI gets the

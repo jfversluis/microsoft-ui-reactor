@@ -63,6 +63,9 @@ public readonly struct HandlerContext<TElement> where TElement : Element
     /// </summary>
     public TElement? Live => IsMounted ? Current : null;
 
+    /// <summary>The engine's node for the element.</summary>
+    internal Node Node => (Node)_live;
+
     /// <summary>Whether the element is still mounted. False once Reactor has unmounted it.</summary>
     public bool IsMounted => !((Node)_live).Unmounted;
 

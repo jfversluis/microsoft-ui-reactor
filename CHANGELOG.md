@@ -45,6 +45,14 @@ Conventions for contributors:
   removes have their MAUI handlers disconnected (spec 067 §16). On Android, a `ReactorWindow` whose
   root switches away from a `NavigationStack` mid-navigation waits for the running push or pop before
   replacing the window's page, which works around a MAUI crash (spec 065 §7).
+  Typed navigation has WinUI's API (spec 069 §2): `UseNavigation<TRoute>(initial)` and
+  `UseNavigation<TRoute>()`, `NavigationHandle<TRoute>` (`Navigate`, `GoBack`, `GoForward`,
+  `Replace`, `Reset`, `PopTo`, `GetState`/`SetState`, off-thread calls scheduled on the root's render
+  thread), `UseNavigationLifecycle` and `NavigationHost(nav, routeMap)` over a `NavigationPage`.
+  `NavigateOptions` has `Animated` and `PushToBackStack`. The back button, the swipe and the Android
+  back key each run the guards once, and a refused back keeps the page. The navigation model and
+  lifecycle hook state moved to `Microsoft.UI.Reactor.Core`, forwarded from `Reactor.dll`, so
+  WinUI's API is unchanged.
   Built with `Reactor.Maui.slnx` and tested in `.github/workflows/maui.yml`, including a
   device tier that runs on the real platform controls. It doesn't change the WinUI packages.
 

@@ -24,6 +24,59 @@ public static class MauiCoreHooks
             return current.Callback;
         }
 
+        /// <summary>
+        /// Root mode: creates a navigation stack with the given initial route and returns a
+        /// <see cref="Navigation.NavigationHandle{TRoute}"/> that is stable across re-renders. Render it
+        /// with <c>NavigationHost</c>, which also provides it to descendants, so a child component can
+        /// call <c>UseNavigation&lt;TRoute&gt;()</c> (parameterless) to reach it. The component re-renders
+        /// after every navigation. Off-thread navigation is scheduled on this root's render thread.
+        /// </summary>
+        public Navigation.NavigationHandle<TRoute> UseNavigation<TRoute>(TRoute initial) where TRoute : notnull
+        {
+            var stackRef = context.UseRef<Navigation.NavigationStack<TRoute>?>(null);
+            stackRef.Current ??= new Navigation.NavigationStack<TRoute>(initial);
+
+            var handleRef = context.UseRef<Navigation.NavigationHandle<TRoute>?>(null);
+            handleRef.Current ??= new Navigation.NavigationHandle<TRoute>(stackRef.Current, context.RenderThreadEnqueue);
+
+            // The latest re-render callback, so a navigation always re-renders this component.
+            stackRef.Current.OnChanged = context._requestRerender;
+            return handleRef.Current;
+        }
+
+        /// <summary>
+        /// Child mode: the <see cref="Navigation.NavigationHandle{TRoute}"/> that the nearest
+        /// <c>NavigationHost</c> above this component renders. Throws if there is none.
+        /// </summary>
+        public Navigation.NavigationHandle<TRoute> UseNavigation<TRoute>() where TRoute : notnull
+        {
+            var handle = context.UseContext(Navigation.NavigationContext<TRoute>.Instance);
+            if (handle is null)
+                throw new InvalidOperationException(
+                    $"UseNavigation<{typeof(TRoute).Name}>() (child mode) found no ancestor NavigationHost " +
+                    $"providing NavigationContext<{typeof(TRoute).Name}>. " +
+                    "Ensure a parent component calls UseNavigation<T>(initialRoute) and renders a NavigationHost.");
+            return handle;
+        }
+
+        /// <summary>
+        /// Registers callbacks that a <c>NavigationHost</c> calls while this component is part of the
+        /// page it shows (spec 069 §2.3):
+        /// <list type="bullet">
+        /// <item><c>onNavigatingFrom</c> — before navigating away from the page. Call <c>Cancel()</c> to block.</item>
+        /// <item><c>onNavigatingTo</c> — when the page is about to become active. Call <c>Cancel()</c> to keep the previous page.</item>
+        /// <item><c>onNavigatedTo</c> — after the page became active and the platform's push or pop finished.</item>
+        /// <item><c>onNavigatedFrom</c> — after the page stopped being active and the platform's push or pop finished.</item>
+        /// </list>
+        /// Callbacks are always updated to the latest references on every render.
+        /// </summary>
+        public void UseNavigationLifecycle(
+            Action<Navigation.NavigatingToContext>? onNavigatingTo = null,
+            Action<Navigation.NavigatedToContext>? onNavigatedTo = null,
+            Action<Navigation.NavigatingFromContext>? onNavigatingFrom = null,
+            Action<Navigation.NavigatedFromContext>? onNavigatedFrom = null)
+            => NavigationLifecycleHooks.Use(context, onNavigatingTo, onNavigatedTo, onNavigatingFrom, onNavigatedFrom);
+
         /// <summary>A navigation stack in state, starting at <paramref name="root"/>.</summary>
         public RouteStack<T> UseRouteStack<T>(T root)
         {

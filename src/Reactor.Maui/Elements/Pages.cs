@@ -50,6 +50,16 @@ public sealed record NavigationStackElement(Element?[] Pages) : Element
 {
     public Action<int>? OnPopped { get; init; }
 
+    /// <summary>
+    /// Whether the pushes and pops that bring MAUI's stack to this declaration animate (default
+    /// <see langword="true"/>). A newer declaration's value replaces it for the operations still to run.
+    /// </summary>
+    public bool Animated { get; init; } = true;
+
+    // Set when a NavigationHost renders this stack (spec 069 §2.4).
+    internal Microsoft.UI.Reactor.Navigation.NavigationHostBinding? HostBinding { get; init; }
+    internal Microsoft.UI.Reactor.Navigation.HostDeclaration? HostDeclaration { get; init; }
+
     /// <summary>The title and icon shown for the stack when it is a tab or flyout detail.</summary>
     public string? Title { get; init; }
 

@@ -118,6 +118,9 @@ public sealed class ReactorRoot
         return child;
     }
 
+    /// <summary>Queues <paramref name="work"/> on this root's render thread.</summary>
+    internal void Post(Action work) => _scheduler.Post(work);
+
     // Posted, like child-root errors, so it never runs inside the handler code that reported it.
     internal void ReportHandlerError(Node node, Exception error) => _scheduler.Post(() => HandleChildError(node, error));
 
