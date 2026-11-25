@@ -398,9 +398,11 @@ return Shell(tab, setTab,
       - Settlement waits for the transition-completed callback (`NotifyWhenTransitionCompleted`),
         after UIKit's rollback or completion animation. A swipe the user still holds is a transition
         in progress, so it stays busy.
-    - **Android.** Back isn't interactive. The operation settles at `Navigated` for that section, or,
-      if `Navigating` was raised but no pop follows, when the section's stack is unchanged after the
-      next frame.
+    - **Android.** Back isn't interactive.
+      - The adapter checks the same `ShellNavigatingEventArgs` on the next dispatcher turn, after
+        every `Navigating` handler has run. If any handler cancelled it (`Cancelled`), the operation
+        settles as cancelled. A deferral counts as pending until it completes.
+      - Otherwise MAUI performs the pop, and the operation settles at `Navigated` for that section.
     - **No timeout releases the busy state.** If settlement hasn't arrived after a few seconds,
       Reactor logs a warning through `DiagnosticLog`. It then keeps waiting until the platform
       reports no transition in progress (the navigation controller's `TransitionCoordinator` is null
