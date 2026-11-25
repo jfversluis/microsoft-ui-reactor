@@ -648,23 +648,96 @@ differs from §4.1–4.6, or §4 left a choice open:
 - **Not done in 4b-2:** a declarative search element and top tabs with their own stacks, which wait
   for a port that needs them (§4.1, §4.5).
 
-## 5. Outline: 4b-3, dialogs, back button, lifecycle
+## 5. 4b-3: dialogs, the system back button, presentation style, lifecycle
 
-- **Page dialogs** are declarative, like WinUI's `ContentDialog`: `Alert(...)`, `ActionSheet(...)`
-  and `Prompt(...)` elements with `IsOpen` and `OnClosed(result)`. 4b-3 specifies:
-  - which page presents a dialog (the active page of the element's window);
-  - one dialog at a time, with later ones queued;
-  - a queue per window;
-  - stale results dropped by generation after unmount, navigation or reopening. So `OnClosed` runs
-    at most once per open, and exactly once for an open that is still live when the user answers.
+### 5.1 Page dialogs
 
-  MAUI can't close an alert from code, so turning `IsOpen` off while one is showing takes effect
-  when the user answers.
-- **System back button:** `UseSystemBackButton(nav)` (the WinUI name, without the `Window`), plus an
-  overload taking `Func<bool>` for back handling outside navigation. It is wired through the window's
-  back handling on Android.
-- **Modal presentation style:** a `PageElement` property mapped to MAUI's iOS-specific presentation
-  style, ignored elsewhere.
-- **App and window lifecycle:** a hook raising `Activated`, `Deactivated`, `Stopped`, `Resumed` and
-  `Destroying` from the window. Its name converges with whatever WinUI has, or is proposed for both
-  renderers.
+Five of the seven ports show alerts, action sheets or prompts (spec 068 §2), and they do it from
+event handlers: `if (await DisplayAlertAsync(...)) Delete();`. Reactor offers that shape directly,
+and a declarative one like WinUI's `ContentDialog`. Both feed the same queue.
+
+- **Imperative: `UseDialogs()`** returns a `Dialogs` object bound to the component's window:
+  - `Task<bool> Alert(string title, string? message, string accept, string? cancel = null)`;
+  - `Task<string?> ActionSheet(string? title, string? cancel, string? destruction, params string[] buttons)`;
+  - `Task<string?> Prompt(string title, string? message, string accept = "OK", string cancel = "Cancel", string? placeholder = null, int maxLength = -1, Keyboard? keyboard = null, string? initialValue = null)`.
+
+  The object is stable across renders, so it can be captured in handlers and effects.
+- **Declarative: `Alert(...)`, `ActionSheet(...)` and `Prompt(...)` elements**, with `IsOpen` and
+  `OnClosed(result)`, placed anywhere in the tree. They render nothing native. While `IsOpen` is
+  true, the dialog is queued once; the answer is reported through `OnClosed`, and the app sets
+  `IsOpen` to false. Re-opening (false, then true) queues a new dialog.
+- **Which page presents it.** MAUI's `DisplayAlertAsync` family goes through the page's window, so
+  Reactor presents from the window's current page: the window's `Page`, or its top modal when one
+  is shown.
+  - A dialog created before the component's window is known (no window in context) waits for it.
+  - Inside a `ReactorPage` hosted by a non-Reactor app, the page itself presents.
+- **One at a time, per window.** Dialogs are shown in the order they were requested; the next one
+  starts when the previous one is answered. A queue belongs to its window, so two windows don't
+  block each other.
+- **Stale results.**
+  - An imperative call's task always completes with the answer. The caller owns it, so nothing is
+    dropped.
+  - A declarative dialog's `OnClosed` runs at most once per open, and only while that open is still
+    the element's current one. Unmounting, turning `IsOpen` off, or re-opening makes an earlier
+    open stale. A stale answer is dropped, and its dialog is removed from the queue if it hasn't
+    been shown yet.
+  - MAUI can't dismiss a dialog from code. So turning `IsOpen` off, or unmounting, while one is
+    showing leaves it on screen until the user answers, and that answer is dropped.
+- **Errors:** an exception from `OnClosed` goes to the element's error boundary, like a lifecycle
+  callback (§2.6).
+
+### 5.2 The system back button
+
+- **`UseSystemBackButton(Func<bool> onBack)`** registers a handler for the window's back request:
+  the Android back key, and Windows' back button in 4g. The handler returns true when it handled
+  the back.
+- **`UseSystemBackButton(NavigationHandle<TRoute> nav)`** is WinUI's shape, without the `Window`.
+  It is `onBack: () => nav.CanGoBack && nav.GoBack()`, for a stack the app shows without a
+  `NavigationHost` (for example a single page whose content follows the route).
+- **Order.** Handlers run innermost first: the component mounted most recently, deepest in the
+  tree, gets the first chance. If none handles the back, it goes to the page as before: a
+  `NavigationHost`'s or Shell's guarded back, then MAUI and the OS.
+- **Wiring.** `ReactorWindow` overrides MAUI's window back handling and runs the registered handlers
+  before the page's own. In an app whose window isn't a `ReactorWindow`, `ReactorPage` runs them
+  from its own `OnBackButtonPressed`.
+- **iOS** has no back key, so the hook doesn't fire there; the back button and swipe of a stack go
+  through the stack's guards (§2.4, §4.2).
+
+### 5.3 Modal presentation style
+
+`PageElement.ModalPresentationStyle` maps to MAUI's iOS-specific `ModalPresentationStyle`
+(`FullScreen`, `PageSheet`, `FormSheet`, `OverFullScreen`, …). It is set before the page is
+presented, so it applies to modals in `NavigationStack.Modals`, `NavigationHost` modals and Shell
+modals. Other platforms ignore it.
+
+### 5.4 App and window lifecycle
+
+- **`UseWindowLifecycle(onActivated, onDeactivated, onStopped, onResumed, onDestroying)`**, all
+  optional, subscribes to the component's window (MAUI's `Window` events of the same names). The
+  callbacks are refreshed every render, like `UseNavigationLifecycle`. Subscriptions end at
+  unmount.
+- **Naming.** WinUI has no such hook today (only `UseWindow()` and the window's own events). The
+  name `UseWindowLifecycle` is proposed for both renderers; WinUI can map it to its window's
+  `Activated` and `Closed` events and to visibility when it adopts it.
+- **Errors** in a callback go to the component's error boundary.
+
+### 5.5 Gate for 4b-3
+
+- **Headless tests:**
+  - the dialog queue: order, one at a time, per window;
+  - stale declarative answers: unmount, `IsOpen` off, re-open;
+  - imperative tasks completing;
+  - presenting from the top modal;
+  - back handlers: order, consumption, fall-through to the page's back;
+  - lifecycle subscriptions and unsubscription;
+  - `ModalPresentationStyle` written before the modal is presented.
+- **Device fixtures on Mac Catalyst, iOS and Android:**
+  - an alert, an action sheet and a prompt shown and answered, through the platform's dialog
+    (answered by the test through MAUI's alert manager, or by the platform's UI where it can be
+    reached);
+  - two queued dialogs;
+  - the Android back key reaching a `UseSystemBackButton` handler before a `NavigationHost`;
+  - window `Stopped` and `Resumed` when the app is backgrounded (Android and iOS, where the test can
+    background the app);
+  - a page sheet modal on iOS.
+- **WinUI tiers** green, and `/perf` within noise.
