@@ -3,14 +3,13 @@ using System.Diagnostics.CodeAnalysis;
 namespace Microsoft.UI.Reactor.Core;
 
 /// <summary>
-/// An immutable description of a UI node. Renderers derive their control elements
-/// from this; the core only knows the composition primitives declared in this file.
+/// An immutable description of a MAUI UI node: the MAUI renderer's element base, over the shared
+/// core's <see cref="ReactorElement"/> (spec 067 §13), which carries <see cref="ReactorElement.Key"/>.
+/// Control elements derive from it; the composition primitives below are the renderer's own records
+/// of the shared component contracts. WinUI's <c>Element</c> has the same full name in its assembly,
+/// so code written against it compiles for either renderer.
 /// </summary>
-public abstract record Element
-{
-    /// <summary>Stable identity across re-renders, used to match children when a list reorders.</summary>
-    public string? Key { get; init; }
-}
+public abstract record Element : ReactorElement;
 
 /// <summary>Renders nothing. A <c>null</c> child is treated the same way.</summary>
 public sealed record EmptyElement : Element
@@ -26,7 +25,7 @@ public record ComponentElement(
     [param: DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)]
     [property: DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)]
     Type ComponentType,
-    object? Props = null) : Element
+    object? Props = null) : Element, IComponentElement
 {
     // A field rather than a positional member so it does not take part in record equality.
     internal Func<Component>? Factory;
@@ -51,13 +50,20 @@ public sealed record ComponentElement<TProps> : ComponentElement
 }
 
 /// <summary>An inline function component. It re-renders whenever its parent does.</summary>
-public sealed record FuncElement(Func<RenderContext, Element?> RenderFunc) : Element;
+public sealed record FuncElement(Func<RenderContext, Element?> RenderFunc) : Element, IRenderFunctionElement
+{
+    ReactorElement? IRenderFunctionElement.Render(RenderContext context) => RenderFunc(context);
+}
 
 /// <summary>
 /// An inline function component that re-renders only when one of <see cref="Dependencies"/>
 /// changes, or when its own state does.
 /// </summary>
-public sealed record MemoElement(Func<RenderContext, Element?> RenderFunc, object?[] Dependencies) : Element;
+public sealed record MemoElement(Func<RenderContext, Element?> RenderFunc, object?[] Dependencies) : Element, IMemoElement
+{
+    ReactorElement? IRenderFunctionElement.Render(RenderContext context) => RenderFunc(context);
+    object?[]? IMemoElement.Dependencies => Dependencies;
+}
 
 /// <summary>
 /// Catches errors thrown while rendering, mounting or running effects in <see cref="Child"/>'s
@@ -68,7 +74,7 @@ public sealed record ErrorBoundaryElement(Element? Child, Func<Exception, Elemen
 
 public static class ElementExtensions
 {
-    /// <summary>Returns a copy of <paramref name="element"/> with <see cref="Element.Key"/> set.</summary>
+    /// <summary>Returns a copy of <paramref name="element"/> with <see cref="ReactorElement.Key"/> set.</summary>
     public static T WithKey<T>(this T element, string key) where T : Element =>
         (T)(((Element)element) with { Key = key });
 }

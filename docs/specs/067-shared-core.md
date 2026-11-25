@@ -23,7 +23,8 @@ Today's WinUI package and the MAUI renderer both implement that core's renderer 
 **What "shared" means.** Shared *engine and programming model*: the same `Render()`, hooks, keys,
 context, memo and error-boundary semantics, one diff algorithm and one test suite for it. Logic
 written against the neutral types (custom hooks, view-model components, data and resource hooks)
-compiles for both. UI trees are *not* shared: a WinUI `TextBlock` and a MAUI `Label` stay different
+compiles for both. *As of §13, that holds for code using the core's hooks; the renderers' own data
+hooks and context providers still differ (§13.4).* UI trees are *not* shared: a WinUI `TextBlock` and a MAUI `Label` stay different
 elements. Cross-renderer element sets are out of scope.
 
 **Non-goals.** No binary compatibility for WinUI consumers (they rebuild). No change to WinUI
@@ -75,7 +76,8 @@ full scale through the source-compatibility corpus (§7).
 **Naming open point.** `ReactorElement`/`ReactorComponent` are working names. The MAUI renderer then
 exposes `Microsoft.UI.Reactor.Maui.Element`/`Component`, symmetric with WinUI. A MAUI app still
 needs the `Element` alias (spec 065), because MAUI's implicit usings import
-`Microsoft.Maui.Controls.Element`.
+`Microsoft.Maui.Controls.Element`. *Settled in §13.1: MAUI keeps WinUI's full names,
+`Microsoft.UI.Reactor.Core.Element`/`Component`, in its own assembly.*
 
 ## 4. Engine: generic over the native type
 
@@ -535,7 +537,7 @@ this is a cost to weigh, not a bar.
 
 **The two protocols differ in structure, not just types.**
 
-| | WinUI (`V1Protocol`) | MAUI (spec 065, `Reactor.Maui.Core/Hosting`) |
+| | WinUI (`V1Protocol`) | MAUI (spec 065, `Reactor.Maui/Engine`, formerly `Reactor.Maui.Core/Hosting`) |
 |---|---|---|
 | Children | the strategy drives mounting: the reconciler diffs children straight into the native collection (`ChildReconciler`, incremental insert/move/remove) | the engine reconciles child nodes, collects the flattened natives, then the strategy's `Sync(control, natives)` reorders by reference; slotted strategies get one group per child |
 | Context | per phase; reconciler, child mount, pooling, routed events, binding helper | one `HandlerContext`, retained by event handlers; the live element, echo guard, child roots, error reporting, restore-after-event |
@@ -598,3 +600,90 @@ isolation), plus:
 Tooling (2d) follows the same rule. The analyzers already anchor on the core's types (2a), and the
 API index and docs pipeline were kept current in each phase. What remains (MAUI analyzer coverage,
 a MAUI wrapper generator) has no consumer until MAUI is on the core, so it moves to phases 3 and 4.
+
+## 13. Phase 3a: MAUI on the shared core
+
+Phase 3 starts by moving MAUI's components and hooks onto the core, which needs no protocol
+(§12.2, option C). The transitional `Microsoft.UI.Reactor.Maui.Core` (spec 065) is deleted.
+
+### 13.1 What MAUI now shares
+
+| | Before (spec 065's core) | Now |
+|---|---|---|
+| Element base | its own `Element` record | `Microsoft.UI.Reactor.Core.Element : ReactorElement`, in the MAUI assembly |
+| Components | its own `Component`, `Component<TProps>` | `Component : ReactorComponent`, with a covariant `Render()`, like WinUI's |
+| Hooks | its own `RenderContext` | the core's `RenderContext`: `UseState`, `UseReducer`, `UseEffect`, `UseMemo`, `UseCallback`, `UseRef`, `UseContext`, and the core-only hooks MAUI lacked (`UsePersisted`, `UseObservable`, `UseObservableProperty`, `UseExternalStore`, `UseCollection`) |
+| Context | its own `Context<T>` | the core's `Context<T>`; `Provide(value, child)` is an extension |
+| Skip decision | inline in the engine | `ComponentGate` (§11.2) |
+| Rendering a component | inline in the engine | `ComponentRenderKernel` (§11.2), including the hot-reload hook-order retry, which MAUI lacked |
+
+The MAUI-only hooks are extensions of `RenderContext` in the MAUI assembly, as WinUI's are in its
+own (§10): `UseRouteStack`, `UseResource` and `UseCallback<TDelegate>` in `MauiCoreHooks`, and
+`UseAppTheme`/`UseWindowSize` in `MauiHooks`. `Component` has a shortcut for each.
+
+**Names.** MAUI's element base and component keep the full names WinUI uses
+(`Microsoft.UI.Reactor.Core.Element`, `Component`, `ComponentElement`, `FuncElement`, …) in their
+own assembly, rather than §3's working `Microsoft.UI.Reactor.Maui.Element`. An app references one
+renderer, so the names never meet, and code written against them with the core's hooks compiles for
+either renderer. This settles §3's naming open point.
+
+**The engine stays in the renderer.** MAUI's node tree (`ReactorRoot`, `Node`, the handler
+contract) moves into `Reactor.Maui` (`Engine/`), per §11.1. Its 44 tests move with it
+(`tests/Reactor.Maui.Engine.Tests`) and run against a fake renderer, as before; a test there checks
+that MAUI's components and elements derive from the core's, and that the core references no UI
+framework (this runs on macOS, where the Windows boundary test doesn't).
+
+### 13.2 How MAUI plugs in
+
+- **Context.** The core's `UseContext` reads a `ContextScope`. MAUI renders components out of tree
+  order (a dirty-node queue), so it fills a per-root scope with the providers above a node just
+  for that node's render or gate check. After a render it subscribes the node to the nearest
+  provider of each context it read (`RenderContext.ContextHooks`), which keeps MAUI's rule that a
+  reader re-renders when its provider changes even below a component that skipped. Each node
+  caches its nearest provider, and each provider the next one up, so these lookups walk providers
+  only and allocate nothing.
+- **The kernel host** (`ReactorRoot.KernelHost`) rethrows every failure, because the engine routes
+  errors to boundaries itself; flushes no effects inline (they run after the commit, deepest
+  first); and checks the hook count after each render.
+- **Setters off the render thread** marshal through the root's scheduler, which the root installs
+  on each context (`RenderContext.RenderThreadEnqueue`). WinUI leaves it unset and keeps the
+  process-wide dispatcher. This resolves the 2a follow-up on a per-owner dispatcher (§10) on the
+  context rather than on `IRenderOwner`, because a context drops its owner when it unmounts, and a
+  setter a background task calls after that still has to reach the render thread.
+
+### 13.3 Changes to the core
+
+All internal, and invisible to WinUI except where noted:
+
+- `RenderContext.RenderThreadEnqueue`: read only when a setter is called off the render thread.
+- `RenderContext.ValidateHookCount()`: the hook-count check (§11.3) as an opt-in step; MAUI calls it,
+  WinUI doesn't.
+- `RenderContext.HasPendingEffects`.
+- **Deferred effects** (§11.3): an effect scheduled again before the flush keeps the cleanup the
+  first schedule staged, instead of dropping it. WinUI flushes inline, so it only reached this in a
+  render that failed and was retried, where it leaked the cleanup.
+- **A cleanup that throws during the flush** is cleared before it runs, so unmount doesn't run it a
+  second time. This changes WinUI too: before, a throwing cleanup ran again when the component
+  unmounted.
+- The core grants its internals to the MAUI renderer and its test assemblies (§11.2), and
+  `NeutralCoreBoundaryTests` pins that list.
+
+### 13.4 Behavior changes for MAUI apps
+
+- A component's own state change renders it without asking `ShouldUpdate` (WinUI's rule). Before,
+  MAUI asked it anyway and ignored the answer.
+- A component's effects run their cleanups first, then the new effects, rather than each effect's
+  cleanup just before that effect (React's order, and WinUI's).
+- Code that calls `Provide` needs `Microsoft.UI.Reactor.Core` in scope; the package's global usings
+  provide it. Both `context.Provide(value, child)` and WinUI's `element.Provide(context, value)` work;
+  the second returns the provider, so it ends a modifier chain.
+
+**Still renderer-specific** (to converge in phase 4, before the MAUI package leaves preview):
+`UseResource` (MAUI returns `Resource<T>`, WinUI the `AsyncValue<T>` union with a query cache),
+`UseWindowSize` (MAUI `Size`, WinUI a tuple), `UseRouteStack` and `UseCallback<TDelegate>`
+(MAUI only), and `Provide` (WinUI's is a modifier that keeps the element's type).
+
+### 13.5 What phase 3 still owns
+
+The rest of §11.3 (identity, invalidation, recovery, effect timing) and the protocol pieces of §12.
+Those are decided through a conformance suite that runs on both renderers; 3a doesn't change them.

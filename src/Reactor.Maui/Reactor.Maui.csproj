@@ -1,8 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    The .NET MAUI renderer for Reactor (spec 065). The plain net11.0 target has no platform
-    handlers; it exists so Reactor.Maui.Tests can mount element trees headlessly.
+    The .NET MAUI renderer for Reactor (spec 065): its elements, components and node engine over the
+    shared core (src/Reactor.Core, spec 067 §13), and its handlers. The plain net11.0 target has no
+    platform handlers; it exists so the headless suites can mount element trees.
   -->
   <PropertyGroup>
     <TargetFrameworks>net11.0;net11.0-android</TargetFrameworks>
@@ -44,11 +45,24 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Reactor.Maui.Tests" />
+    <InternalsVisibleTo Include="Reactor.Maui.Engine.Tests" />
     <InternalsVisibleTo Include="Reactor.Maui.DeviceTests" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Reactor.Maui.Core\Reactor.Maui.Core.csproj" />
+    <ProjectReference Include="..\Reactor.Core\Reactor.Core.csproj" />
   </ItemGroup>
+
+  <!-- Pin the Microsoft.UI.Reactor.Core dependency to this exact version ([V], not >= V), as
+       Reactor.csproj does: the renderer binds the core's internals (InternalsVisibleTo), which no
+       version promises to keep, so a newer core resolved beside an older renderer would fail at
+       runtime (MissingMethod/TypeLoad) instead of at restore. maui.yml checks the packed nuspec. -->
+  <Target Name="_PinReactorCoreDependency" AfterTargets="_GetProjectReferenceVersions">
+    <ItemGroup>
+      <_ProjectReferencesWithVersions Update="@(_ProjectReferencesWithVersions)"
+                                      Condition="'%(Filename)' == 'Reactor.Core'"
+                                      ProjectVersion="[%(ProjectVersion)]" />
+    </ItemGroup>
+  </Target>
 
 </Project>

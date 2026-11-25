@@ -41,4 +41,13 @@
     <InternalsVisibleTo Include="PerfBench.RowMemo" />
   </ItemGroup>
 
+  <!-- The MAUI renderer runs its components on the engine's internals too (spec 067 §11.2, §13),
+       as do the assemblies that see its internals. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Microsoft.UI.Reactor.Maui" />
+    <InternalsVisibleTo Include="Reactor.Maui.Tests" />
+    <InternalsVisibleTo Include="Reactor.Maui.Engine.Tests" />
+    <InternalsVisibleTo Include="Reactor.Maui.DeviceTests" />
+  </ItemGroup>
+
 </Project>

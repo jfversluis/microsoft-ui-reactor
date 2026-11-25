@@ -24,6 +24,10 @@ public sealed class ReactorRoot
     private readonly IRenderScheduler _scheduler;
     private readonly Action<object?> _setRootNative;
     private readonly EchoGuard _echo = new();
+    private readonly RootRenderOwner _owner;
+    // The context values in effect for the node being rendered or gated (spec 067 §13): filled
+    // from its ancestor providers just for that call, so the core's UseContext and skip gate read them.
+    private readonly ContextScope _contextScope = new();
     private readonly List<Node> _dirty = [];
     private readonly List<Node> _effectQueue = [];
     private readonly List<Node> _restoreQueue = [];
@@ -42,6 +46,7 @@ public sealed class ReactorRoot
         _registry = registry;
         _scheduler = scheduler;
         _setRootNative = setRootNative;
+        _owner = new RootRenderOwner(scheduler);
         lock (LiveRootsGate)
         {
             LiveRoots.RemoveAll(static r => !r.TryGetTarget(out _));
@@ -132,7 +137,23 @@ public sealed class ReactorRoot
         ReactorRoot[] roots;
         lock (LiveRootsGate)
             roots = [.. LiveRoots.Select(static r => r.TryGetTarget(out var root) ? root : null).OfType<ReactorRoot>()];
-        foreach (var root in roots) root._scheduler.Post(root.MarkAllDirty);
+        foreach (var root in roots) root._scheduler.Post(root.HotReloadPass);
+    }
+
+    // Inside the pass, a component whose edited Render() changed its hooks starts over with fresh
+    // hook state instead of failing (the core's render kernel retries it).
+    private void HotReloadPass()
+    {
+        MarkAllDirty();
+        HotReloadState.WithinUpdatePass = true;
+        try
+        {
+            Flush();
+        }
+        finally
+        {
+            HotReloadState.WithinUpdatePass = false;
+        }
     }
 
     internal void MarkDirty(Node node)
@@ -268,7 +289,10 @@ public sealed class ReactorRoot
         {
             EmptyElement => new Node(element, parent, NodeKind.Empty, this),
             GroupElement => new Node(element, parent, NodeKind.Group, this),
-            ContextProviderElement => new Node(element, parent, NodeKind.Provider, this),
+            ContextProviderElement provider => new Node(element, parent, NodeKind.Provider, this)
+            {
+                Provided = new() { [provider.Context] = provider.Value },
+            },
             ErrorBoundaryElement => new Node(element, parent, NodeKind.Boundary, this),
             ComponentElement => new Node(element, parent, NodeKind.Component, this),
             FuncElement => new Node(element, parent, NodeKind.Func, this) { Context = new RenderContext() },
@@ -296,18 +320,17 @@ public sealed class ReactorRoot
                 {
                     var componentElement = (ComponentElement)element;
                     var component = componentElement.CreateInstance();
-                    if (component is IPropsReceiver receiver) receiver.SetProps(componentElement.Props);
                     node.Component = component;
-                    node.Context = component.Context;
+                    InstallProps(node, componentElement.Props);
                     Wire(node);
-                    RenderNode(node);
+                    RenderNode(node, ComponentRenderMode.Mount);
                     break;
                 }
 
                 case NodeKind.Func:
                 case NodeKind.Memo:
                     Wire(node);
-                    RenderNode(node);
+                    RenderNode(node, ComponentRenderMode.Mount);
                     break;
 
                 case NodeKind.Host:
@@ -353,29 +376,23 @@ public sealed class ReactorRoot
 
             case NodeKind.Component:
             {
-                var rerender = node.Dirty;
-                if (node.Component is IPropsReceiver receiver)
-                {
-                    var newProps = ((ComponentElement)next).Props;
-                    rerender |= receiver.ShouldUpdate(((ComponentElement)previous).Props, newProps);
-                    // Installed even when skipping, so a later state-driven render sees current props.
-                    receiver.SetProps(newProps);
-                }
-                else
-                {
-                    rerender |= node.Component!.ShouldUpdate();
-                }
-                if (rerender) RenderNode(node);
+                // A component's own state change bypasses the gate (as on WinUI); otherwise the
+                // core's gate decides, through ShouldUpdate and the context values it read.
+                var rerender = node.Dirty || !Gate(node, next).Skip;
+                // Installed even when skipping, so a later state-driven render, and an event
+                // handler that reads Props, see the current props (issue #151).
+                InstallProps(node, ((ComponentElement)next).Props);
+                if (rerender) RenderNode(node, ComponentRenderMode.Update);
                 break;
             }
 
             case NodeKind.Func:
-                RenderNode(node);
+                RenderNode(node, ComponentRenderMode.Update);
                 break;
 
             case NodeKind.Memo:
-                if (node.Dirty || !DepsEqual(((MemoElement)previous).Dependencies, ((MemoElement)next).Dependencies))
-                    RenderNode(node);
+                if (node.Dirty || !Gate(node, next).Skip)
+                    RenderNode(node, ComponentRenderMode.Update);
                 break;
 
             case NodeKind.Host:
@@ -390,6 +407,9 @@ public sealed class ReactorRoot
     {
         // Readers are marked dirty first, so the descent below re-renders them in place even when
         // their props did not change.
+        // Always the current value: an equal but distinct one is what a reader that re-renders for
+        // another reason must see. Equality only decides which readers re-render now.
+        node.Provided![next.Context] = next.Value;
         var changed = !Equals(previous.Value, next.Value);
         var readers = changed && node.Subscribers is { Count: > 0 } ? node.Subscribers.ToArray() : [];
         foreach (var reader in readers)
@@ -471,24 +491,23 @@ public sealed class ReactorRoot
         return null!;
     }
 
-    private void RenderNode(Node node)
+    /// <summary>
+    /// Renders a component, function or memo node through the core's render kernel (spec 067 §13)
+    /// and reconciles what it rendered. Its effects run after the commit, deepest first.
+    /// </summary>
+    private void RenderNode(Node node, ComponentRenderMode mode = ComponentRenderMode.Update)
     {
         node.Dirty = false;
-        var context = node.Context!;
-        // Subscriptions are rebuilt by this render's UseContext calls; providers no longer read are dropped.
+        var context = node.HookContext!;
+        // Subscriptions are rebuilt from this render's UseContext calls; providers no longer read are dropped.
         var previousSubscriptions = node.Subscriptions;
         node.Subscriptions = null;
-        Element? rendered;
+        ReactorElement? rendered;
+        var pushed = PushProviders(node);
         try
         {
-            context.BeginRender();
-            rendered = node.Kind switch
-            {
-                NodeKind.Component => node.Component!.Render(),
-                NodeKind.Memo => ((MemoElement)node.Element).RenderFunc(context),
-                _ => ((FuncElement)node.Element).RenderFunc(context),
-            };
-            context.EndRender();
+            var host = new KernelHost();
+            ComponentRenderKernel.TryRender(ref host, node, node.Element, mode, node.Rerender!, _contextScope, _owner, out rendered);
         }
         catch
         {
@@ -496,7 +515,12 @@ public sealed class ReactorRoot
             if (previousSubscriptions is not null) (node.Subscriptions ??= []).UnionWith(previousSubscriptions);
             throw;
         }
+        finally
+        {
+            if (pushed > 0) _contextScope.Pop(pushed);
+        }
 
+        Subscribe(node, context);
         if (previousSubscriptions is not null)
         {
             foreach (var provider in previousSubscriptions)
@@ -504,8 +528,87 @@ public sealed class ReactorRoot
                     provider.Subscribers?.Remove(node);
         }
 
-        ReconcileChildren(node, [rendered]);
+        if (node.Element is MemoElement memo) node.MemoDependencies = memo.Dependencies;
+        node.RenderedElement = rendered;
+        ReconcileChildren(node, [(Element?)rendered]);
         if (context.HasPendingEffects) _effectQueue.Add(node);
+    }
+
+    /// <summary>The core's skip gate for a component or memo node, with its context values in scope.</summary>
+    private ComponentGateResult Gate(Node node, Element next)
+    {
+        var pushed = PushProviders(node);
+        try
+        {
+            return ComponentGate.Evaluate(node, next, _contextScope);
+        }
+        finally
+        {
+            if (pushed > 0) _contextScope.Pop(pushed);
+        }
+    }
+
+    private static void InstallProps(Node node, object? props)
+    {
+        if (node.Component is not IPropsReceiver receiver) return;
+        // A nullable TProps can be null; the receiver casts it back.
+        receiver.SetProps(props!);
+        node.PreviousProps = props;
+    }
+
+    /// <summary>
+    /// Pushes the values of the providers above <paramref name="node"/> onto the context scope,
+    /// outermost first so the nearest wins. Returns how many entries to pop.
+    /// </summary>
+    private int PushProviders(Node node) => node.NearestProvider is { } provider ? PushFrom(provider) : 0;
+
+    private int PushFrom(Node provider)
+    {
+        var pushed = provider.NearestProvider is { } outer ? PushFrom(outer) : 0;
+        var values = provider.Provided!;
+        _contextScope.Push(values);
+        return pushed + values.Count;
+    }
+
+    /// <summary>Subscribes the node to the nearest provider of each context its last render read.</summary>
+    private static void Subscribe(Node node, RenderContext context)
+    {
+        foreach (var hook in context.ContextHooks)
+        {
+            for (var provider = node.NearestProvider; provider is not null; provider = provider.NearestProvider)
+            {
+                if (!ReferenceEquals(((ContextProviderElement)provider.Element).Context, hook.Context)) continue;
+                (provider.Subscribers ??= []).Add(node);
+                (node.Subscriptions ??= []).Add(provider);
+                break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The MAUI policy for the core's render kernel: every failure propagates, because the engine
+    /// routes it to the nearest boundary or fails the root itself; effects are queued for after the
+    /// commit rather than flushed inline; and the hook count must not change between renders.
+    /// </summary>
+    private struct KernelHost : IComponentRenderHost
+    {
+        public readonly ReactorElement? Render(ReactorComponent? component, IRenderFunctionElement? function, RenderContext context)
+        {
+            var rendered = component is not null ? component.Render() : function!.Render(context);
+            context.ValidateHookCount();
+            return rendered;
+        }
+
+        public readonly void FlushEffects(RenderContext context) { }
+        public readonly bool UnderBoundary => true;
+        public readonly bool IsPropagating(Exception error) => false;
+        public readonly void OnRethrow(Exception error) { }
+        public readonly ReactorElement OnFallback(Exception error, bool inEffects) =>
+            throw new InvalidOperationException("Unreachable: every MAUI component render is treated as under a boundary.");
+        public readonly bool ObservesUnhandled => false;
+        public readonly void OnUnhandled(Exception error) { }
+        public readonly void OnHookOrderRetry(HookOrderException error) { }
+        public readonly void OnHookOrderReset() { }
     }
 
     /// <summary>
@@ -593,7 +696,7 @@ public sealed class ReactorRoot
         node.Dirty = false;
         foreach (var child in node.Children) Unmount(child, errors);
 
-        node.Context?.RunCleanups(errors);
+        node.HookContext?.RunCleanupsIsolated(errors.Add);
         if (node.Subscriptions is { } subscriptions)
             foreach (var provider in subscriptions) provider.Subscribers?.Remove(node);
         if (node.Kind == NodeKind.Host && node.Native is { } native)
@@ -667,10 +770,8 @@ public sealed class ReactorRoot
 
     private void Wire(Node node)
     {
-        var context = node.Context!;
-        context.Scheduler = _scheduler;
-        context.Owner = node;
-        context.RequestRerender = () => MarkDirty(node);
+        node.Rerender = () => MarkDirty(node);
+        node.HookContext!.RenderThreadEnqueue = _owner.Enqueue;
     }
 
     private void SyncHost(Node host)
@@ -770,7 +871,7 @@ public sealed class ReactorRoot
                 if (node.Unmounted) continue;
                 try
                 {
-                    node.Context!.RunPendingEffects();
+                    node.HookContext!.FlushEffects();
                 }
                 catch (Exception ex)
                 {
@@ -799,14 +900,6 @@ public sealed class ReactorRoot
         && a.Key == b.Key
         && (a is not ComponentElement ca || ca.ComponentType == ((ComponentElement)b).ComponentType)
         && (a is not ContextProviderElement pa || ReferenceEquals(pa.Context, ((ContextProviderElement)b).Context));
-
-    private static bool DepsEqual(object?[] previous, object?[] next)
-    {
-        if (previous.Length != next.Length) return false;
-        for (var i = 0; i < previous.Length; i++)
-            if (!Equals(previous[i], next[i])) return false;
-        return true;
-    }
 
     private void EnsureAccess()
     {

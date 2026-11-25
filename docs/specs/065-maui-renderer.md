@@ -15,32 +15,31 @@ model targets Android, iOS, Mac Catalyst and Windows through MAUI.
 |---|---|---|
 | Architecture | A renderer-neutral core plus one renderer per UI framework, as React splits `react-reconciler` from `react-dom` | The hooks, diffing and scheduling are the product; the target framework is a detail. |
 | Renderer strategy | **Hybrid.** Direct views (MAUI Core interfaces, no Controls layer) for primitives and layouts; Controls for `CollectionView`, Shell, navigation and third-party controls | §4: direct is 27–58% faster on bulk work, but Controls owns virtualization, Shell and the ecosystem. |
-| Location | This repo, as `src/Reactor.Maui.Core` (transitional) and `src/Reactor.Maui` with their own solution (`Reactor.Maui.slnx`) and CI (`.github/workflows/maui.yml`, macOS) | Keeps the WinUI build and pipelines untouched while sharing the repo. |
+| Location | This repo, as `src/Reactor.Maui` over the shared `src/Reactor.Core`, with its own solution (`Reactor.Maui.slnx`) and CI (`.github/workflows/maui.yml`, macOS) | Keeps the WinUI build and pipelines untouched while sharing the repo. |
 | WinUI convergence | Superseded by spec 067, which extracts the shared core from the WinUI engine and re-hosts this renderer on it | Originally deferred: moving the 9,000-line WinUI reconciler is the riskiest step; a core designed from one consumer gets its seams wrong. |
-| Names | `Microsoft.UI.Reactor.Maui` plus a transitional core, `Microsoft.UI.Reactor.Maui.Core` (namespace `Microsoft.UI.Reactor.Core`) | Spec 067 extracts the shared `Microsoft.UI.Reactor.Core` from the WinUI engine; the transitional core is deleted once the MAUI renderer is re-hosted on it. |
+| Names | `Microsoft.UI.Reactor.Maui`, over the shared `Microsoft.UI.Reactor.Core` | Spec 067 extracted the shared core from the WinUI engine; the transitional `Microsoft.UI.Reactor.Maui.Core` was deleted when this renderer moved onto it (spec 067 §13). |
 
 ## 3. Layout
 
 | Project | Target | Role |
 |---|---|---|
-| `src/Reactor.Maui.Core` | `net10.0` | Transitional renderer-neutral core (spec 067 replaces it): `Element`, `Component`, hooks, keyed reconciler, batched scheduler, handler contract. No UI framework reference. |
-| `src/Reactor.Maui` | `net11.0` + `-android/-ios/-maccatalyst/-windows` | MAUI element records, both renderers (§4), `ReactorPage`. The plain `net11.0` target exists for headless tests. |
-| `tests/Reactor.Maui.Core.Tests` | `net10.0` | Headless core tests against an in-memory fake renderer. |
+| `src/Reactor.Core` | `net10.0` | The core shared with WinUI (spec 067): `ReactorElement`, `ReactorComponent`, `RenderContext` and its hooks, `Context<T>`, the skip gate and the render kernel. No UI framework reference. |
+| `src/Reactor.Maui` | `net11.0` + `-android/-ios/-maccatalyst/-windows` | The MAUI `Element` and `Component`, the node engine (`Engine/`: keyed reconciler, batched scheduler, handler contract), MAUI element records, both renderers (§4), `ReactorPage`. The plain `net11.0` target exists for headless tests. |
+| `tests/Reactor.Maui.Engine.Tests` | `net11.0` | Headless engine tests against an in-memory fake renderer. |
 | `tests/Reactor.Maui.Tests` | `net11.0` | Headless renderer tests: real Controls objects and direct views, no platform handlers. |
 | `tests/Reactor.Maui.DeviceTests` | MAUI app | Device tier: fixtures that mount trees through the real platform handlers, act like the platform (taps, typing, back button, modal dismissal, tab selection) and check what the native views show. Prints TAP; `run.sh maccatalyst\|ios\|android`. |
 | `tests/Reactor.Maui.Benchmark` | MAUI app | Renders the same tree through both renderers and reports timings and allocations. |
 | `samples/maui/Reactor.Maui.Sample` | MAUI app | Gallery: tabs, a navigation stack held in state, counter, background-timer effect, keyed todo list, value controls, a `CollectionView`, the app hooks. `REACTOR_RENDERER=direct` switches renderer; `REACTOR_SAMPLE_ROUTE=<demo>` opens a demo at startup. |
 
-`Reactor.Maui.Core` targets `net10.0` and references no UI framework. It is transitional: spec 067's
-`Microsoft.UI.Reactor.Core` (`src/Reactor.Core`), extracted from the WinUI engine, replaces it.
-The MAUI projects target `net11.0` because that is what the MAUI workload ships for SDK 11.
+The shared core targets `net10.0` and references no UI framework; the MAUI renderer runs its
+components, hooks and context on it (spec 067 §13). The MAUI projects target `net11.0` because that is what the MAUI workload ships for SDK 11.
 They inherit the repo-root MSBuild settings; `Directory.Packages.props` pins
 `Microsoft.Maui.Controls` to the installed workload's `$(MauiVersion)`, and `samples/maui/`
 chains straight to the root props to skip the WinUI-specific sample wiring.
 
 ```bash
 dotnet restore Reactor.Maui.slnx -p:Configuration=Release
-dotnet test tests/Reactor.Maui.Core.Tests --no-restore -c Release
+dotnet test tests/Reactor.Maui.Engine.Tests --no-restore -c Release
 dotnet test tests/Reactor.Maui.Tests --no-restore -c Release
 dotnet build Reactor.Maui.slnx --no-restore -c Release
 
@@ -60,8 +59,8 @@ open --stderr /tmp/bench.log "tests/Reactor.Maui.Benchmark/bin/Release/net11.0-m
 
 ## 4. Two renderers: Controls and direct
 
-Both renderers consume the same element records and the same `Reactor.Maui.Core`; only the
-handler registry differs.
+Both renderers consume the same element records and the same engine; only the handler registry
+differs.
 
 - **Controls renderer** (`Handlers/MauiHandlers.cs`). Reactor handlers create and update
   `Microsoft.Maui.Controls` objects (`Label`, `Entry`, `VerticalStackLayout`…), which MAUI's
@@ -139,41 +138,48 @@ outstanding JNI global references, which is worth investigating separately.
 
 ```mermaid
 flowchart LR
-  subgraph Core["Reactor.Maui.Core (no UI framework)"]
-    C[Component + hooks] --> R[ReactorRoot<br/>retained node tree,<br/>keyed diff, batching, effects]
-    R --> H[IElementHandler contract]
-    R --> S[IRenderScheduler]
+  subgraph Core["Reactor.Core (shared with WinUI; no UI framework)"]
+    C[ReactorComponent + RenderContext hooks]
+    G[Skip gate + render kernel]
   end
   subgraph Maui["Reactor.Maui"]
+    R[Engine: ReactorRoot<br/>retained node tree,<br/>keyed diff, batching, effects]
+    H[IElementHandler contract]
+    S[IRenderScheduler]
     MH[Handlers: controls, layouts,<br/>lists, pages, navigation]
     MS[Dispatcher-backed scheduler]
     P[ReactorWindow / ReactorPage]
   end
+  R --> C
+  R --> G
+  R --> H
+  R --> S
   H -.implemented by.-> MH
   S -.implemented by.-> MS
   P --> R
 ```
 
-A renderer implements, per control, `Mount`, `Update`, optional `Unmount`, and a children
+A handler implements, per control, `Mount`, `Update`, optional `Unmount`, and a children
 strategy (`ChildrenStrategy.List` for panels, `ChildrenStrategy.Single` for content hosts).
-The core does everything else.
+The engine and the shared core do everything else.
 
 Design choices that differ from today's WinUI Reactor, and why:
 
-- **The core keeps its own node tree** instead of storing state on native controls through
-  an attached property. That is what removes the dependency on any UI framework. Handlers
+- **The engine keeps its own node tree** instead of storing state on native controls through
+  an attached property. A component node's state is the shared core's `ComponentNode`, so the
+  core's skip gate and render kernel run on it. Handlers
   wire events once at mount and read `context.Current` when the event fires.
-- **Native controls are `object` to the core.** Each handler is strongly typed; the
+- **Native controls are `object` to the engine.** Each handler is strongly typed; the
   registry erases the types. Natives are always reference types, so nothing is boxed.
-- **Components and groups produce no native control.** After reconciling, the core
+- **Components and groups produce no native control.** After reconciling, the engine
   flattens each host's descendants into the ordered native children it should have and
   hands that list to the children strategy, which moves only what changed.
-- **Echo suppression is a core primitive** (`HandlerContext.WriteSuppressed` /
+- **Echo suppression is an engine primitive** (`HandlerContext.WriteSuppressed` /
   `IsEchoing`), so a programmatic write's change event is not reported as user input.
 
 ## 6. What has been proven
 
-**Core, headless** (`tests/Reactor.Maui.Core.Tests`, 44 tests). Mounting through components and
+**Engine, headless** (`tests/Reactor.Maui.Engine.Tests`, 44 tests). Mounting through components and
 groups. A keyed reorder keeps component state *and* the same native controls. Removal unmounts
 and runs effect cleanups. Duplicate keys fail loudly, and changing the root's key remounts it.
 Setters are batched into one posted flush, across components, and hosts are re-synced only after
@@ -225,7 +231,7 @@ The device tier found two bugs the headless tiers could not. Both are fixed:
 An independent review (a different model family) of the navigation code found more, each
 reproduced before it was fixed and covered by a fixture that fails without the fix:
 - An accepted back navigation re-pushed the page once (a visible flicker on iOS and Android). The
-  handler ran the navigator from `Update`, which the core calls before syncing the new children,
+  handler ran the navigator from `Update`, which the engine calls before syncing the new children,
   so it reconciled against the previous declaration. It now runs only for an unchanged element
   (the restore after a refused pop).
 - iOS raises `Popped` before it removes the page, so a refused pop could be judged "already
@@ -257,7 +263,7 @@ and the direct-renderer todos page were checked on the iPhone simulator.
   Controls-only setting) still lists only its Controls children in the visual tree. Only
   `DirectViewHost` re-implements that.
 - **Components never own a native control.** WinUI Reactor can wrap a component in a control so
-  modifiers such as `Component<T>().Margin(8)` apply to it. This core treats components as
+  modifiers such as `Component<T>().Margin(8)` apply to it. The MAUI engine treats components as
   purely compositional, so WinUI convergence needs a renderer-owned wrapper extension point.
 - **Hot reload is verified headlessly only**, by invoking the metadata-update handler. It has not
   been exercised from an IDE session.
