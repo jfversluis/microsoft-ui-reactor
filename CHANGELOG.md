@@ -38,9 +38,11 @@ Conventions for contributors:
   views that skip the Controls layer (27–58% faster on bulk work) and falls back to Controls per
   element. An app overrides a built-in handler by registering its own on the registry, and
   `RegisterForDerivedTypes` registers one handler for a family of element types (spec 067 §15).
-  Custom handlers invoke callbacks through `HandlerContext.Live`, which is `null` once the
+  A `ControlDescriptor` describes a custom control in a few lines, with verbs modeled on WinUI's
+  descriptors (spec 067 §16). Custom handlers invoke callbacks through `HandlerContext.Live`, which is `null` once the
   element is unmounted, so input a control raises after teardown reaches no callback; a page the app
-  removes doesn't report `OnDisappearing` (use an effect's cleanup) (spec 067 §14).
+  removes doesn't report `OnDisappearing` (use an effect's cleanup) (spec 067 §14). Views Reactor
+  removes have their MAUI handlers disconnected (spec 067 §16).
   Built with `Reactor.Maui.slnx` and tested in `.github/workflows/maui.yml`, including a
   device tier that runs on the real platform controls. It doesn't change the WinUI packages.
 

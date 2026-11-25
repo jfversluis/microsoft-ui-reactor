@@ -43,6 +43,8 @@ public sealed class UppercaseForm : Component<List<string>>
     }
 }
 
+// Both classes drive Row, whose SetNote map is static; xUnit runs classes in parallel otherwise.
+[Collection("RowState")]
 public class ControlsRendererTests
 {
     private static TestHost Host() => new(MauiHandlers.CreateRegistry());
@@ -116,6 +118,7 @@ public class ControlsRendererTests
     }
 }
 
+[Collection("RowState")]
 public class DirectRendererTests
 {
     private static TestHost Host() => new(DirectHandlers.CreateRegistry());

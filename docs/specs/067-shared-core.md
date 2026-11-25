@@ -846,3 +846,66 @@ was resolved under, and lookups accept only the current one. Its registration la
 explicitly (`MauiHandlers.CreateRegistry()`, `DirectHandlers.CreateRegistry()`), and nothing a
 latch does populates a MAUI root.
 
+## 16. Phase 3e: descriptors
+
+Spec §12.3's descriptor gate covers the order of props and children, live-element access in
+events, restore-after-event and hybrid remounts. §12.2 judged extracting WinUI's descriptor
+interpreter "shaped by one consumer". Writing MAUI's confirms it. What WinUI's entries mostly do is
+WinUI's:
+
+- clear a `DependencyProperty` so value precedence falls back;
+- subscribe routed or typed events through the per-control trampoline that pooling needs;
+- arm the value-diff echo for late echoes;
+- bridge flyouts through `MountContext`.
+
+MAUI has none of those. Its entries are a bindable-property write or clear, an echo scope (§14), and
+`HandlerContext.Live`. So descriptors converge on the authoring surface, not on shared code.
+
+MAUI gets a public `ControlDescriptor<TElement, TView>` (`src/Reactor.Maui/Handlers/ControlDescriptor.cs`).
+It is a handler built from entries, with WinUI's verbs:
+
+| Verb | WinUI | MAUI |
+|---|---|---|
+| A value Reactor owns | `OneWay` (and `OneWay` with `Optional<T>`, which clears the DP) | `OneWay`; `Property(BindableProperty, get)`, which clears when the value is `null` |
+| Written once | `Initial` / `InitialOnly` | `Initial` |
+| A value the user changes and the element declares | `Controlled(get, set, subscribe, unsubscribe, callback, readBack)`; an unset `Optional` value leaves it uncontrolled | `Controlled(get, set, subscribe, callback, readBack)`, always controlled; no `unsubscribe`, since a view is never reused |
+| A coerced value | `CoercingOneWay` | none yet: coercing controls stay hand-written |
+| Anything else the control reports | `HandCodedEvent` | `Event((context, view) => …)` |
+| Teardown, remount | `WithUnmount`; remounting is the reconciler's type and key check | `WithUnmount`, `WithCanUpdate` |
+| Children | children strategies | `WithChildren(IChildrenStrategy)` |
+
+The gate's four points, on MAUI:
+
+- **Order.** On mount, a descriptor creates the view, then every entry writes its initial value, then
+  the element's modifiers are applied, and only then are events wired. Initial writes before events
+  is WinUI's KD-1b rule: no initial write can be reported as input. Applying the modifiers before
+  events is MAUI's own, stricter order (WinUI applies them after the handler returns). Children are
+  reconciled after the handler returns, so props come before children; WinUI's panel strategies do
+  the same, while its items strategies bind items before props (§12.1).
+- **Live element.** A controlled entry reports through `HandlerContext.Live`, and an `Event` entry
+  gets the context to do the same, so nothing reaches an unmounted element (§14).
+- **Restore-after-event.** A controlled entry compares the view's value with the declared one, not
+  with the old element's. The restore after a refused input (an update with the same element on both
+  sides) therefore puts the declared value back, inside the echo scope.
+- **Hybrid remounts.** A descriptor is an ordinary handler, so `DirectHandlers`' hybrids wrap it as
+  they did the hand-written handlers. `WithCanUpdate` gives third-party controls the same remount hook.
+
+Eight built-in Controls handlers are now descriptors (`ControlDescriptors`): `BoxView`,
+`ActivityIndicator`, `ProgressBar`, `CheckBox`, `Switch`, `RadioButton`, `Editor` and `SearchBar`.
+Controls with coercion or several coupled values (`Entry`'s text and selection, `Slider`, `Stepper`,
+the pickers) stay hand-written for now. That is a MAUI decision: WinUI describes its slider, text box,
+number box and combo box declaratively (`CoercingOneWay`, `HandCodedControlled`), and a MAUI
+`CoercingOneWay` is the matching gap. The
+descriptor is what phase 4's MAUI wrapper generator emits for third-party controls.
+
+**Removed views are disconnected** (found by this phase's device gate). Reactor removed views but
+left their MAUI handlers connected, and some MAUI views stay subscribed to app-wide events: on
+Android, a theme change after a `SearchBar` was removed crashed on its released native views
+(SIGSEGV in `SearchBarHandler.MapPlaceholderColor`, 2 of 4 full device runs). Now the engine records
+the top-most native of every subtree it unmounts, and hands each one to the registry's release hook
+once the pass has synchronized its host. MAUI's hook disconnects the view's handlers with its
+subtree: at once if it is no longer loaded, otherwise when it unloads, as MAUI does for a popped
+page. Pages themselves, and so a popped page's content, are left to MAUI's own disconnect after the
+pop. `HandlerDisconnectPolicy.Manual` opts a view out. The release works for every handler kind,
+built-in, descriptor, direct or third-party, because it lives in the engine.
+

@@ -104,6 +104,7 @@ internal static class Props
 /// <summary>Applies <see cref="ViewModifiers"/> to a Controls view.</summary>
 internal static class ViewApplier
 {
+
     private sealed class GestureState
     {
         public TapGestureRecognizer? Tap;
@@ -232,4 +233,40 @@ internal static class ViewApplier
 internal sealed class DirectViewHost : Grid, IVisualTreeElement
 {
     IReadOnlyList<IVisualTreeElement> IVisualTreeElement.GetVisualChildren() => [.. Children.OfType<IVisualTreeElement>()];
+}
+
+/// <summary>What happens to a view once Reactor has removed it.</summary>
+internal static class RemovedViews
+{
+    /// <summary>
+    /// Disconnects a removed view's handlers, with its subtree. MAUI keeps them otherwise, and some
+    /// views stay subscribed to app-wide events: on Android a theme change then reached a removed
+    /// <c>SearchBar</c>'s released native views and crashed (SIGSEGV in
+    /// <c>SearchBarHandler.MapPlaceholderColor</c>). As MAUI does for a popped page, a view that is
+    /// still loaded (still animating out, for example) is disconnected when it unloads.
+    /// <c>HandlerDisconnectPolicy.Manual</c> opts a view out. Pages are left to MAUI, which
+    /// disconnects a page, and its content, once it has been popped.
+    /// </summary>
+    public static void Release(object native)
+    {
+        if (native is Page || native is not IView { Handler: not null } view) return;
+        if (view is VisualElement { IsLoaded: true } loaded)
+        {
+            void OnUnloaded(object? sender, EventArgs e)
+            {
+                loaded.Unloaded -= OnUnloaded;
+                try
+                {
+                    if (loaded.Handler is not null) loaded.DisconnectHandlers();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Trace.TraceError($"Reactor: disconnecting a removed view failed: {ex}");
+                }
+            }
+            loaded.Unloaded += OnUnloaded;
+            return;
+        }
+        view.DisconnectHandlers();
+    }
 }

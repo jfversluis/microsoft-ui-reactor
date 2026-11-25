@@ -28,6 +28,7 @@ public static partial class Fixtures
             new($"Label_WrapsLongTextByDefault [{r.Name}]", c => LabelWraps(c, r.Create())),
         }),
         .. EchoFixtures(),
+        .. TeardownFixtures(),
         new("NavigationStack_PushReachesThePlatform_AndBackIsReported", NavigationBack),
         new("NavigationStack_BackDuringThePushAnimation_IsReported", NavigationBackDuringPush),
         new("NavigationStack_BackTheAppRefuses_PushesThePageBack", NavigationRefusedBack),

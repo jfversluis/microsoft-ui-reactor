@@ -173,6 +173,16 @@ Design choices that differ from today's WinUI Reactor, and why:
   teardown reaches no callback.
 - **Native controls are `object` to the engine.** Each handler is strongly typed; the
   registry erases the types. Natives are always reference types, so nothing is boxed.
+- **Removed views are disconnected.** Once the pass that removes a subtree has run, the engine hands
+  its top-most native to the registry's release hook; MAUI's disconnects the view's handlers with its
+  subtree (when it unloads, if it is still loaded), honoring `HandlerDisconnectPolicy.Manual`. Pages
+  are left to MAUI's own disconnect after a pop. Reactor never reuses an unmounted view. Without
+  this, a removed input view stayed subscribed to app theme changes, and on Android a theme change
+  crashed on its released native views (spec 067 §16).
+- **Controls are described or hand-written.** A public `ControlDescriptor<TElement, TView>` builds
+  a handler from entries (`Property`, `OneWay`, `Initial`, `Controlled`, `Event`) with verbs modeled on WinUI's,
+  and applies the element's modifiers like every built-in control (spec 067 §16). Eight built-ins use
+  it; the rest are hand-written handlers.
 - **The registry is per root, and the last registration wins**, so an app overrides a built-in
   handler by registering its own. `RegisterForDerivedTypes` registers one handler for a family of
   element records that share a non-generic base (for example the closed types of a generic record
@@ -202,13 +212,13 @@ restored when a callback rejects input, `CanUpdate` remounts, and hot reload re-
 root, and errors a handler reports from its own asynchronous work (`HandlerContext.ReportError`)
 reaching boundaries. A boundary test fails if the core references anything but `System.*`.
 
-**Renderer, headless** (`tests/Reactor.Maui.Tests`, 40 tests). Real Controls objects and direct
+**Renderer, headless** (`tests/Reactor.Maui.Tests`, 52 tests). Real Controls objects and direct
 views, no platform handlers: modifiers, every control's props and echo-free events, the hybrid
 fallback and mixed trees, `CollectionView` cells as child roots, pages, toolbar items, the
 navigation stack's reconcile, the user-pop rule (below), tabs and flyout (including swapping the
 two flyout pages between slots).
 
-**Device tier** (`tests/Reactor.Maui.DeviceTests`, 34 fixtures). All pass on Mac Catalyst (macOS 26,
+**Device tier** (`tests/Reactor.Maui.DeviceTests`, 39 fixtures). All pass on Mac Catalyst (macOS 26,
 Apple silicon), an iPhone 18 Pro simulator (iOS 27) and the Android API 37 emulator; the 25 earlier
 ones also ran on a Pixel 10 (Android 16). They check what the
 native views show, not the virtual tree:
@@ -223,7 +233,9 @@ native views show, not the virtual tree:
 - Echo, on both renderers (spec 067 §14): Reactor's writes to the eleven controlled form controls
   report nothing, at once or later; a coerced write shows the coerced value and reports nothing,
   without looping; input the app refuses is reported once and restored; input after unmount is not
-  reported. A page the app removes doesn't report `OnDisappearing`; a covered page does.
+  reported. A page the app removes doesn't report `OnDisappearing`; a covered page does. Removed
+  views are disconnected (siblings that stay are not, nor a popped page's content while it animates
+  out), and app theme changes after their removal don't crash.
 - Navigation: a push reaches the platform stack (`UINavigationController` depth on iOS); the back
   button reaches app state; a back press *while the push animation still runs* is reported; a pop
   the app refuses is undone, including when the navigator is idle; an accepted back never re-pushes

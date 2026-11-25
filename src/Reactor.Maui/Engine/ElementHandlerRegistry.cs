@@ -13,6 +13,12 @@ public sealed class ElementHandlerRegistry
 {
     private readonly HandlerTable<IHandlerAdapter> _handlers = new();
 
+    /// <summary>
+    /// Releases a control Reactor removed, once it is out of the native tree. For MAUI: disconnects
+    /// its handlers (<see cref="Maui.Handlers.RemovedViews.Release"/>). Tests replace it.
+    /// </summary>
+    internal Action<object>? ReleaseNative { get; set; } = Maui.Handlers.RemovedViews.Release;
+
     /// <summary>Registers <paramref name="handler"/> for exactly <typeparamref name="TElement"/>, replacing any earlier one.</summary>
     public ElementHandlerRegistry Register<TElement, TControl>(IElementHandler<TElement, TControl> handler)
         where TElement : Element
