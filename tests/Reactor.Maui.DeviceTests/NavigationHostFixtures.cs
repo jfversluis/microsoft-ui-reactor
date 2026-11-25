@@ -34,6 +34,7 @@ public static partial class Fixtures
     {
         public List<string> Entries { get; } = [];
         public HashSet<string> RefuseFrom { get; } = [];
+        public HashSet<string> RefuseTo { get; } = [];
         public Func<string>? PlatformDepth { get; set; }
         public int Guards(string route) => Entries.Count(e => e == $"{route}:navigatingFrom:{NavigationMode.Pop}");
         public string Take()
@@ -52,7 +53,11 @@ public static partial class Fixtures
         {
             var (route, log) = (Props.Route, Props.Log);
             UseNavigationLifecycle(
-                onNavigatingTo: c => log.Entries.Add($"{route}:navigatingTo:{c.Mode}"),
+                onNavigatingTo: c =>
+                {
+                    log.Entries.Add($"{route}:navigatingTo:{c.Mode}");
+                    if (log.RefuseTo.Contains(route)) c.Cancel();
+                },
                 // The platform's depth when the navigation completes, and whether the navigator was still
                 // busy: it must have finished the push or pop.
                 onNavigatedTo: c => log.Entries.Add($"{route}:navigatedTo:{c.Mode}@{log.PlatformDepth?.Invoke()}"),
