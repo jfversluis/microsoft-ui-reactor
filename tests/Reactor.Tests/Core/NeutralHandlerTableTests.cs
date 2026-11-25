@@ -120,14 +120,16 @@ public class NeutralHandlerTableTests
     }
 
     // Resolves a hit and a miss for two types in a collectible assembly, keeping no reference.
-    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    [global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    [global::System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("AOT", "IL3050",
+        Justification = "Test-only: emits a collectible assembly to check the table doesn't retain it. Reactor.Tests runs on the JIT, never NativeAOT-published.")]
     private static WeakReference ResolveCollectibleTypes(HandlerTable<string> table)
     {
-        var assembly = System.Reflection.Emit.AssemblyBuilder.DefineDynamicAssembly(
-            new System.Reflection.AssemblyName("CollectibleHandlerTableTypes"), System.Reflection.Emit.AssemblyBuilderAccess.RunAndCollect);
+        var assembly = global::System.Reflection.Emit.AssemblyBuilder.DefineDynamicAssembly(
+            new global::System.Reflection.AssemblyName("CollectibleHandlerTableTypes"), global::System.Reflection.Emit.AssemblyBuilderAccess.RunAndCollect);
         var module = assembly.DefineDynamicModule("Types");
-        var derived = module.DefineType("Derived", System.Reflection.TypeAttributes.Public, typeof(CollectibleBase)).CreateType();
-        var unrelated = module.DefineType("Unrelated", System.Reflection.TypeAttributes.Public).CreateType();
+        var derived = module.DefineType("Derived", global::System.Reflection.TypeAttributes.Public, typeof(CollectibleBase)).CreateType();
+        var unrelated = module.DefineType("Unrelated", global::System.Reflection.TypeAttributes.Public).CreateType();
         Assert.True(derived.IsCollectible);
 
         Assert.True(table.TryResolve(derived, out var hit));
