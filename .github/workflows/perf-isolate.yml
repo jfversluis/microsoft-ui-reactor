@@ -16,17 +16,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: stocks50-phase2c-vs-phase3a
+          - name: stocks50-main-vs-phase3a
             kind: stocks50
-            base: d17672c40ad3763c69eb99581821f6eaada68053
-            head: d3514dce0843f1324ff9c24323ff190939a29e6f
-          - name: stocks50-aa-phase3a
-            kind: stocks50
-            base: d3514dce0843f1324ff9c24323ff190939a29e6f
-            head: d3514dce0843f1324ff9c24323ff190939a29e6f
-          - name: micro-phase2c-vs-phase3a
-            kind: micro
-            base: d17672c40ad3763c69eb99581821f6eaada68053
+            base: 14172dce0af5887c13493a0e345d76e09241cd33
             head: d3514dce0843f1324ff9c24323ff190939a29e6f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
