@@ -77,7 +77,7 @@ their sources. It sets the order in §4.
 | Typed navigation (`UseNavigation<TRoute>`, `NavigationHandle<TRoute>`, `UseNavigationLifecycle`, `NavigationHost`) | ✅ | spec 069 §2; WinUI's API over the shared model. Headless `NavigationHostTests`, core `NavigationModelTests`, device `NavigationHost_*` fixtures on all three platforms, and the `Reactor.Navigation.AotSmoke` AOT proof |
 | FlyoutPage (`Flyout`) | 🧪 | headless tests only, no device fixture |
 | ToolbarItems | 🧪 | primary and secondary order; headless tests only |
-| Shell | ⬜ 4b | 6 of 7 ports use it as their root. Declarative and state-driven, like `NavigationStack`. Scope from the ports: `TabBar`; `FlyoutItem` and custom flyout content; absolute (`//route`) and relative (`..`) routes with query parameters; `NavBarIsVisible` / `TabBarIsVisible` per page; `Navigating` interception and `BackButtonBehavior`; the selected item's state (WeatherTwentyOne styles it with a trigger); search handler. Routes are typed, as in WinUI's `NavigationHandle<TRoute>` / `UseNavigation<TRoute>` (spec 011): query parameters are fields of the route record, and string URIs exist only at the deep-link boundary. Back interception follows WinUI's back-handling contract |
+| Shell | ✅ | spec 069 §4 (4b-2): `Shell`, `TabBar`, `FlyoutItem`, `ShellMenuItem`, `ShellTab` (a page or a `NavigationHost`, whose routes are the tab's stack) and top-tab `ShellContent`, keyed by the app; the selection held in state (a user's switch reported from `Navigated`, a refused one undone, an unknown key falling back to the first tab, reported once); the back button, swipe and Android back key preflighted in `Shell.Navigating`, so a refused back moves no page; flyout state, header, footer and content; appearance colors; `NavBarIsVisible`, `TabBarIsVisible`, `TitleView`, `SearchHandler` (an object), `PresentationMode` and `BackButtonBehavior` per page. Routes are typed: an absolute route (`//route`) is a selection plus the tab handle's `Reset`; a relative back with a result (`..?refresh=true`) is the result kept in app state or context that the destination reads, then `GoBack` (putting it in the route takes `PopTo` and `Replace`, and remounts the page); deep links resolve with `DeepLinkMap`. A route page can't be presented modally in a tab (the host's `Modals` are). Evidence: headless `ShellTests`, device `Shell_*` fixtures on all three platforms. Not in 4b-2: a declarative search element, top tabs with their own stacks, Windows (4g) |
 | Page dialogs: alert, action sheet, prompt | ⬜ 4b | 5 of 7 ports. No Reactor API today. 4b picks the shape: an imperative hook bound to the current page (such as `UseDialogs()`), or a controlled element |
 | Toast and Snackbar (CommunityToolkit) | ⬜ 4f | 2 ports; part of the CommunityToolkit validation |
 | Android back button outside Shell (`OnBackButtonPressed`) | 🟡 | done under `NavigationHost` (a guarded back, consumed unless at the root; spec 069 §2.4). `UseSystemBackButton` for back handling outside navigation: 4b-3 |
@@ -156,8 +156,8 @@ their sources. It sets the order in §4.
     defensive.
   - Not covered: a platform back gesture in flight at the moment of the swap (the navigator isn't
     running then). Next step: file the plain-MAUI repro in dotnet/maui.
-- **Back gestures and platform pops** are reconciled with a 3-second cutoff (`StackNavigator`);
-  replace it with MAUI's navigation-completed signal (4b, with Shell).
+- **Back gestures and platform pops** are reconciled with a 3-second cutoff (`StackNavigator`).
+  Inside Shell this is replaced by MAUI's navigation-completed signal (spec 069 §4.2); a `NavigationPage` keeps the cutoff.
 - **Android JNI references.** Phase 3e's SIGSEGV after a theme change was one instance: removed
   views were never disconnected. Removed views are now disconnected (spec 067 §16). A full-suite
   memory and handle check on Android lands with phase 5's harness.

@@ -177,6 +177,119 @@ public static class Platform
 #endif
     }
 
+    /// <summary>Whether the platform shows <paramref name="page"/>: its native view is in the window and visible.</summary>
+    public static bool IsDisplayed(Page page)
+    {
+#if IOS || MACCATALYST
+        return page.Handler is IPlatformViewHandler { ViewController.View: { Window: not null, Hidden: false } };
+#elif ANDROID
+        // A hidden tab's or covered page's view can stay attached; only one on screen has a visible rectangle.
+        return page.Handler?.PlatformView is Android.Views.View { IsAttachedToWindow: true, IsShown: true, Width: > 0 } view
+            && view.GetGlobalVisibleRect(new Android.Graphics.Rect());
+#else
+        return page.IsLoaded;
+#endif
+    }
+
+    /// <summary>
+    /// The depth of the native navigation stack <paramref name="top"/> is in (iOS and Mac Catalyst: the
+    /// section's UINavigationController, root included), where the platform exposes it.
+    /// </summary>
+    public static int? SectionDepth(Page top)
+    {
+#if IOS || MACCATALYST
+        if (top.Handler is IPlatformViewHandler { ViewController: { } controller })
+            return (controller.NavigationController ?? controller.ParentViewController?.NavigationController)?.ViewControllers?.Length;
+#endif
+        return null;
+    }
+
+    /// <summary>
+    /// The user's back in a Shell section, the way the platform delivers it. iOS and Mac Catalyst: the
+    /// navigation bar asks the section's navigation controller whether to pop its top item, as the back
+    /// button does. Android: the activity's back dispatcher, the back key's path through MAUI's window.
+    /// </summary>
+    public static void ShellBack(ShellSection section)
+    {
+#if IOS || MACCATALYST
+        var top = section.Stack[^1];
+        if (top.Handler is IPlatformViewHandler { ViewController.NavigationController: Microsoft.Maui.Controls.Platform.Compatibility.ShellSectionRenderer renderer }
+            && renderer.NavigationBar.TopItem is { } item)
+        {
+            renderer.ShouldPopItem(renderer.NavigationBar, item);
+            return;
+        }
+        throw new CheckFailedException("the section's top page has no Shell navigation controller");
+#elif ANDROID
+        ((AndroidX.Activity.ComponentActivity)Microsoft.Maui.ApplicationModel.Platform.CurrentActivity!).OnBackPressedDispatcher.OnBackPressed();
+#else
+        ((Shell)section.Parent.Parent).SendBackButtonPressed();
+#endif
+    }
+
+    /// <summary>Whether the platform shows the Shell's navigation bar above <paramref name="page"/>, where it can be read.</summary>
+    public static bool? NavBarShown(Page page)
+    {
+#if IOS || MACCATALYST
+        if (page.Handler is IPlatformViewHandler { ViewController: { } controller }
+            && (controller.NavigationController ?? controller.ParentViewController?.NavigationController) is { } navigation)
+            return !navigation.NavigationBarHidden;
+#elif ANDROID
+        // MAUI hides the toolbar by collapsing its app bar to no height.
+        if (Find<AndroidX.AppCompat.Widget.Toolbar>(Root()) is { } toolbar) return toolbar is { IsShown: true, Height: > 0 };
+#endif
+        return null;
+    }
+
+    /// <summary>Whether the platform shows the Shell's tab bar, where it can be read.</summary>
+    public static bool? TabBarShown(Page page)
+    {
+#if IOS || MACCATALYST
+        if (page.Handler is IPlatformViewHandler { ViewController.TabBarController: { } tabs }) return !tabs.TabBar.Hidden;
+        return null;
+#elif ANDROID
+        // MAUI removes the bottom navigation view to hide it.
+        return Find<Google.Android.Material.BottomNavigation.BottomNavigationView>(Root()) is { IsShown: true, Height: > 0 };
+#else
+        return null;
+#endif
+    }
+
+    /// <summary>The bars the platform has, for a failure message.</summary>
+    public static string Describe()
+    {
+#if ANDROID
+        var parts = new List<string>();
+        void Walk(Android.Views.View? view, int depth)
+        {
+            if (view is null) return;
+            if (view is AndroidX.AppCompat.Widget.Toolbar or Google.Android.Material.BottomNavigation.BottomNavigationView or Google.Android.Material.AppBar.AppBarLayout)
+                parts.Add($"{view.GetType().Name}(shown={view.IsShown}, vis={view.Visibility}, h={view.Height}, depth={depth})");
+            if (view is Android.Views.ViewGroup group)
+                for (var i = 0; i < group.ChildCount; i++) Walk(group.GetChildAt(i), depth + 1);
+        }
+        Walk(Root(), 0);
+        return string.Join("; ", parts);
+#else
+        return "";
+#endif
+    }
+
+#if ANDROID
+    private static Android.Views.View? Root() => Microsoft.Maui.ApplicationModel.Platform.CurrentActivity?.Window?.DecorView;
+
+    private static T? Find<T>(Android.Views.View? view) where T : Android.Views.View
+    {
+        if (view is T match) return match;
+        if (view is Android.Views.ViewGroup group)
+        {
+            for (var i = 0; i < group.ChildCount; i++)
+                if (Find<T>(group.GetChildAt(i)) is { } found) return found;
+        }
+        return null;
+    }
+#endif
+
     /// <summary>Clicks a button through its virtual view, the path the platform's tap handler takes.</summary>
     public static void Tap(IView view)
     {

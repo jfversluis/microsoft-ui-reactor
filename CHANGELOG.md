@@ -56,6 +56,15 @@ Conventions for contributors:
   package's global usings add a `NavigationMode` alias, since MAUI declares one too. The navigation
   model and lifecycle hook state moved to `Microsoft.UI.Reactor.Core`, forwarded from `Reactor.dll`,
   so WinUI's API is unchanged; a Native AOT proof covers deep links and state snapshots.
+  A declarative Shell (spec 069 §4): `Shell(selected, onSelectedChanged, items…)` with `TabBar`,
+  `FlyoutItem`, `ShellMenuItem`, `ShellTab` and top-tab `ShellContent` elements keyed by the app
+  (icons optional, null children skipped), the selection held in state (a user's switch reported once
+  shown, a refused one undone), and a `NavigationHost` in a tab rendering that tab's stack: the back
+  button, the iOS swipe and the Android back key run the guards before any page moves, and app
+  navigations made meanwhile (or while the tab's modal is shown) wait for the platform; a window swap
+  waits for a busy tab, even after the Shell unmounts. Flyout state, header, footer and content, the
+  appearance colors, and the pages' Shell properties (`NavBarIsVisible`, `TabBarIsVisible`,
+  `TitleView`, `SearchHandler`, `PresentationMode`, `BackButtonBehavior`) are declarative too.
   Built with `Reactor.Maui.slnx` and tested in `.github/workflows/maui.yml`, including a
   device tier that runs on the real platform controls. It doesn't change the WinUI packages.
 

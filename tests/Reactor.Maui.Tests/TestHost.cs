@@ -34,8 +34,15 @@ public sealed class TestHost
 
     public TestHost(ElementHandlerRegistry registry)
     {
-        Root = new ReactorRoot(registry, Scheduler, native => RootView = native);
+        Root = new ReactorRoot(registry, Scheduler, native =>
+        {
+            RootView = native;
+            RootNativeChanged?.Invoke(native);
+        });
     }
+
+    /// <summary>Called when the root's native view changes, as a window's page setter would be.</summary>
+    public Action<object?>? RootNativeChanged { get; set; }
 
     public TestHost Render(Element element)
     {

@@ -7,13 +7,14 @@ namespace Microsoft.UI.Reactor.Maui.Hosting;
 /// here", from <c>NavigationViewFragment.OnCreateView</c>) when <see cref="Window.Page"/> is replaced
 /// while a navigation page's push is still running: the pending fragment transaction runs after the
 /// outgoing page's navigation manager is gone. So while any navigation stack in the outgoing page
-/// (the page itself, or one inside its tabs or flyout) is still running a platform operation, the new
-/// page is set once those operations have finished (spec 065 §7). Other platforms set it at once.
+/// (the page itself, or one inside its tabs or flyout, or a Shell section's stack, including a user's
+/// back that hasn't settled) is still running a platform operation, the new page is set once those
+/// operations have finished (spec 065 §7, spec 069 §4.2). Other platforms set it at once.
 /// </summary>
 internal sealed class WindowPageSetter(Window window, Action<Exception> onError)
 {
     private Page? _pending;
-    private StackNavigator? _awaited;
+    private INativeStack? _awaited;
 
     /// <summary>Whether a swap waits for the outgoing page's navigation; tests turn it off.</summary>
     internal bool WaitForNavigation { get; set; } = OperatingSystem.IsAndroid();
@@ -62,15 +63,16 @@ internal sealed class WindowPageSetter(Window window, Action<Exception> onError)
         }
     }
 
-    private static StackNavigator? FindRunning(Page? page) => page switch
+    private static INativeStack? FindRunning(Page? page) => page switch
     {
         ReactorNavigationPage { Navigator: { IsIdle: false } navigator } => navigator,
+        ReactorShell shell => shell.Navigators.FirstOrDefault(n => !n.IsIdle),
         TabbedPage tabs => tabs.Children.Select(FindRunning).FirstOrDefault(n => n is not null),
         FlyoutPage flyout => FindRunning(flyout.Detail) ?? FindRunning(flyout.Flyout),
         _ => null,
     };
 
-    private void Await(StackNavigator? navigator)
+    private void Await(INativeStack? navigator)
     {
         if (ReferenceEquals(_awaited, navigator)) return;
         if (_awaited is not null) _awaited.BecameIdle -= OnNavigatorIdle;

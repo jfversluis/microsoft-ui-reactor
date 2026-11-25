@@ -40,7 +40,14 @@ public static class MauiHandlers
         .Register(new PageHandler())
         .Register(new NavigationStackHandler())
         .Register(new TabsHandler())
-        .Register(new FlyoutHandler());
+        .Register(new FlyoutHandler())
+        .Register(new ShellHandler())
+        .Register(new TabBarHandler())
+        .Register(new FlyoutItemHandler())
+        .Register(new ShellMenuItemHandler())
+        .Register(new ShellTabHandler())
+        .Register(new ShellContentHandler())
+        .Register(new ShellSectionStackHandler());
 
     /// <summary>
     /// Hosts any native view in a Controls slot typed as <see cref="View"/>; a view from another

@@ -1,4 +1,5 @@
 using Microsoft.UI.Reactor.Core;
+using Microsoft.UI.Reactor.Core.Diagnostics;
 using Microsoft.UI.Reactor.Hosting;
 using Microsoft.UI.Reactor.Maui;
 using Microsoft.UI.Reactor.Maui.Handlers;
@@ -15,6 +16,12 @@ internal sealed record NavigationHostProps<TRoute>(
 /// <summary>Marks a <c>NavigationHost</c>'s component, so lifecycle discovery stops at a nested host.</summary>
 internal interface INavigationHostComponent;
 
+/// <summary>Tells a <c>NavigationHost</c> that it is a <c>ShellTab</c>'s content, so it renders the section's stack.</summary>
+internal static class ShellTabScope
+{
+    public static readonly Context<bool> Context = new(false, "ShellTab");
+}
+
 /// <summary>
 /// What <c>NavigationHost</c> renders (spec 069 §2.4): a <see cref="NavigationStackElement"/> declaring
 /// the handle's back stack and current route, each mapped by the route map and keyed by its entry,
@@ -29,6 +36,7 @@ internal sealed class NavigationHostComponent<TRoute> : Component<NavigationHost
 
     public override Element? Render()
     {
+        var inShellTab = UseContext(ShellTabScope.Context);
         var bindingRef = UseRef<NavigationHostBinding?>(null);
         var binding = bindingRef.Current ??= new NavigationHostBinding(RouteEquals);
         binding.Rerender = Context._requestRerender;
@@ -47,6 +55,25 @@ internal sealed class NavigationHostComponent<TRoute> : Component<NavigationHost
 
         var stack = new NavigationStackElement(pages);
         if (Props.Configure is { } configure) stack = configure(stack);
+        if (inShellTab)
+        {
+            if (!binding.WarnedShellTabStack && (stack.Title is not null || stack.Icon is not null || stack.BarBackgroundColor is not null || stack.BarTextColor is not null))
+            {
+                binding.WarnedShellTabStack = true;
+                DiagnosticLog.Warning(LogCategory.Navigation, "NavigationHost.ShellTab",
+                    "A NavigationHost in a ShellTab ignores its stack's Title, Icon and bar colors: the tab's title and icon come from ShellTab, the colors from the Shell's appearance.");
+            }
+            // In a Shell tab the pages are the section's stack (spec 069 §4.2). A host nested in one
+            // of them renders its own stack again.
+            return NavigationContext<TRoute>.Instance.Provide(Props.Navigation, ShellTabScope.Context.Provide(false, new ShellSectionStackElement(pages)
+            {
+                Modals = stack.Modals,
+                OnModalDismissed = stack.OnModalDismissed,
+                Animated = stack.Animated,
+                HostBinding = binding,
+                HostDeclaration = declaration,
+            }));
+        }
         // The configured Animated is the host's default; the binding applies a Navigate call's options.
         return NavigationContext<TRoute>.Instance.Provide(Props.Navigation, stack with
         {
@@ -107,6 +134,17 @@ internal sealed class NavigationHostBinding
 
     private enum ProposalState { Pending, Accepted, Rejected }
 
+    /// <summary>
+    /// A single-use approval of a user's back (spec 069 §4.2): the depth the user goes back to, the
+    /// model's version the guards ran against, and the transition they approved.
+    /// </summary>
+    internal sealed class BackApproval
+    {
+        public required int Depth { get; init; }
+        public required long Version { get; init; }
+        public required Transition Transition { get; init; }
+    }
+
     private sealed class Proposal
     {
         public required long Version { get; init; }
@@ -125,7 +163,7 @@ internal sealed class NavigationHostBinding
 
     // The stack this host renders, attached by its handler.
     private Node? _stackNode;
-    private ReactorNavigationPage? _page;
+    private INativeStack? _surface;
 
     // The committed declaration: what the navigator was last asked to show, and the model version it
     // shows. A version whose destination refused stays unshown, so the next render asks again, as
@@ -137,6 +175,12 @@ internal sealed class NavigationHostBinding
     private int _nextKey;
 
     private Proposal? _proposal;
+
+    // A user's back that Shell offered before moving a page (spec 069 §4.2): approved while the
+    // platform runs it, then committed to the model, whose next declaration takes it as approved.
+    private BackApproval? _approval;
+    private BackApproval? _committing;
+
     private long _generation;
     private readonly List<Transition> _inFlight = [];
     private bool _completionPosted;
@@ -154,6 +198,9 @@ internal sealed class NavigationHostBinding
     /// <summary>Re-renders the host component.</summary>
     public Action? Rerender { get; set; }
 
+    /// <summary>Whether the host warned that a Shell tab ignores its stack's title, icon and bar colors.</summary>
+    public bool WarnedShellTabStack { get; set; }
+
     /// <summary>The stack's <c>OnPopped</c>: the user went back to the given declared depth.</summary>
     public Action<int> OnUserPop { get; }
 
@@ -170,6 +217,8 @@ internal sealed class NavigationHostBinding
             _renderedVersion = long.MinValue;
             _refusedVersion = long.MinValue;
             _proposal = null;
+            _approval = null;
+            _committing = null;
         }
         handle.LifecycleGuard = _guard;
     }
@@ -186,20 +235,32 @@ internal sealed class NavigationHostBinding
 
     public void Attach(Node stackNode, ReactorNavigationPage page)
     {
-        _stackNode = stackNode;
-        _page = page;
         page.HostBinding = this;
-        page.Navigator.BecameIdle += _onNavigatorIdle;
+        Attach(stackNode, page.Navigator);
     }
 
     public void Detach(ReactorNavigationPage page)
     {
-        page.Navigator.BecameIdle -= _onNavigatorIdle;
         if (ReferenceEquals(page.HostBinding, this)) page.HostBinding = null;
-        if (!ReferenceEquals(_page, page)) return;
-        _page = null;
+        Detach(page.Navigator);
+    }
+
+    /// <summary>Attaches the native stack the host's element rendered (spec 069 §4.2).</summary>
+    public void Attach(Node stackNode, INativeStack surface)
+    {
+        _stackNode = stackNode;
+        _surface = surface;
+        surface.BecameIdle += _onNavigatorIdle;
+    }
+
+    public void Detach(INativeStack surface)
+    {
+        surface.BecameIdle -= _onNavigatorIdle;
+        if (!ReferenceEquals(_surface, surface)) return;
+        _surface = null;
         _stackNode = null;
         _inFlight.Clear();
+        _approval = null;
     }
 
     // ── Declaring ─────────────────────────────────────────────────────────────
@@ -236,6 +297,15 @@ internal sealed class NavigationHostBinding
         var final = Entries(handle);
         if (_committed is null || _rendered.Length == 0 || SameKeys(final, _rendered))
             return Commit(final, version, null);
+
+        if (_committing is { } approved)
+        {
+            _committing = null;
+            // The user's back the platform already made: its guards ran before the page moved, so the
+            // destination isn't asked again.
+            if (version == approved.Version + 1 && final.Length == approved.Depth && final[^1].Key == approved.Transition.DestinationKey)
+                return Commit(final, version, approved.Transition);
+        }
 
         var destination = final[^1];
         var transition = new Transition
@@ -332,7 +402,7 @@ internal sealed class NavigationHostBinding
     /// is the host's default, which a navigation's own options override.
     /// </summary>
     public void Sync(
-        HostDeclaration declaration, bool animated, IReadOnlyList<Page> pages, IReadOnlyList<Page> modals, StackNavigator navigator)
+        HostDeclaration declaration, bool animated, IReadOnlyList<Page> pages, IReadOnlyList<Page> modals, INativeStack navigator)
     {
         if (declaration.IsProposal)
         {
@@ -387,6 +457,65 @@ internal sealed class NavigationHostBinding
             return true;
         }
         return handle.PopToDepth(depth);
+    }
+
+    /// <summary>Whether the host shows the model's stack as it is, with no change pending.</summary>
+    public bool ShowsModel => _handle is { } handle && handle.Version == _renderedVersion && _proposal is null && _approval is null;
+
+    /// <summary>
+    /// A user's back that Shell offers before any page moves (spec 069 §4.2): runs the departing
+    /// page's <c>onNavigatingFrom</c> (and the handle's guards) and the destination's
+    /// <c>onNavigatingTo</c>, without changing the model. Returns the approval, or
+    /// <see langword="null"/> when the back is refused or isn't one this host can approve now (the
+    /// host isn't showing the model, or a callback navigated).
+    /// </summary>
+    public BackApproval? PreflightBack(int depth)
+    {
+        if (_handle is not { } handle || !ShowsModel || depth < 1 || depth >= _rendered.Length || _rendered.Length != handle.Depth)
+            return null;
+        for (var i = 0; i < _rendered.Length; i++)
+            if (!_routeEquals(_rendered[i].Route, handle.RouteAt(i))) return null;
+
+        var version = handle.Version;
+        var destination = _rendered[depth - 1];
+        var transition = new Transition
+        {
+            OldHooks = CollectHooks(ActivePage()),
+            DestinationKey = destination.Key,
+            Route = destination.Route,
+            PreviousRoute = _rendered[^1].Route,
+            Mode = NavigationMode.Pop,
+            Animated = null,
+        };
+        if (!handle.CanPopToDepth(depth) || handle.Version != version) return null;
+        if (!NavigatingTo(transition) || handle.Version != version) return null;
+        return _approval = new BackApproval { Depth = depth, Version = version, Transition = transition };
+    }
+
+    /// <summary>
+    /// The platform finished the approved back: the model moves to the approved entry without its
+    /// guards running again. Void if the model changed meanwhile; the host then shows the model.
+    /// </summary>
+    public void CommitBack(BackApproval approval)
+    {
+        if (!ReferenceEquals(_approval, approval)) return;
+        _approval = null;
+        if (_handle is { } handle && handle.Version == approval.Version)
+        {
+            _committing = approval;
+            if (handle.PopToDepth(approval.Depth, approved: true)) return;
+            _committing = null;
+        }
+        Rerender?.Invoke();
+    }
+
+    /// <summary>The platform cancelled the approved back (the user let go of the swipe): nothing moved.</summary>
+    public void DiscardBack(BackApproval approval)
+    {
+        if (!ReferenceEquals(_approval, approval)) return;
+        _approval = null;
+        // Changes the model made meanwhile were held; show them now.
+        Rerender?.Invoke();
     }
 
     /// <summary>
@@ -483,7 +612,7 @@ internal sealed class NavigationHostBinding
 
         static void Collect(Node node, List<OwnedHook> hooks)
         {
-            if (node.Element is NavigationStackElement || node.Component is INavigationHostComponent) return;
+            if (node.Element is NavigationStackElement or ShellSectionStackElement || node.Component is INavigationHostComponent) return;
             if (node.IsRenderable && node.HookContext?.GetNavigationLifecycleHook() is { } hook) hooks.Add(new(node, hook));
             foreach (var child in node.Children) Collect(child, hooks);
         }
@@ -506,7 +635,7 @@ internal sealed class NavigationHostBinding
     private void Complete()
     {
         _completionPosted = false;
-        if (_page is not { } page || !page.Navigator.IsIdle || page.Navigator.HasPendingPlatformPops) return;
+        if (_surface is not { IsIdle: true, HasPendingPlatformPops: false, IsHolding: false }) return;
         // A change the host hasn't shown yet may supersede these: complete them once it is shown
         // (the navigator goes idle again after that sync).
         if (_proposal is not null || (_handle is { } handle && handle.Version != _renderedVersion && handle.Version != _refusedVersion)) return;

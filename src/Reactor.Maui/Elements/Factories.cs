@@ -138,6 +138,8 @@ public static class Factories
     /// Configures the stack the host renders: its title and icon as a tab or flyout detail, bar colors,
     /// modals, and <see cref="NavigationStackElement.Animated"/>, the host's default animation. The host
     /// sets <see cref="NavigationStackElement.Pages"/> and <see cref="NavigationStackElement.OnPopped"/>.
+    /// In a <c>ShellTab</c> only the modals and <c>Animated</c> apply: the title and icon come from the
+    /// <c>ShellTab</c>, and the bar colors from the Shell's appearance (a warning is logged otherwise).
     /// <c>NavigateOptions.Animated</c> overrides the default for the <c>Navigate</c> call it is passed
     /// to; every other change (<c>GoBack</c>, <c>GoForward</c>, <c>Replace</c>, <c>Reset</c>,
     /// <c>PopTo</c>, <c>SetState</c>, the user's back) uses the default.
@@ -158,6 +160,61 @@ public static class Factories
 
     public static FlyoutElement Flyout(Element? flyout, Element? detail, bool isPresented, Action<bool>? onIsPresentedChanged = null) =>
         new(flyout, detail, isPresented, onIsPresentedChanged);
+
+    // ── Shell (spec 069 §4) ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// A Shell of <paramref name="items"/> (<c>TabBar</c>, <c>FlyoutItem</c> and <c>ShellMenuItem</c>
+    /// elements). <paramref name="selected"/> is the key of the tab or top tab shown;
+    /// <paramref name="onSelectedChanged"/> receives the key the user switched to, once Shell shows it.
+    /// Update the state to accept it, or the declared tab is shown again. A key that matches no tab
+    /// shows the first one and reports it once.
+    /// </summary>
+    public static ShellElement Shell(string? selected, Action<string>? onSelectedChanged, params Element?[] items) =>
+        new(selected, onSelectedChanged, items);
+
+    /// <summary>
+    /// A Shell item shown as a bottom tab bar (a null tab is skipped). It is keyed by its position unless
+    /// given a key with <c>WithKey</c>.
+    /// </summary>
+    public static TabBarElement TabBar(params ShellTabElement?[] tabs) => new(tabs);
+
+    /// <summary>
+    /// A Shell item listed in the flyout (a null tab is skipped); set its icon with <c>.Icon(…)</c>. It is
+    /// keyed by its position unless given a key with <c>WithKey</c>.
+    /// </summary>
+    public static FlyoutItemElement FlyoutItem(string? title, params ShellTabElement?[] tabs) => new(title, tabs);
+
+    /// <summary>
+    /// A Shell tab showing <paramref name="content"/>: a <c>Page(…)</c>, or a <c>NavigationHost(…)</c>,
+    /// whose routes become the tab's navigation stack. <paramref name="key"/> names it in the Shell's
+    /// selection and is unique across the Shell.
+    /// </summary>
+    public static ShellTabElement ShellTab(string key, string? title, Element? content, ImageSource? icon = null)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return new ShellTabElement(title, content) { Key = key, Icon = icon };
+    }
+
+    /// <summary>
+    /// A Shell tab with top tabs, each a <c>ShellContent(…)</c> holding a page (a null one is skipped);
+    /// set its icon with <c>.Icon(…)</c>.
+    /// </summary>
+    public static ShellTabElement ShellTab(string key, string? title, params ShellContentElement?[] contents)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return new ShellTabElement(title, null) { Key = key, Contents = contents };
+    }
+
+    /// <summary>A top tab holding <paramref name="page"/>. <paramref name="key"/> names it in the Shell's selection.</summary>
+    public static ShellContentElement ShellContent(string key, string? title, Element? page, ImageSource? icon = null)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return new ShellContentElement(title, page) { Key = key, Icon = icon };
+    }
+
+    /// <summary>A flyout entry that runs <paramref name="onClick"/>.</summary>
+    public static ShellMenuItemElement ShellMenuItem(string text, Action? onClick, ImageSource? icon = null) => new(text, onClick) { Icon = icon };
 
     // ── Virtualized collections ─────────────────────────────────────────────
 

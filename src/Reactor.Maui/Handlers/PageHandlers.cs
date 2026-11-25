@@ -28,6 +28,27 @@ internal sealed class PageHandler : Reactor.Hosting.IElementHandler<PageElement,
         Props.Set(page, NavigationPage.HasNavigationBarProperty, previous?.HasNavigationBar, next.HasNavigationBar);
         Props.Set(page, NavigationPage.HasBackButtonProperty, previous?.HasBackButton, next.HasBackButton);
         Props.SetRef(page, NavigationPage.BackButtonTitleProperty, previous?.BackButtonTitle, next.BackButtonTitle);
+        Props.Set(page, Shell.NavBarIsVisibleProperty, previous?.NavBarIsVisible, next.NavBarIsVisible);
+        Props.Set(page, Shell.TabBarIsVisibleProperty, previous?.TabBarIsVisible, next.TabBarIsVisible);
+        Props.SetRef(page, Shell.SearchHandlerProperty, previous?.SearchHandler, next.SearchHandler);
+        Props.Set(page, Shell.PresentationModeProperty, previous?.PresentationMode, next.PresentationMode);
+        if (!Equals(previous?.BackButtonBehavior, next.BackButtonBehavior))
+        {
+            if (next.BackButtonBehavior is { } back)
+            {
+                Shell.SetBackButtonBehavior(page, new BackButtonBehavior
+                {
+                    TextOverride = back.Text,
+                    IconOverride = back.Icon,
+                    IsVisible = back.IsVisible,
+                    IsEnabled = back.IsEnabled,
+                });
+            }
+            else
+            {
+                page.ClearValue(Shell.BackButtonBehaviorProperty);
+            }
+        }
 
         if (previous is null || !SameToolbar(previous.ToolbarItems, next.ToolbarItems))
         {
@@ -58,15 +79,70 @@ internal sealed class PageHandler : Reactor.Hosting.IElementHandler<PageElement,
         return true;
     }
 
-    public IChildrenStrategy<PageElement, ContentPage> Children { get; } =
-        ChildrenStrategy.Single<PageElement, ContentPage, object>(
-            e => e.Content,
-            (page, content) =>
+    public IChildrenStrategy<PageElement, ContentPage> Children { get; } = new PageChildren();
+
+    // The content, then the Shell title view.
+    private sealed class PageChildren : ISlottedChildrenStrategy<PageElement, ContentPage>
+    {
+        public IReadOnlyList<Element?> GetChildren(PageElement element) =>
+            element.TitleView is null ? [element.Content] : [element.Content, element.TitleView];
+
+        public void SyncSlots(PageElement element, ContentPage page, IReadOnlyList<IReadOnlyList<object>> slots)
+        {
+            var content = Single(slots[0], "content");
+            if (content is Page)
+                throw new InvalidOperationException("A page's content must be a view. Put pages in a NavigationStack, Tabs or Flyout instead.");
+            page.Content = content is null ? null : Props.AsView(content);
+
+            var titleView = slots.Count > 1 ? Single(slots[1], "title view") : null;
+            if (titleView is null)
             {
-                if (content is Page)
-                    throw new InvalidOperationException("A page's content must be a view. Put pages in a NavigationStack, Tabs or Flyout instead.");
-                page.Content = content is null ? null : Props.AsView(content);
-            });
+                if (page.IsSet(Shell.TitleViewProperty)) page.ClearValue(Shell.TitleViewProperty);
+            }
+            else
+            {
+                var view = Props.AsView(titleView);
+                if (!ReferenceEquals(Shell.GetTitleView(page), view)) Shell.SetTitleView(page, view);
+            }
+        }
+
+        private static object? Single(IReadOnlyList<object> natives, string what) => natives.Count switch
+        {
+            0 => null,
+            1 => natives[0],
+            _ => throw new InvalidOperationException(
+                $"PageElement hosts a single {what} but it rendered {natives.Count} controls. Wrap them in a stack."),
+        };
+    }
+}
+
+/// <summary>
+/// The native stack a <c>NavigationHost</c> declares its pages to (spec 069 §4.2): a
+/// <see cref="NavigationPage"/>'s <see cref="StackNavigator"/>, or a Shell section's
+/// <see cref="ShellSectionNavigator"/>. The host's binding talks to this surface only.
+/// </summary>
+internal interface INativeStack
+{
+    /// <summary>Makes <paramref name="pages"/> and <paramref name="modals"/> the stacks to reconcile toward.</summary>
+    void SetDesired(IReadOnlyList<Page> pages, IReadOnlyList<Page> modals, bool animated);
+
+    /// <summary>Reconciles toward the current declaration again (a restore).</summary>
+    void Run();
+
+    /// <summary>True when no platform operation (the stack's own, or the user's) is running.</summary>
+    bool IsIdle { get; }
+
+    /// <summary>Raised when the stack has become idle.</summary>
+    event Action? BecameIdle;
+
+    /// <summary>Whether a page the platform popped may still be listed in MAUI's stacks.</summary>
+    bool HasPendingPlatformPops { get; }
+
+    /// <summary>Whether a declared page change is held back (a Shell section's, while its modal is shown).</summary>
+    bool IsHolding { get; }
+
+    /// <summary>The animation argument of the last operation the stack started.</summary>
+    bool? LastOperationAnimated { get; }
 }
 
 /// <summary>
@@ -75,7 +151,7 @@ internal sealed class PageHandler : Reactor.Hosting.IElementHandler<PageElement,
 /// comparing the live stack with the latest declared one, so a change made mid-animation is
 /// picked up by the next step.
 /// </summary>
-internal sealed class StackNavigator(NavigationPage navigationPage)
+internal sealed class StackNavigator(NavigationPage navigationPage) : INativeStack
 {
     // A platform pop can stay in MAUI's stacks after Popped/ModalPopped is raised: iOS removes the
     // page when the pop animation ends, and a pop during a push animation can leave it there. The
@@ -91,11 +167,8 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
     private bool _stopped;
 
     // The window's modal stack is shared by every navigation stack in it; this one manages only the
-    // modals it presented.
-    private readonly HashSet<Page> _ownedModals = new(ReferenceEqualityComparer.Instance);
-
-    // MAUI pops only the top modal, so reordering modals pops ones that are still declared.
-    private Page? _poppingModal;
+    // modals it presented. (MAUI pops only the top modal, so reordering modals pops ones that are still declared.)
+    private readonly OwnedModals _ownedModals = new();
 
     // Pages the platform popped that may still be listed in MAUI's stacks, with when.
     private readonly List<(Page Page, long At)> _platformPops = [];
@@ -114,7 +187,7 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
     public bool IsUserPop(Page popped, bool modal, out int depth)
     {
         depth = 0;
-        if (_stopped || (modal && ReferenceEquals(popped, _poppingModal))) return false;
+        if (_stopped || (modal && ReferenceEquals(popped, _ownedModals.Popping))) return false;
         var declared = modal ? _modals : _pages;
         for (depth = 0; depth < declared.Count; depth++)
             if (ReferenceEquals(declared[depth], popped)) return true;
@@ -128,22 +201,24 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
     public void NotePlatformPop(Page page) => _platformPops.Add((page, Environment.TickCount64));
 
     /// <summary>A modal left the window's stack, whoever popped it.</summary>
-    public void ForgetModal(Page modal) => _ownedModals.Remove(modal);
+    public void ForgetModal(Page modal) => _ownedModals.Forget(modal);
 
     /// <summary>True when no reconcile is running, including a platform operation started before <see cref="Stop"/>.</summary>
-    internal bool IsIdle => !_running;
+    public bool IsIdle => !_running;
 
     /// <summary>Raised when a reconcile, and the platform operation it was awaiting, has finished.</summary>
-    internal event Action? BecameIdle;
+    public event Action? BecameIdle;
 
     /// <summary>Whether a page the platform popped may still be listed in MAUI's stacks (within its window).</summary>
-    internal bool HasPendingPlatformPops => PendingPlatformPops(out _);
+    public bool HasPendingPlatformPops => PendingPlatformPops(out _);
+
+    public bool IsHolding => false;
 
     /// <summary>Whether the operations toward the current declaration animate.</summary>
     internal bool Animated => _animated;
 
     /// <summary>The animation argument of the last push or pop (modal or not) the navigator started.</summary>
-    internal bool? LastOperationAnimated { get; private set; }
+    public bool? LastOperationAnimated { get; private set; }
 
     private bool Started(bool animated)
     {
@@ -180,7 +255,7 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
     {
         if (_stopped) return;
         _stopped = true;
-        // A running loop calls CleanUpOwnedModals when its current operation finishes.
+        // A running loop cleans up when its current operation finishes.
         if (!_running) CleanUpOwnedModals();
     }
 
@@ -292,7 +367,7 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
         // Modals need the page to be in a window.
         if (navigationPage.Window is null) return null;
         var stack = navigation.ModalStack;
-        var actual = stack.Where(_ownedModals.Contains).ToList();
+        var actual = _ownedModals.In(stack);
         var common = 0;
         while (common < actual.Count && common < _modals.Count && ReferenceEquals(actual[common], _modals[common])) common++;
         if (common < actual.Count)
@@ -300,90 +375,17 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
             var top = actual[^1];
             // Another navigation stack's modal is above this one's: wait until it is dismissed.
             if (!ReferenceEquals(stack[^1], top)) return null;
-            return async () =>
-            {
-                _poppingModal = top;
-                try
-                {
-                    await navigation.PopModalAsync(Started(_animated));
-                }
-                finally
-                {
-                    _poppingModal = null;
-                }
-            };
+            return () => _ownedModals.Pop(navigation, top, Started(_animated));
         }
         if (common < _modals.Count)
         {
             var next = _modals[common];
-            return () =>
-            {
-                _ownedModals.Add(next);
-                _modalWindow = navigationPage.Window;
-                return navigation.PushModalAsync(next, Started(_animated));
-            };
+            return () => _ownedModals.Push(navigation, navigationPage.Window, next, Started(_animated));
         }
         return null;
     }
 
-    private bool _cleaning;
-    private Application? _cleanupApp;
-
-    // The window this navigator presented modals in. Cleanup goes through it: by then the
-    // navigation page may have left the window, and its own Navigation no longer reaches the modals.
-    private Window? _modalWindow;
-
-    /// <summary>
-    /// Dismisses the modals this (stopped) navigator presented, top down while they are on top.
-    /// One covered by another stack's modal is left until that modal goes: the navigator keeps
-    /// listening to <see cref="Application.ModalPopped"/> until all of its modals are gone.
-    /// </summary>
-    private async void CleanUpOwnedModals()
-    {
-        if (_cleaning) return;
-        _cleaning = true;
-        try
-        {
-            // No window left: the modals went with it.
-            var navigation = (_modalWindow ?? navigationPage.Window)?.Navigation;
-            if (navigation is null) _ownedModals.Clear();
-            while (navigation is not null && navigation.ModalStack.Count > 0 && _ownedModals.Contains(navigation.ModalStack[^1]))
-            {
-                var top = navigation.ModalStack[^1];
-                _ownedModals.Remove(top);
-                await navigation.PopModalAsync(animated: false);
-            }
-            if (navigation is not null) _ownedModals.RemoveWhere(m => !navigation.ModalStack.Contains(m));
-        }
-        catch (Exception)
-        {
-            // The window is closing or another owner is mid-transition; there is no tree left to report to.
-        }
-        finally
-        {
-            _cleaning = false;
-        }
-
-        if (_ownedModals.Count > 0)
-        {
-            if (_cleanupApp is null && Application.Current is { } app)
-            {
-                _cleanupApp = app;
-                app.ModalPopped += OnModalPoppedWhileStopped;
-            }
-        }
-        else if (_cleanupApp is { } subscribed)
-        {
-            subscribed.ModalPopped -= OnModalPoppedWhileStopped;
-            _cleanupApp = null;
-        }
-    }
-
-    private void OnModalPoppedWhileStopped(object? sender, ModalPoppedEventArgs e)
-    {
-        _ownedModals.Remove(e.Modal);
-        CleanUpOwnedModals();
-    }
+    private void CleanUpOwnedModals() => _ownedModals.CleanUp(() => navigationPage.Window?.Navigation);
 
     private static Func<Task> Sync(Action action) => () =>
     {
