@@ -713,6 +713,10 @@ and a declarative one like WinUI's `ContentDialog`. Both feed the same queue.
   - a `ReactorPage` hosted by a non-Reactor app does the same.
 
   MAUI's own routing (top modal first, then the page) is unchanged.
+- **Only for the system back key.** The handlers run in `OnBackButtonPressed` only on Android (and
+  Windows in 4g). On iOS and Mac Catalyst, MAUI also calls `SendBackButtonPressed` for Shell's
+  navigation-bar back (`Shell.cs`, 11.0.0). That back goes through the stack's guards (§4.2), so
+  Reactor's pages pass it straight on there.
 - **Only the visible page's handlers are eligible.** A handler belongs to the nearest page above its
   component. A back asks only the handlers of the page the user sees, and of the components above
   every page (around the root):
@@ -728,10 +732,15 @@ and a declarative one like WinUI's `ContentDialog`. Both feed the same queue.
   back.
 - **Fall-through.** If no handler handles it, the back continues as before: a `NavigationHost`'s or
   Shell's guarded back, then MAUI and the OS.
-- **The root on Android.** With predictive back, MAUI enables its native back callback only when
-  something can go back (`IBackNavigationState`). While a handler is registered on the visible page,
-  Reactor reports the back as handleable, so the key reaches the handlers even at the root. A
-  device fixture checks that at the root.
+- **The root on Android.** MAUI keeps its native back callback enabled for any page that overrides
+  `OnBackButtonPressed` (`IBackNavigationState`, `Window.cs`, 11.0.0). Reactor's pages override it,
+  so the key always reaches them, even at the root.
+  - When nothing handles the back at the root, Reactor's page returns false, and MAUI performs its
+    default: the activity moves to the back, as without Reactor.
+  - The cost is the predictive-back preview of leaving the app at the root, which Android shows only
+    while no callback is enabled.
+  - A device fixture checks a handler at the root and the default without one. The lost preview is
+    recorded in spec 065 §7.
 - **iOS** has no back key, so the hook doesn't fire there. A stack's back button and swipe go
   through the stack's guards (§2.4, §4.2).
 
@@ -756,7 +765,10 @@ modals. Other platforms ignore it.
 - **Naming.** WinUI has no such hook today (only `UseWindow()` and the window's own events). The
   name `UseWindowLifecycle` is proposed for both renderers. When WinUI adopts it, it can map it to
   its window's `Activated` and `Closed` events and to visibility.
-- **Errors** in a callback go to the component's error boundary.
+- **Errors** in a callback go to the component's error boundary. An error in `onDestroying` is
+  different: the tree is about to be unmounted, and boundary handling is posted, so it would run
+  after teardown. Such an error is reported synchronously to the root's `UnhandledException` (or
+  rethrown without a subscriber), before the unmount.
 
 ### 5.5 Gate for 4b-3
 
