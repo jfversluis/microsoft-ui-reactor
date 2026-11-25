@@ -86,6 +86,7 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
 
     private IReadOnlyList<Page> _pages = [];
     private IReadOnlyList<Page> _modals = [];
+    private bool _animated = true;
     private bool _running;
     private bool _stopped;
 
@@ -135,11 +136,31 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
     /// <summary>Raised when a reconcile, and the platform operation it was awaiting, has finished.</summary>
     internal event Action? BecameIdle;
 
-    public void SetDesired(IReadOnlyList<Page> pages, IReadOnlyList<Page> modals)
+    /// <summary>Whether a page the platform popped may still be listed in MAUI's stacks (within its window).</summary>
+    internal bool HasPendingPlatformPops => PendingPlatformPops(out _);
+
+    /// <summary>Whether the operations toward the current declaration animate.</summary>
+    internal bool Animated => _animated;
+
+    /// <summary>The animation argument of the last push or pop (modal or not) the navigator started.</summary>
+    internal bool? LastOperationAnimated { get; private set; }
+
+    private bool Started(bool animated)
+    {
+        LastOperationAnimated = animated;
+        return animated;
+    }
+
+    /// <summary>
+    /// Makes <paramref name="pages"/> and <paramref name="modals"/> the stacks to reconcile toward.
+    /// <paramref name="animated"/> applies to the pushes and pops that run toward them.
+    /// </summary>
+    public void SetDesired(IReadOnlyList<Page> pages, IReadOnlyList<Page> modals, bool animated = true)
     {
         if (_stopped) return;
         _pages = pages;
         _modals = modals;
+        _animated = animated;
         Run();
     }
 
@@ -252,11 +273,16 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
         {
             // Pages below the top go without animation; the top one pops, or is replaced by a push.
             if (common < actual.Count - 1) return Sync(() => navigation.RemovePage(actual[common]));
+            var animated = _animated;
             return common == desired.Count
-                ? () => navigationPage.PopAsync(animated: true)
-                : () => navigationPage.PushAsync(desired[common], animated: true);
+                ? () => navigationPage.PopAsync(Started(animated))
+                : () => navigationPage.PushAsync(desired[common], Started(animated));
         }
-        if (common < desired.Count) return () => navigationPage.PushAsync(desired[common], animated: true);
+        if (common < desired.Count)
+        {
+            var animated = _animated;
+            return () => navigationPage.PushAsync(desired[common], Started(animated));
+        }
 
         return NextModalOperation(navigation);
     }
@@ -279,7 +305,7 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
                 _poppingModal = top;
                 try
                 {
-                    await navigation.PopModalAsync(animated: true);
+                    await navigation.PopModalAsync(Started(_animated));
                 }
                 finally
                 {
@@ -294,7 +320,7 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
             {
                 _ownedModals.Add(next);
                 _modalWindow = navigationPage.Window;
-                return navigation.PushModalAsync(next, animated: true);
+                return navigation.PushModalAsync(next, Started(_animated));
             };
         }
         return null;
@@ -372,7 +398,23 @@ internal sealed class ReactorNavigationPage : NavigationPage
     public EventHandler<ModalPoppedEventArgs>? ModalPoppedHandler;
     public Action<Page>? ReportPopped;
 
+    /// <summary>Set while a <c>NavigationHost</c> renders this stack.</summary>
+    public Microsoft.UI.Reactor.Navigation.NavigationHostBinding? HostBinding;
+
     public ReactorNavigationPage() => Popped += (_, e) => ReportPopped?.Invoke(e.Page);
+
+    /// <summary>
+    /// The system back button (Android's back key). Under a <c>NavigationHost</c> it is one guarded
+    /// back navigation, and the key is consumed whether that is accepted or refused, so MAUI never
+    /// pops the page as well; at the root it is passed on (spec 069 §2.4). A nested page that handles
+    /// the key itself goes first, as in <see cref="NavigationPage"/>.
+    /// </summary>
+    protected override bool OnBackButtonPressed()
+    {
+        if (HostBinding is not { } binding) return base.OnBackButtonPressed();
+        if (CurrentPage?.SendBackButtonPressed() == true) return true;
+        return binding.OnBackButton();
+    }
 }
 
 internal sealed class NavigationStackHandler : Reactor.Hosting.IElementHandler<NavigationStackElement, ReactorNavigationPage>
@@ -404,6 +446,7 @@ internal sealed class NavigationStackHandler : Reactor.Hosting.IElementHandler<N
             context.RestoreAfterEvent();
         };
         if (Application.Current is { } app) app.ModalPopped += page.ModalPoppedHandler;
+        element.HostBinding?.Attach(context.Node, page);
         Apply(page, null, element);
         return page;
     }
@@ -412,11 +455,17 @@ internal sealed class NavigationStackHandler : Reactor.Hosting.IElementHandler<N
     {
         if (Application.Current is { } app && control.ModalPoppedHandler is { } handler) app.ModalPopped -= handler;
         control.ReportPopped = null;
+        control.HostBinding?.Detach(control);
         control.Navigator.Stop();
     }
 
     public void Update(HandlerContext<NavigationStackElement> context, NavigationStackElement oldElement, NavigationStackElement newElement, ReactorNavigationPage control)
     {
+        if (!ReferenceEquals(oldElement.HostBinding, newElement.HostBinding))
+        {
+            oldElement.HostBinding?.Detach(control);
+            newElement.HostBinding?.Attach(context.Node, control);
+        }
         Apply(control, oldElement, newElement);
         // The same element is a restore after a pop the app did not accept (or an unchanged
         // re-render): reconcile against the current declaration, which pushes the page back. A
@@ -443,7 +492,10 @@ internal sealed class NavigationStackHandler : Reactor.Hosting.IElementHandler<N
         {
             var pages = slots.Take(element.Pages.Length).SelectMany(static s => s).Select(AsPage).ToList();
             var modals = slots.Skip(element.Pages.Length).SelectMany(static s => s).Select(AsPage).ToList();
-            control.Navigator.SetDesired(pages, modals);
+            if (element.HostBinding is { } binding && element.HostDeclaration is { } declaration)
+                binding.Sync(declaration, element.Animated, pages, modals, control.Navigator);
+            else
+                control.Navigator.SetDesired(pages, modals, element.Animated);
         }
     }
 

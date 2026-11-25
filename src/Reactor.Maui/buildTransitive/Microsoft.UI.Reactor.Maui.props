@@ -6,6 +6,8 @@
       wherever a file imports the factories with `using static Microsoft.UI.Reactor.Maui.Factories;`;
     - an Element alias: MAUI's implicit usings import Microsoft.Maui.Controls, which declares its
       own Element type, so a bare `Element` would be ambiguous. An alias outranks namespace imports.
+    - a NavigationMode alias, for the same reason: Microsoft.Maui.ApplicationModel (also an implicit
+      using) declares one, so a file importing Microsoft.UI.Reactor.Navigation would be ambiguous.
     Opt out with <ReactorImplicitUsings>false</ReactorImplicitUsings>.
   -->
   <ItemGroup Condition="'$(ReactorImplicitUsings)' != 'false'">
@@ -14,5 +16,6 @@
     <Using Include="Microsoft.UI.Reactor.Maui.Hosting" />
     <Using Include="Microsoft.UI.Reactor.Maui.Direct" />
     <Using Include="Microsoft.UI.Reactor.Core.Element" Alias="Element" />
+    <Using Include="Microsoft.UI.Reactor.Navigation.NavigationMode" Alias="NavigationMode" />
   </ItemGroup>
 </Project>

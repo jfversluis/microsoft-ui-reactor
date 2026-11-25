@@ -118,17 +118,41 @@ public sealed class ReactorRoot
         return child;
     }
 
+    /// <summary>Queues <paramref name="work"/> on this root's render thread.</summary>
+    internal void Post(Action work) => _scheduler.Post(work);
+
+    /// <summary>
+    /// Reports a failure of app code a renderer called for <paramref name="owner"/> outside a render,
+    /// such as a navigation lifecycle callback. Like <see cref="ReportHandlerError"/>, but when the owner
+    /// has been unmounted by then (a page that was just left) the error goes to its nearest mounted
+    /// ancestor; a tree that is gone entirely reports it through <see cref="UnhandledException"/>.
+    /// </summary>
+    internal void ReportCallbackError(Node owner, Exception error) => _scheduler.Post(() =>
+    {
+        var mounted = owner;
+        while (mounted.Unmounted && mounted.Parent is { } parent) mounted = parent;
+        // The boundary search starts above the owner itself and skips unmounted ancestors, so the
+        // nearest mounted ancestor is a candidate when it is a boundary.
+        if (!mounted.Unmounted) HandleChildError(owner, error, mounted);
+        else if (UnhandledException is { } handler) handler(error);
+        else System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
+    });
+
     // Posted, like child-root errors, so it never runs inside the handler code that reported it.
     internal void ReportHandlerError(Node node, Exception error) => _scheduler.Post(() => HandleChildError(node, error));
 
-    private void HandleChildError(Node owner, Exception error)
+    /// <summary>
+    /// Routes an error from <paramref name="origin"/> to the nearest boundary above it. Ignored once
+    /// <paramref name="live"/> (by default the origin itself) has been unmounted.
+    /// </summary>
+    private void HandleChildError(Node origin, Exception error, Node? live = null)
     {
-        if (owner.Unmounted) return;
+        if ((live ?? origin).Unmounted) return;
         var hosts = new HashSet<Node>();
         var syncRoot = false;
         try
         {
-            var boundary = RouteToBoundary(owner, error);
+            var boundary = RouteToBoundary(origin, error);
             if (NearestHost(boundary) is { } host) hosts.Add(host);
             else syncRoot = true;
         }

@@ -1,10 +1,10 @@
 namespace Microsoft.UI.Reactor.Navigation;
 
 /// <summary>
-/// A snapshot of a <see cref="NavigationHandle{TRoute}"/>'s full state: the back stack,
+/// A snapshot of a <c>NavigationHandle&lt;TRoute&gt;</c>'s full state: the back stack,
 /// the currently active route, and the forward stack. Obtained from
-/// <see cref="NavigationHandle{TRoute}.GetState"/> and restored via
-/// <see cref="NavigationHandle{TRoute}.SetState"/>.
+/// <c>NavigationHandle&lt;TRoute&gt;.GetState</c> and restored via
+/// <c>NavigationHandle&lt;TRoute&gt;.SetState</c>.
 /// </summary>
 /// <remarks>
 /// Reactor intentionally does not pick a serialization format for navigation state.

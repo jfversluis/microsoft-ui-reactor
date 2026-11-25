@@ -49,6 +49,22 @@ public abstract class Component : ReactorComponent
 
     protected Resource<T> UseResource<T>(Func<CancellationToken, Task<T>> fetch, params object?[] dependencies)
         => Context.UseResource(fetch, dependencies);
+
+    /// <summary>Root mode: a navigation stack starting at <paramref name="initial"/>, stable across renders. Render it with <c>NavigationHost</c>.</summary>
+    protected Navigation.NavigationHandle<TRoute> UseNavigation<TRoute>(TRoute initial) where TRoute : notnull
+        => Context.UseNavigation(initial);
+
+    /// <summary>Child mode: the navigation handle the nearest <c>NavigationHost</c> above provides.</summary>
+    protected Navigation.NavigationHandle<TRoute> UseNavigation<TRoute>() where TRoute : notnull
+        => Context.UseNavigation<TRoute>();
+
+    /// <summary>Registers navigation lifecycle callbacks for the page this component is part of.</summary>
+    protected void UseNavigationLifecycle(
+        Action<Navigation.NavigatingToContext>? onNavigatingTo = null,
+        Action<Navigation.NavigatedToContext>? onNavigatedTo = null,
+        Action<Navigation.NavigatingFromContext>? onNavigatingFrom = null,
+        Action<Navigation.NavigatedFromContext>? onNavigatedFrom = null)
+        => Context.UseNavigationLifecycle(onNavigatingTo, onNavigatedTo, onNavigatingFrom, onNavigatedFrom);
 }
 
 /// <summary>A component that receives typed props from its parent.</summary>

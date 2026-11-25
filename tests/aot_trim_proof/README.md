@@ -20,9 +20,11 @@ tests/aot_trim_proof/
 ├── Reactor.AotHelloWorld.Advanced.TrimAssertions/
 ├── Reactor.AotHelloWorld.Advanced.Positive/   ← spec 053 positive Advanced probe
 ├── Reactor.AotHelloWorld.Advanced.Positive.TrimAssertions/
-└── RegStaticReadBench/                        ← Phase 2 perf baseline (spec §9)
-    ├── RegStaticReadBench.csproj
-    └── Program.cs
+├── RegStaticReadBench/                        ← Phase 2 perf baseline (spec §9)
+│   ├── RegStaticReadBench.csproj
+│   └── Program.cs
+└── Reactor.Navigation.AotSmoke/               ← spec 069 §2.5: the shared navigation model
+                                                  under Native AOT, on any OS (see its csproj)
 ```
 
 `Reactor.AotHelloWorld` is the **smallest possible Reactor app**: a

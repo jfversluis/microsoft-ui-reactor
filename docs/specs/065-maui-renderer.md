@@ -196,10 +196,20 @@ Design choices that differ from today's WinUI Reactor, and why:
   `IsEchoing` is also true once the element is unmounted. Every controlled form control raises its
   change event synchronously inside the write, so a scope around the write is enough for them
   (spec 067 §14 lists the controls not characterized yet).
+- **Typed navigation is WinUI's API over the shared model** (spec 069). `UseNavigation` and
+  `NavigationHandle<TRoute>` keep the core's `NavigationStack`; `NavigationHost` is a built-in
+  component that declares the back stack and current route as a `NavigationStack` (one key per
+  entry) and drives the lifecycle through a non-generic binding the stack's handler calls. It finds
+  the active page's lifecycle hooks in the node tree, and completes a navigation when the navigator
+  is idle, no user pop is pending and every model change has been shown. A user's pop becomes one
+  guarded navigation to the declared depth; Android's back key is a guarded back from the page shown
+  that `ReactorNavigationPage` consumes. `NavigationStackElement.Animated` applies to the operations
+  toward that declaration; the host's configured stack sets its default. A throwing lifecycle
+  callback is reported to its component's error boundaries (`ReactorRoot.ReportCallbackError`).
 
 ## 6. What has been proven
 
-**Engine, headless** (`tests/Reactor.Maui.Engine.Tests`, 63 tests). It runs the renderer conformance
+**Engine, headless** (`tests/Reactor.Maui.Engine.Tests`, 73 tests). It runs the renderer conformance
 scenarios WinUI runs, with the same expected results (spec 067 §13.6–13.7). Mounting through components and
 groups. A keyed reorder keeps component state *and* the same native controls. Removal unmounts
 and runs effect cleanups. Duplicate keys fail loudly, and changing the root's key remounts it.
@@ -210,15 +220,30 @@ dependency changes. Hook order violations throw. Also covered: context (includin
 roots), `Memo`, `ErrorBoundary` with recovery, `UseResource` cancellation, controlled values
 restored when a callback rejects input, `CanUpdate` remounts, and hot reload re-rendering every live
 root, and errors a handler reports from its own asynchronous work (`HandlerContext.ReportError`)
-reaching boundaries. A boundary test fails if the core references anything but `System.*`.
+reaching boundaries. A boundary test fails if the core references anything but `System.*`. The
+shared navigation model (spec 069): the stack's operations and guard order, `PopToIndex` bounds,
+state restored without guards, the lifecycle hook's order and lookup, and a handle over an injected
+scheduler (including one that refuses).
 
-**Renderer, headless** (`tests/Reactor.Maui.Tests`, 52 tests). Real Controls objects and direct
+**Renderer, headless** (`tests/Reactor.Maui.Tests`, 96 tests). Real Controls objects and direct
 views, no platform handlers: modifiers, every control's props and echo-free events, the hybrid
 fallback and mixed trees, `CollectionView` cells as child roots, pages, toolbar items, the
 navigation stack's reconcile, the user-pop rule (below), tabs and flyout (including swapping the
-two flyout pages between slots).
+two flyout pages between slots). `NavigationHost` (spec 069): every handle operation reaching the
+stack, entry keys (routes equal only by string or hash, equal routes at two positions, replace,
+pages below a push or pop kept mounted), a refusing guard, WinUI's lifecycle order, a refusing
+destination (the previous page stays mounted), a superseded navigation (every page left is told,
+only the latest destination arrives, including a back key right after a push), a user's back
+accepted, refused, several levels deep and while the model has moved on, a refused destination asked
+again by the user's back or the back key, the back key before a push is shown, at the root or above it (consumed, superseding it), a nested host owning its
+pages, unmounting and re-binding the host, a page replacing its own native page after a push,
+throwing callbacks reaching error boundaries (including one that survived its component's
+replacement), `Animated` from the options (ending with that navigation) and the host's configured
+default (and the stack's title in tabs), `SetState` into a mounted host and off the render thread,
+context for descendants, off-thread calls on two roots and a refusing scheduler, hot reload keeping
+the history, allocation-free mutators, and the README snippet.
 
-**Device tier** (`tests/Reactor.Maui.DeviceTests`, 42 fixtures). All pass on Mac Catalyst (macOS 26,
+**Device tier** (`tests/Reactor.Maui.DeviceTests`, 54 fixtures). All pass on Mac Catalyst (macOS 26,
 Apple silicon), an iPhone 18 Pro simulator (iOS 27) and the Android API 37 emulator; the 25 earlier
 ones also ran on a Pixel 10 (Android 16). They check what the
 native views show, not the virtual tree:
@@ -244,7 +269,13 @@ native views show, not the virtual tree:
   modal stack without dismissing each other's modals; an unmounted stack's modal that is buried
   under another stack's modal is dismissed once it is uncovered; replacing the window's content while a
   stack pushes or pops shows the new content and survives the interrupted operation, which on Android
-  needs the window-page wait (§7). Also: tab selection accepted and refused, `CollectionView` virtualizes
+  needs the window-page wait (§7). `NavigationHost`: the handle's push, pop, replace, `PopTo`, reset
+  and `SetState` reach the platform stack; MAUI's pop, the platform's own back
+  (`PopViewController` on iOS and Mac Catalyst, the activity's back dispatcher on Android), the back
+  key and a back key while the push still animates each run the guard exactly once, accepted or
+  refused, and a consumed key never makes MAUI pop as well; the lifecycle runs in WinUI's order, with
+  `onNavigatedTo` only once the navigator is idle; the animation argument of each push, pop and modal
+  follows `NavigateOptions.Animated` and the host's configured default. Also: tab selection accepted and refused, `CollectionView` virtualizes
   (a few of 200 cells realized) and reports selection, `UseWindowSize` and `UseAppTheme` follow the
   window and the theme, an `ErrorBoundary` catches an event-handler failure, and effects clean up on
   unmount.
@@ -277,7 +308,8 @@ reproduced before it was fixed and covered by a fixture that fails without the f
 
 **Packages.** `dotnet pack` produces both packages. A stock `dotnet new maui` app that references only
 the packages builds the README's snippets unchanged and runs. The Maui package ships global usings
-(the Reactor namespaces, plus an `Element` alias that beats `Microsoft.Maui.Controls.Element`)
+(the Reactor namespaces, plus `Element` and `NavigationMode` aliases that beat
+`Microsoft.Maui.Controls.Element` and `Microsoft.Maui.ApplicationModel.NavigationMode`)
 through `buildTransitive`, with an opt-out (`ReactorImplicitUsings=false`).
 
 **Sample.** Runs on all three platforms. Screenshots of the gallery, the controls page, the list

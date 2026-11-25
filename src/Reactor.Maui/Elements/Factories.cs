@@ -125,6 +125,34 @@ public static class Factories
     public static NavigationStackElement NavigationStack(IEnumerable<Element?> pages, Action<int>? onPopped = null) =>
         new([.. pages]) { OnPopped = onPopped };
 
+    /// <summary>
+    /// Shows <paramref name="nav"/>'s back stack and current route as a navigation stack, each route
+    /// mapped to its page by <paramref name="routeMap"/>, and provides <paramref name="nav"/> to the
+    /// pages, so a descendant can call <c>UseNavigation&lt;TRoute&gt;()</c>. Navigating through the
+    /// handle pushes or pops pages; the user's back button, gesture or Android back key goes back
+    /// through the handle, so guards and lifecycle callbacks run (spec 069 §2.4).
+    /// </summary>
+    /// <param name="nav">The handle from <c>UseNavigation</c>.</param>
+    /// <param name="routeMap">The page for a route.</param>
+    /// <param name="stack">
+    /// Configures the stack the host renders: its title and icon as a tab or flyout detail, bar colors,
+    /// modals, and <see cref="NavigationStackElement.Animated"/>, the host's default animation. The host
+    /// sets <see cref="NavigationStackElement.Pages"/> and <see cref="NavigationStackElement.OnPopped"/>.
+    /// <c>NavigateOptions.Animated</c> overrides the default for the <c>Navigate</c> call it is passed
+    /// to; every other change (<c>GoBack</c>, <c>GoForward</c>, <c>Replace</c>, <c>Reset</c>,
+    /// <c>PopTo</c>, <c>SetState</c>, the user's back) uses the default.
+    /// </param>
+    public static ComponentElement NavigationHost<TRoute>(
+        Navigation.NavigationHandle<TRoute> nav,
+        Func<TRoute, Element?> routeMap,
+        Func<NavigationStackElement, NavigationStackElement>? stack = null)
+        where TRoute : notnull
+    {
+        ArgumentNullException.ThrowIfNull(nav);
+        ArgumentNullException.ThrowIfNull(routeMap);
+        return CoreFactories.Component<Navigation.NavigationHostComponent<TRoute>, Navigation.NavigationHostProps<TRoute>>(new(nav, routeMap, stack));
+    }
+
     public static TabsElement Tabs(int selectedIndex, Action<int>? onSelectedIndexChanged, params Element?[] pages) =>
         new(pages, selectedIndex, onSelectedIndexChanged);
 

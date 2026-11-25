@@ -74,12 +74,13 @@ their sources. It sets the order in §4.
 | VerticalStackLayout, HorizontalStackLayout, Grid | ✅ | the direct renderer has its own stack and grid |
 | FlexLayout, AbsoluteLayout | 🧪 | |
 | ContentPage, NavigationPage (declarative `NavigationStack`, with modals), TabbedPage (`Tabs`) | ✅ | |
+| Typed navigation (`UseNavigation<TRoute>`, `NavigationHandle<TRoute>`, `UseNavigationLifecycle`, `NavigationHost`) | ✅ | spec 069 §2; WinUI's API over the shared model. Headless `NavigationHostTests`, core `NavigationModelTests`, device `NavigationHost_*` fixtures on all three platforms, and the `Reactor.Navigation.AotSmoke` AOT proof |
 | FlyoutPage (`Flyout`) | 🧪 | headless tests only, no device fixture |
 | ToolbarItems | 🧪 | primary and secondary order; headless tests only |
 | Shell | ⬜ 4b | 6 of 7 ports use it as their root. Declarative and state-driven, like `NavigationStack`. Scope from the ports: `TabBar`; `FlyoutItem` and custom flyout content; absolute (`//route`) and relative (`..`) routes with query parameters; `NavBarIsVisible` / `TabBarIsVisible` per page; `Navigating` interception and `BackButtonBehavior`; the selected item's state (WeatherTwentyOne styles it with a trigger); search handler. Routes are typed, as in WinUI's `NavigationHandle<TRoute>` / `UseNavigation<TRoute>` (spec 011): query parameters are fields of the route record, and string URIs exist only at the deep-link boundary. Back interception follows WinUI's back-handling contract |
 | Page dialogs: alert, action sheet, prompt | ⬜ 4b | 5 of 7 ports. No Reactor API today. 4b picks the shape: an imperative hook bound to the current page (such as `UseDialogs()`), or a controlled element |
 | Toast and Snackbar (CommunityToolkit) | ⬜ 4f | 2 ports; part of the CommunityToolkit validation |
-| Android back button outside Shell (`OnBackButtonPressed`) | ⬜ 4b | with Shell's back interception |
+| Android back button outside Shell (`OnBackButtonPressed`) | 🟡 | done under `NavigationHost` (a guarded back, consumed unless at the root; spec 069 §2.4). `UseSystemBackButton` for back handling outside navigation: 4b-3 |
 | Modal presentation style | ⬜ 4b | |
 | App and window lifecycle (`Activated`, `Deactivated`, `Stopped`, `Resumed`, `Destroying`) | ⬜ 4b | as hooks |
 | Window properties (title, size, minimum and maximum size, position) | ⬜ 4g | desktop |

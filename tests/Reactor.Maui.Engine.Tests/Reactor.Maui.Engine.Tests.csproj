@@ -18,6 +18,8 @@
     <PackageReference Include="xunit.runner.visualstudio" />
     <Using Include="Xunit" />
     <Using Include="Microsoft.UI.Reactor.Core.Element" Alias="Element" />
+    <!-- As the package's buildTransitive props declare for apps. -->
+    <Using Include="Microsoft.UI.Reactor.Navigation.NavigationMode" Alias="NavigationMode" />
     <!-- These tests drive the engine through a fake renderer; MAUI's implicit usings would make
          its own IElementHandler ambiguous with the engine's. -->
     <Using Remove="Microsoft.Maui" />

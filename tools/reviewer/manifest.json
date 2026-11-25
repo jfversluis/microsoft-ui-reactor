@@ -231,12 +231,12 @@
       "files": [
         "src/Reactor/Core/Navigation/NavigationContext.cs",
         "src/Reactor/Core/Navigation/NavigationHandle.cs",
-        "src/Reactor/Core/Navigation/NavigationLifecycle.cs",
-        "src/Reactor/Core/Navigation/NavigationStack.cs",
+        "src/Reactor.Core/Navigation/NavigationLifecycle.cs",
+        "src/Reactor.Core/Navigation/NavigationStack.cs",
         "src/Reactor/Core/Navigation/NavigationCache.cs",
         "src/Reactor/Core/Navigation/NavigationTransition.cs",
         "src/Reactor/Core/Navigation/TransitionEngine.cs",
-        "src/Reactor/Core/Navigation/DeepLinkMap.cs"
+        "src/Reactor.Core/Navigation/DeepLinkMap.cs"
       ],
       "description": "Navigation system \u2014 stack lifecycle, cache eviction, transition cleanup"
     },
@@ -920,12 +920,12 @@
       "files": [
         "src/Reactor/Core/Navigation/NavigationContext.cs",
         "src/Reactor/Core/Navigation/NavigationHandle.cs",
-        "src/Reactor/Core/Navigation/NavigationLifecycle.cs",
-        "src/Reactor/Core/Navigation/NavigationStack.cs",
+        "src/Reactor.Core/Navigation/NavigationLifecycle.cs",
+        "src/Reactor.Core/Navigation/NavigationStack.cs",
         "src/Reactor/Core/Navigation/NavigationCache.cs",
         "src/Reactor/Core/Navigation/NavigationTransition.cs",
         "src/Reactor/Core/Navigation/TransitionEngine.cs",
-        "src/Reactor/Core/Navigation/DeepLinkMap.cs"
+        "src/Reactor.Core/Navigation/DeepLinkMap.cs"
       ],
       "description": "Navigation system \u2014 stack, cache, transitions, deep links"
     },

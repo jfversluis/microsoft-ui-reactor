@@ -151,38 +151,7 @@ public static partial class WinUIHooks
             Action<Navigation.NavigatedToContext>? onNavigatedTo = null,
             Action<Navigation.NavigatingFromContext>? onNavigatingFrom = null,
             Action<Navigation.NavigatedFromContext>? onNavigatedFrom = null)
-        {
-            if (ctx._hookIndex >= ctx._hooks.Count)
-            {
-                ctx._hooks.Add(new NavigationLifecycleHookState());
-            }
-
-            if (ctx._hooks[ctx._hookIndex] is not NavigationLifecycleHookState hook)
-                throw new HookOrderException(
-                    $"Hook at index {ctx._hookIndex} is {ctx._hooks[ctx._hookIndex].GetType().Name}, expected NavigationLifecycleHookState. " +
-                    "Hooks must be called in the same order every render.");
-            ctx._hookIndex++;
-
-            // Always update to latest callbacks so closures capture current state
-            hook.OnNavigatingTo = onNavigatingTo;
-            hook.OnNavigatedTo = onNavigatedTo;
-            hook.OnNavigatingFrom = onNavigatingFrom;
-            hook.OnNavigatedFrom = onNavigatedFrom;
-        }
-
-        /// <summary>
-        /// Returns the navigation lifecycle hook state if one was registered, or null.
-        /// Used by the reconciler to collect lifecycle callbacks from a component tree.
-        /// </summary>
-        internal NavigationLifecycleHookState? GetNavigationLifecycleHook()
-        {
-            for (int i = 0; i < ctx._hooks.Count; i++)
-            {
-                if (ctx._hooks[i] is NavigationLifecycleHookState hook)
-                    return hook;
-            }
-            return null;
-        }
+            => NavigationLifecycleHooks.Use(ctx, onNavigatingTo, onNavigatedTo, onNavigatingFrom, onNavigatedFrom);
 
         // ════════════════════════════════════════════════════════════════
         //  Color scheme hooks
@@ -1342,13 +1311,4 @@ public static partial class WinUIHooks
     /// <summary>Stable non-null stand-in for a null delegate in a <see cref="RenderContext.UseMemo{T}"/>
     /// dependency array (keeps the comparison meaningful without tripping nullable warnings).</summary>
     private static readonly object NullDep = new();
-}
-
-internal sealed class NavigationLifecycleHookState : RenderContext.HookState
-{
-    internal override HookKind DiagnosticKind => HookKind.NavigationLifecycle;
-    public Action<Navigation.NavigatingToContext>? OnNavigatingTo;
-    public Action<Navigation.NavigatedToContext>? OnNavigatedTo;
-    public Action<Navigation.NavigatingFromContext>? OnNavigatingFrom;
-    public Action<Navigation.NavigatedFromContext>? OnNavigatedFrom;
 }

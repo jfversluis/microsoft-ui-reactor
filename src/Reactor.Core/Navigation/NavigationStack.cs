@@ -210,7 +210,17 @@ internal sealed class NavigationStack<TRoute> where TRoute : notnull
             }
         }
 
-        if (matchIndex < 0)
+        return matchIndex >= 0 && PopToIndex(matchIndex);
+    }
+
+    /// <summary>
+    /// Pops back to the back-stack entry at <paramref name="matchIndex"/> (0 is the root), as
+    /// <see cref="PopTo"/> does for the entry its predicate matches. A renderer uses it when the user
+    /// went back to a position rather than a route (spec 069 §2.4).
+    /// </summary>
+    internal bool PopToIndex(int matchIndex)
+    {
+        if (matchIndex < 0 || matchIndex >= _backStack.Count)
             return false;
 
         var target = _backStack[matchIndex];
