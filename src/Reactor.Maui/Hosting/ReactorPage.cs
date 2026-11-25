@@ -28,10 +28,14 @@ public class ReactorWindow : Window
     public ReactorWindow(Element root, ElementHandlerRegistry? registry = null)
     {
         Page = new ContentPage();
-        _pages = new WindowPageSetter(this);
         _root = new ReactorRoot(registry ?? MauiHandlers.CreateRegistry(), new MauiRenderScheduler(Dispatcher), SetRootNative);
+        _pages = new WindowPageSetter(this, _root.ReportHostError);
         Render(root);
-        Destroying += (_, _) => _root.Unmount();
+        Destroying += (_, _) =>
+        {
+            _root.Unmount();
+            _pages.Cancel();
+        };
     }
 
     /// <summary>Raised for errors no error boundary caught, after the tree has been unmounted.</summary>

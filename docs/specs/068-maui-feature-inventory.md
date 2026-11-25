@@ -144,13 +144,15 @@ their sources. It sets the order in §4.
   been reproduced without Reactor, so its cause isn't established.
   - Phase 3e hit it in 1 of 4 full Android runs, when a fixture tore down straight after an
     app-initiated pop, while the pop was still animating (the phase 3e report).
-  - **Worked around in 4a.** Two device fixtures drive the `ReactorWindow` path: the same root
-    switches from a `NavigationStack` to other content, so the reconciler unmounts the stack
-    (stopping its navigator) and then replaces the window's page, during pops and pushes, as the
-    navigator starts and once MAUI's stack has changed. Swapping in alternating pops and pushes
-    after the stack changed crashed in round 7 (the fourth push) in 4 of 6 runs; a single push, or
-    swaps swept across one push animation, never did. On Android, `WindowPageSetter` now waits for
-    the outgoing stack's navigator to finish before replacing the page: 0 crashes in 8 runs.
+  - **Worked around in 4a.** Three device fixtures drive the `ReactorWindow` path: the same root
+    switches from a `NavigationStack` (alone, or in a tab) to other content, so the reconciler
+    unmounts the stack (stopping its navigator) and then replaces the window's page, during pops and
+    pushes, as the navigator starts and once MAUI's stack has changed. Swapping in alternating pops
+    and pushes after the stack changed crashed in round 7 (the fourth push) in 5 of 10 runs; a single
+    push, or swaps swept across one push animation, never did. On Android, `WindowPageSetter` now
+    waits until every stack in the outgoing page has finished before replacing the page: 0 crashes
+    in 18 runs. The stack-in-a-tab case didn't crash without the wait (0 of 6), so its wait is
+    defensive.
   - Not covered: a platform back gesture in flight at the moment of the swap (the navigator isn't
     running then). Next step: file the plain-MAUI repro in dotnet/maui.
 - **Back gestures and platform pops** are reconciled with a 3-second cutoff (`StackNavigator`);

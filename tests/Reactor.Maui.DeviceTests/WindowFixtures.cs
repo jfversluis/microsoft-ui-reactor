@@ -10,7 +10,8 @@ public static partial class Fixtures
     private static IEnumerable<Fixture> WindowFixtures() =>
     [
         new("Window_ReplacingThePageWhileAStackNavigates_ShowsTheNewPage", ReplaceDuringPop),
-        new("Window_ReplacingThePageDuringRepeatedPushesAndPops_DoesNotCrash", ReplaceRepeatedly),
+        new("Window_ReplacingThePageDuringRepeatedPushesAndPops_DoesNotCrash", c => ReplaceRepeatedly(c, inTabs: false)),
+        new("Window_ReplacingTabsWhileTheirStackPushesAndPops_DoesNotCrash", c => ReplaceRepeatedly(c, inTabs: true)),
     ];
 
     // Replacing the window's page while a navigation stack is pushing or popping. Without
@@ -67,16 +68,33 @@ public static partial class Fixtures
 
     // The Android crash's regression test. Each round swaps the window's content once MAUI's stack has
     // changed, alternating pops and pushes. Without WindowPageSetter's wait, MAUI crashed in round 7
-    // (the fourth push) in 4 of 6 runs; with it, 0 of 8. A single push, or swaps swept across the
-    // push animation, didn't reproduce it: it needs the earlier interrupted navigations.
-    private static async Task ReplaceRepeatedly(FixtureContext c)
+    // (the fourth push) in 5 of 10 runs; with it, 0 of 18. A single push, or swaps swept across the
+    // push animation, didn't reproduce it: it needs the earlier interrupted navigations. The Tabs
+    // variant didn't crash without the wait either (0 of 6); it covers the setter's nested-stack check.
+    // inTabs puts the stack in the first tab of a Tabs root, so the window's outgoing page is the
+    // TabbedPage, not the navigation page.
+    private static async Task ReplaceRepeatedly(FixtureContext c, bool inTabs)
     {
+        var pushesWhileRunning = 0;
         for (var round = 0; round < 12; round++)
         {
             Action<int>? setDepth = null;
             c.Unmount();
-            c.Show(Component<LifecycleStack, LifecycleProps>(new([], s => setDepth = s)));
-            var navigation = await LoadedPage<NavigationPage>(c);
+            Element stack = Component<LifecycleStack, LifecycleProps>(new([], s => setDepth = s));
+            c.Show(inTabs ? Tabs(0, null, stack, Page("other", Label("other"))) : stack);
+            NavigationPage navigation;
+            Page outgoing;
+            if (inTabs)
+            {
+                var tabs = await LoadedPage<TabbedPage>(c);
+                await c.WaitFor(() => tabs.Children.FirstOrDefault() is NavigationPage { IsLoaded: true }, "the tab's stack to load");
+                (navigation, outgoing) = ((NavigationPage)tabs.Children[0], tabs);
+            }
+            else
+            {
+                navigation = await LoadedPage<NavigationPage>(c);
+                outgoing = navigation;
+            }
             var navigator = ((Microsoft.UI.Reactor.Maui.Handlers.ReactorNavigationPage)navigation).Navigator;
             setDepth!(2);
             await c.WaitFor(() => navigation.CurrentPage?.Title == "detail" && navigator.IsIdle, "the push of detail to finish");
@@ -85,15 +103,19 @@ public static partial class Fixtures
             setDepth(pop ? 1 : 3);
             await c.WaitFor(() => navigation.Navigation.NavigationStack.Count == (pop ? 1 : 3), "MAUI's stack to change");
             var running = !navigator.IsIdle;
+            if (running && !pop) pushesWhileRunning++;
             Console.WriteLine($"#   round {round}: {(pop ? "pop" : "push")}, running {running}");
             c.Render(Label($"replaced {round}").AutomationId("replaced"));
             if (running && c.Pages.WaitForNavigation)
-                Check(ReferenceEquals(c.Window.Page, navigation), "on Android the swap waits for the running navigation");
+                Check(ReferenceEquals(c.Window.Page, outgoing), "on Android the swap waits for the running navigation");
             await c.WaitFor(() => c.TryFind<ILabel>(l => l.Text == $"replaced {round}") is { } label && ((VisualElement)label).IsLoaded,
                 "the new content to be shown", 10000);
             await c.WaitFor(() => navigator.IsIdle, "the interrupted navigation to finish", 10000);
             await c.Settle();
         }
+        // The swaps must land mid-push for the test to exercise the crash; a timing shift that lets
+        // the push finish first fails here instead of passing without testing anything.
+        Check(pushesWhileRunning >= 4, $"at least 4 of 6 pushes still running at the swap, got {pushesWhileRunning}");
         Check(c.UnhandledErrors.Count == 0, $"no unhandled errors, got {string.Join("; ", c.UnhandledErrors.Select(e => e.Message))}");
     }
 }

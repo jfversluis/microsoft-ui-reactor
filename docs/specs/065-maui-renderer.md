@@ -218,7 +218,7 @@ fallback and mixed trees, `CollectionView` cells as child roots, pages, toolbar 
 navigation stack's reconcile, the user-pop rule (below), tabs and flyout (including swapping the
 two flyout pages between slots).
 
-**Device tier** (`tests/Reactor.Maui.DeviceTests`, 41 fixtures). All pass on Mac Catalyst (macOS 26,
+**Device tier** (`tests/Reactor.Maui.DeviceTests`, 42 fixtures). All pass on Mac Catalyst (macOS 26,
 Apple silicon), an iPhone 18 Pro simulator (iOS 27) and the Android API 37 emulator; the 25 earlier
 ones also ran on a Pixel 10 (Android 16). They check what the
 native views show, not the virtual tree:
@@ -311,9 +311,11 @@ and the direct-renderer todos page were checked on the iPhone simulator.
   `NavigationViewFragment.OnCreateView`). Reproduced with plain MAUI, no Reactor involved. A
   `ReactorWindow` hit it when its root switched away from a `NavigationStack` mid-push. **Worked
   around (phase 4a):** on Android, `WindowPageSetter` (used by `ReactorWindow`) replaces the page
-  only once the outgoing stack's navigator has finished its platform operation. The device fixture
-  `Window_ReplacingThePageDuringRepeatedPushesAndPops_DoesNotCrash` crashed in 4 of 6 runs without
-  the wait and 0 of 8 with it. Phase 3e also hit "CurrentPage cannot be null", from the same frame,
+  only once every navigation stack in the outgoing page (the page itself, or one in its tabs or
+  flyout) has finished its platform operation. The device fixture
+  `Window_ReplacingThePageDuringRepeatedPushesAndPops_DoesNotCrash` crashed in 5 of 10 runs without
+  the wait and 0 of 18 with it. A stack inside `Tabs` didn't crash without the wait (0 of 6); the
+  setter waits for it anyway, and a fixture covers it. Phase 3e also hit "CurrentPage cannot be null", from the same frame,
   during a pop; that variant hasn't been reproduced since, with or without Reactor. Still worth
   filing in dotnet/maui. The wait covers navigation Reactor's navigator runs, not a platform back
   gesture in flight at the moment of the swap.

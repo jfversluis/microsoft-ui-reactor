@@ -20,10 +20,10 @@ public sealed class FixtureContext(Window window)
 {
     private ReactorRoot? _root;
     private readonly ContentPage _viewHost = new();
-    private readonly WindowPageSetter _pages = new(window);
+    private WindowPageSetter? _pages;
 
     /// <summary>The window-page setter ReactorWindow uses, so fixtures exercise its Android workaround.</summary>
-    internal WindowPageSetter Pages => _pages;
+    internal WindowPageSetter Pages => _pages ??= new(window, UnhandledErrors.Add);
 
     public Window Window => window;
     public List<Exception> UnhandledErrors { get; } = [];
@@ -52,11 +52,11 @@ public sealed class FixtureContext(Window window)
         if (native is null && _keepWindowPage) return;
         if (native is Page page)
         {
-            _pages.Set(page);
+            Pages.Set(page);
             return;
         }
         _viewHost.Content = native is null ? null : Props.AsView(native);
-        _pages.Set(_viewHost);
+        Pages.Set(_viewHost);
     }
 
     /// <summary>Waits, letting the UI thread run, until <paramref name="condition"/> holds.</summary>
@@ -160,7 +160,19 @@ public static class Runner
                 {
                     failure ??= "unmount failed: " + ex;
                 }
-                window.Page = new ContentPage();
+                // Through the fixture's setter, which waits for a navigation the fixture left running
+                // (replacing the page under it crashes MAUI on Android); a swap still waiting after
+                // that is dropped, so it can't land on the next fixture's page.
+                var blank = new ContentPage();
+                context.Pages.Set(blank);
+                var settle = Stopwatch.StartNew();
+                while (!ReferenceEquals(window.Page, blank) && settle.ElapsedMilliseconds < 10_000) await Task.Delay(16);
+                if (!ReferenceEquals(window.Page, blank))
+                {
+                    failure ??= "teardown: the window page was not replaced within 10 s";
+                    context.Pages.Cancel();
+                    window.Page = blank;
+                }
                 await Task.Delay(100);
             }
             // Checked after teardown: unmounting runs effect cleanups, which can fail too.
