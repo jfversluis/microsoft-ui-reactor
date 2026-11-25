@@ -120,7 +120,7 @@ and refine them with modifiers. Elements are immutable records, so `with` works 
 | Input | `Button`, `ImageButton`, `Entry`, `Editor`, `SearchBar`, `CheckBox`, `Switch`, `Slider`, `Stepper`, `Picker`, `DatePicker`, `TimePicker`, `RadioButton` |
 | Layout | `VStack`, `HStack`, `Grid`, `FlexLayout`, `AbsoluteLayout`, `ScrollView`, `Border`, `RefreshView`, `SwipeView` |
 | Lists | `CollectionView`, `CarouselView` (virtualized; each item is its own tree) |
-| Pages and navigation | `Page`, `NavigationHost`, `NavigationStack`, `Tabs`, `Flyout` |
+| Pages and navigation | `Page`, `NavigationHost`, `NavigationStack`, `Tabs`, `Flyout`, `Shell` (`TabBar`, `FlyoutItem`, `ShellTab`, `ShellContent`, `MenuItem`) |
 | Composition | `Component<T>()`, `Component<T, TProps>(props)`, `Group`, `Empty`, `Memo`, `ErrorBoundary`, `Context.Provide` |
 
 Common modifiers: `.Margin()`, `.Padding()`, `.Width()`, `.Height()`, `.Size()`,
@@ -226,6 +226,57 @@ Pushing and popping animate as usual. If a pop callback doesn't accept a back na
 is pushed back. Modals are a second list on the same element:
 `NavigationStack(…) with { Modals = […], OnModalDismissed = … }`. `Tabs(selectedIndex, onSelected, pages…)`
 and `Flyout(flyout, detail, isPresented, onIsPresentedChanged)` follow the same controlled pattern.
+
+### Shell
+
+`Shell` builds MAUI's Shell from elements. The app holds the selected tab as state, and each tab with
+a `NavigationHost` keeps its own stack in its handle:
+
+```csharp
+public abstract record HomeRoute
+{
+    public sealed record List : HomeRoute;
+    public sealed record Detail(int Id) : HomeRoute;
+}
+
+public sealed class App : Component
+{
+    public override Element Render()
+    {
+        var (tab, setTab) = UseState("home");
+        var homeNav = UseNavigation<HomeRoute>(new HomeRoute.List());
+        return Shell(tab, setTab,
+            TabBar(
+                ShellTab("home", "Home", null, NavigationHost(homeNav, route => route switch
+                {
+                    HomeRoute.Detail d => Page($"Item {d.Id}", Label($"Item {d.Id}")),
+                    _ => Page("Home", Button("Open", () => homeNav.Navigate(new HomeRoute.Detail(1)))),
+                })),
+                ShellTab("settings", "Settings", null, Page("Settings", Label("Settings")))))
+            .FlyoutBehavior(FlyoutBehavior.Disabled);
+    }
+}
+```
+
+- **Items.** `TabBar(tabs…)`, `FlyoutItem(title, icon, tabs…)` and `MenuItem(text, onClick)`. A
+  `ShellTab(key, title, icon, content)` holds a page or a `NavigationHost`; `ShellTab(key, title, icon,
+  ShellContent(key, title, icon, page)…)` has top tabs, each holding a page. Tab and top-tab keys
+  name the selection and are unique across the Shell (a duplicate throws).
+- **Selection.** `Shell(selected, onSelected, …)` shows the tab or top tab whose key is `selected`.
+  A user's switch is reported to `onSelected` once Shell shows it; if the app doesn't take it, the
+  declared tab is shown again. A key that matches nothing shows the first tab and reports it once.
+- **Stacks.** A `NavigationHost` in a tab renders the tab's own stack (the root is the tab's page).
+  The back button, the iOS swipe and the Android back key run the guards before any page moves, so
+  a refused back moves nothing; an app navigation made during the user's back waits until it
+  finishes. A tab keeps its stack while another is shown. A deep link is the selected tab plus the
+  routes for that tab's handle (`SetState`); Reactor never navigates Shell by URI.
+- **Shell properties.** `.FlyoutBehavior(…)`, `.FlyoutIsPresented(isPresented, onChanged)`,
+  `.FlyoutHeader(…)`, `.FlyoutFooter(…)`, `.FlyoutContent(…)` (elements, updated in place) and the
+  appearance colors (`with { TabBarBackgroundColor = … }`).
+- **Page properties in a Shell.** `.NavBarIsVisible(…)`, `.TabBarIsVisible(…)`, `.TitleView(element)`,
+  and `with { SearchHandler = …, PresentationMode = …, BackButtonBehavior = new ShellBackButton(…) }`.
+- With `using static Microsoft.UI.Reactor.Maui.Factories;`, `Shell` names the factory; write
+  `Microsoft.Maui.Controls.Shell` for MAUI's type.
 
 ## Hosting
 

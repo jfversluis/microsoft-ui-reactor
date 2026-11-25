@@ -218,13 +218,20 @@ internal sealed class NavigationStack<TRoute> where TRoute : notnull
     /// <see cref="PopTo"/> does for the entry its predicate matches. A renderer uses it when the user
     /// went back to a position rather than a route (spec 069 §2.4).
     /// </summary>
-    internal bool PopToIndex(int matchIndex)
+    internal bool PopToIndex(int matchIndex) => PopToIndex(matchIndex, approved: false);
+
+    /// <summary>
+    /// <see cref="PopToIndex(int)"/>, skipping the guards when <paramref name="approved"/>: a renderer
+    /// that already ran them for this pop (<see cref="CanPopToIndex"/>, before the platform moved the
+    /// page) commits it once the platform has finished (spec 069 §4.2).
+    /// </summary>
+    internal bool PopToIndex(int matchIndex, bool approved)
     {
         if (matchIndex < 0 || matchIndex >= _backStack.Count)
             return false;
 
         var target = _backStack[matchIndex];
-        if (!InvokeGuard(_current, target, NavigationMode.Pop))
+        if (!approved && !InvokeGuard(_current, target, NavigationMode.Pop))
             return false;
 
         // Move current to forward stack
@@ -244,6 +251,13 @@ internal sealed class NavigationStack<TRoute> where TRoute : notnull
         OnChanged?.Invoke();
         return true;
     }
+
+    /// <summary>
+    /// Runs the guards for popping to the back-stack entry at <paramref name="matchIndex"/> without
+    /// changing the stack: whether that pop would be allowed now.
+    /// </summary>
+    internal bool CanPopToIndex(int matchIndex) =>
+        matchIndex >= 0 && matchIndex < _backStack.Count && InvokeGuard(_current, _backStack[matchIndex], NavigationMode.Pop);
 
     /// <summary>
     /// Invokes lifecycle guard then programmatic guard. Returns true if navigation should proceed.

@@ -159,6 +159,51 @@ public static class Factories
     public static FlyoutElement Flyout(Element? flyout, Element? detail, bool isPresented, Action<bool>? onIsPresentedChanged = null) =>
         new(flyout, detail, isPresented, onIsPresentedChanged);
 
+    // ── Shell (spec 069 §4) ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// A Shell of <paramref name="items"/> (<c>TabBar</c>, <c>FlyoutItem</c> and <c>MenuItem</c>
+    /// elements). <paramref name="selected"/> is the key of the tab or top tab shown;
+    /// <paramref name="onSelected"/> receives the key the user switched to, once Shell shows it. Update
+    /// the state to accept it, or the declared tab is shown again. A key that matches no tab shows the
+    /// first one and reports it once.
+    /// </summary>
+    public static ShellElement Shell(string? selected, Action<string>? onSelected, params Element?[] items) => new(selected, onSelected, items);
+
+    /// <summary>A Shell item shown as a bottom tab bar. It is keyed by its position unless given a key with <c>WithKey</c>.</summary>
+    public static TabBarElement TabBar(params ShellTabElement[] tabs) => new(tabs);
+
+    /// <summary>A Shell item listed in the flyout. It is keyed by its position unless given a key with <c>WithKey</c>.</summary>
+    public static FlyoutItemElement FlyoutItem(string? title, ImageSource? icon, params ShellTabElement[] tabs) => new(title, icon, tabs);
+
+    /// <summary>
+    /// A Shell tab showing <paramref name="content"/>: a <c>Page(…)</c>, or a <c>NavigationHost(…)</c>,
+    /// whose routes become the tab's navigation stack. <paramref name="key"/> names it in the Shell's
+    /// selection and is unique across the Shell.
+    /// </summary>
+    public static ShellTabElement ShellTab(string key, string? title, ImageSource? icon, Element? content)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return new ShellTabElement(title, icon, content) { Key = key };
+    }
+
+    /// <summary>A Shell tab with top tabs, each a <c>ShellContent(…)</c> holding a page.</summary>
+    public static ShellTabElement ShellTab(string key, string? title, ImageSource? icon, params ShellContentElement[] contents)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return new ShellTabElement(title, icon, null) { Key = key, Contents = contents };
+    }
+
+    /// <summary>A top tab holding <paramref name="page"/>. <paramref name="key"/> names it in the Shell's selection.</summary>
+    public static ShellContentElement ShellContent(string key, string? title, ImageSource? icon, Element? page)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return new ShellContentElement(title, icon, page) { Key = key };
+    }
+
+    /// <summary>A flyout entry that runs <paramref name="onClick"/>.</summary>
+    public static ShellMenuItemElement MenuItem(string text, Action? onClick, ImageSource? icon = null) => new(text, onClick) { Icon = icon };
+
     // ── Virtualized collections ─────────────────────────────────────────────
 
     /// <summary>A virtualized list of <paramref name="items"/>, matched across renders by <paramref name="key"/>.</summary>

@@ -28,6 +28,27 @@ internal sealed class PageHandler : Reactor.Hosting.IElementHandler<PageElement,
         Props.Set(page, NavigationPage.HasNavigationBarProperty, previous?.HasNavigationBar, next.HasNavigationBar);
         Props.Set(page, NavigationPage.HasBackButtonProperty, previous?.HasBackButton, next.HasBackButton);
         Props.SetRef(page, NavigationPage.BackButtonTitleProperty, previous?.BackButtonTitle, next.BackButtonTitle);
+        Props.Set(page, Shell.NavBarIsVisibleProperty, previous?.NavBarIsVisible, next.NavBarIsVisible);
+        Props.Set(page, Shell.TabBarIsVisibleProperty, previous?.TabBarIsVisible, next.TabBarIsVisible);
+        Props.SetRef(page, Shell.SearchHandlerProperty, previous?.SearchHandler, next.SearchHandler);
+        Props.Set(page, Shell.PresentationModeProperty, previous?.PresentationMode, next.PresentationMode);
+        if (!Equals(previous?.BackButtonBehavior, next.BackButtonBehavior))
+        {
+            if (next.BackButtonBehavior is { } back)
+            {
+                Shell.SetBackButtonBehavior(page, new BackButtonBehavior
+                {
+                    TextOverride = back.Text,
+                    IconOverride = back.Icon,
+                    IsVisible = back.IsVisible,
+                    IsEnabled = back.IsEnabled,
+                });
+            }
+            else
+            {
+                page.ClearValue(Shell.BackButtonBehaviorProperty);
+            }
+        }
 
         if (previous is null || !SameToolbar(previous.ToolbarItems, next.ToolbarItems))
         {
@@ -58,15 +79,67 @@ internal sealed class PageHandler : Reactor.Hosting.IElementHandler<PageElement,
         return true;
     }
 
-    public IChildrenStrategy<PageElement, ContentPage> Children { get; } =
-        ChildrenStrategy.Single<PageElement, ContentPage, object>(
-            e => e.Content,
-            (page, content) =>
+    public IChildrenStrategy<PageElement, ContentPage> Children { get; } = new PageChildren();
+
+    // The content, then the Shell title view.
+    private sealed class PageChildren : ISlottedChildrenStrategy<PageElement, ContentPage>
+    {
+        public IReadOnlyList<Element?> GetChildren(PageElement element) =>
+            element.TitleView is null ? [element.Content] : [element.Content, element.TitleView];
+
+        public void SyncSlots(PageElement element, ContentPage page, IReadOnlyList<IReadOnlyList<object>> slots)
+        {
+            var content = Single(slots[0], "content");
+            if (content is Page)
+                throw new InvalidOperationException("A page's content must be a view. Put pages in a NavigationStack, Tabs or Flyout instead.");
+            page.Content = content is null ? null : Props.AsView(content);
+
+            var titleView = slots.Count > 1 ? Single(slots[1], "title view") : null;
+            if (titleView is null)
             {
-                if (content is Page)
-                    throw new InvalidOperationException("A page's content must be a view. Put pages in a NavigationStack, Tabs or Flyout instead.");
-                page.Content = content is null ? null : Props.AsView(content);
-            });
+                if (page.IsSet(Shell.TitleViewProperty)) page.ClearValue(Shell.TitleViewProperty);
+            }
+            else
+            {
+                var view = Props.AsView(titleView);
+                if (!ReferenceEquals(Shell.GetTitleView(page), view)) Shell.SetTitleView(page, view);
+            }
+        }
+
+        private static object? Single(IReadOnlyList<object> natives, string what) => natives.Count switch
+        {
+            0 => null,
+            1 => natives[0],
+            _ => throw new InvalidOperationException(
+                $"PageElement hosts a single {what} but it rendered {natives.Count} controls. Wrap them in a stack."),
+        };
+    }
+}
+
+/// <summary>
+/// The native stack a <c>NavigationHost</c> declares its pages to (spec 069 §4.2): a
+/// <see cref="NavigationPage"/>'s <see cref="StackNavigator"/>, or a Shell section's
+/// <see cref="ShellSectionNavigator"/>. The host's binding talks to this surface only.
+/// </summary>
+internal interface INativeStack
+{
+    /// <summary>Makes <paramref name="pages"/> and <paramref name="modals"/> the stacks to reconcile toward.</summary>
+    void SetDesired(IReadOnlyList<Page> pages, IReadOnlyList<Page> modals, bool animated);
+
+    /// <summary>Reconciles toward the current declaration again (a restore).</summary>
+    void Run();
+
+    /// <summary>True when no platform operation (the stack's own, or the user's) is running.</summary>
+    bool IsIdle { get; }
+
+    /// <summary>Raised when the stack has become idle.</summary>
+    event Action? BecameIdle;
+
+    /// <summary>Whether a page the platform popped may still be listed in MAUI's stacks.</summary>
+    bool HasPendingPlatformPops { get; }
+
+    /// <summary>The animation argument of the last operation the stack started.</summary>
+    bool? LastOperationAnimated { get; }
 }
 
 /// <summary>
@@ -75,7 +148,7 @@ internal sealed class PageHandler : Reactor.Hosting.IElementHandler<PageElement,
 /// comparing the live stack with the latest declared one, so a change made mid-animation is
 /// picked up by the next step.
 /// </summary>
-internal sealed class StackNavigator(NavigationPage navigationPage)
+internal sealed class StackNavigator(NavigationPage navigationPage) : INativeStack
 {
     // A platform pop can stay in MAUI's stacks after Popped/ModalPopped is raised: iOS removes the
     // page when the pop animation ends, and a pop during a push animation can leave it there. The
@@ -131,19 +204,19 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
     public void ForgetModal(Page modal) => _ownedModals.Remove(modal);
 
     /// <summary>True when no reconcile is running, including a platform operation started before <see cref="Stop"/>.</summary>
-    internal bool IsIdle => !_running;
+    public bool IsIdle => !_running;
 
     /// <summary>Raised when a reconcile, and the platform operation it was awaiting, has finished.</summary>
-    internal event Action? BecameIdle;
+    public event Action? BecameIdle;
 
     /// <summary>Whether a page the platform popped may still be listed in MAUI's stacks (within its window).</summary>
-    internal bool HasPendingPlatformPops => PendingPlatformPops(out _);
+    public bool HasPendingPlatformPops => PendingPlatformPops(out _);
 
     /// <summary>Whether the operations toward the current declaration animate.</summary>
     internal bool Animated => _animated;
 
     /// <summary>The animation argument of the last push or pop (modal or not) the navigator started.</summary>
-    internal bool? LastOperationAnimated { get; private set; }
+    public bool? LastOperationAnimated { get; private set; }
 
     private bool Started(bool animated)
     {

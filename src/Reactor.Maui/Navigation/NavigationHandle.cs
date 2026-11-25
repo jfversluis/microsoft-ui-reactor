@@ -66,8 +66,14 @@ internal interface INavigationHandle
     /// <summary>The back stack's entries, root first, then the current route.</summary>
     object RouteAt(int index);
 
-    /// <summary>A guarded back navigation to depth <paramref name="depth"/>, where the user went back to.</summary>
-    bool PopToDepth(int depth);
+    /// <summary>
+    /// A back navigation to depth <paramref name="depth"/>, where the user went back to: guarded, or,
+    /// when <paramref name="approved"/>, the commit of a pop whose guards already ran (spec 069 §4.2).
+    /// </summary>
+    bool PopToDepth(int depth, bool approved = false);
+
+    /// <summary>Runs the guards for a back navigation to depth <paramref name="depth"/> without navigating.</summary>
+    bool CanPopToDepth(int depth);
 }
 
 /// <summary>
@@ -155,10 +161,12 @@ public sealed class NavigationHandle<TRoute> : INavigationHandle where TRoute : 
         set => _stack.LifecycleGuard = value;
     }
 
-    bool INavigationHandle.PopToDepth(int depth)
+    bool INavigationHandle.CanPopToDepth(int depth) => _stack.CanPopToIndex(depth - 1);
+
+    bool INavigationHandle.PopToDepth(int depth, bool approved)
     {
         var previous = _stack.Current;
-        if (!_stack.PopToIndex(depth - 1))
+        if (!_stack.PopToIndex(depth - 1, approved))
             return false;
 
         Changed(NavigationMode.Pop, null);
