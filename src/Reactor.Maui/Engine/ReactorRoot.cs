@@ -458,6 +458,7 @@ public sealed class ReactorRoot
         boundary.Error = error;
         var failed = boundary.Children;
         boundary.Children = [];
+        boundary.ChildElements = [];
         var errors = new List<Exception>();
         foreach (var child in failed) Unmount(child, errors);
         ReportSecondary(errors, error);
@@ -612,78 +613,132 @@ public sealed class ReactorRoot
     }
 
     /// <summary>
-    /// Matches new child elements to existing nodes: by key when one is set, otherwise by
-    /// position among the unkeyed children. A match of the same type is updated in place,
+    /// Matches new child elements to the parent's child nodes through the core's child diff
+    /// (spec 067 §13.6), the one WinUI uses: keyed children by key, with the minimal moves for a
+    /// reorder; unkeyed children by position. A match the identity rules accept is updated in place,
     /// keeping its state and native control; everything else is mounted or unmounted.
     /// </summary>
     private void ReconcileChildren(Node parent, IReadOnlyList<Element?> elements)
     {
-        Dictionary<string, Node>? keyedOld = null;
-        List<Node?>? unkeyedOld = null;
-        foreach (var child in parent.Children)
-        {
-            if (child.Element.Key is { } key) (keyedOld ??= [])[key] = child;
-            else (unkeyedOld ??= []).Add(child);
-        }
-
-        var result = new List<Node>(elements.Count);
-        try
-        {
-            HashSet<string>? seenKeys = null;
-            var unkeyedIndex = 0;
-            foreach (var raw in elements)
-            {
-                var element = raw ?? EmptyElement.Instance;
-                Node? candidate = null;
-                if (element.Key is { } key)
-                {
-                    if (!(seenKeys ??= []).Add(key))
-                        throw new InvalidOperationException(
-                            $"Two children of {parent.Element.GetType().Name} have the key '{key}'. Keys must be unique among siblings.");
-                    keyedOld?.Remove(key, out candidate);
-                }
-                else
-                {
-                    if (unkeyedOld is not null && unkeyedIndex < unkeyedOld.Count)
-                    {
-                        candidate = unkeyedOld[unkeyedIndex];
-                        unkeyedOld[unkeyedIndex] = null;
-                    }
-                    unkeyedIndex++;
-                }
-
-                if (candidate is not null && SameIdentity(candidate.Element, element)
-                    && (candidate.Kind != NodeKind.Host || candidate.Handler!.CanUpdate(candidate.Element, element)))
-                {
-                    // Held in the result before updating, so a failed update still leaves it reachable.
-                    result.Add(candidate);
-                    Update(candidate, element);
-                }
-                else
-                {
-                    if (candidate is not null) UnmountAndReport(candidate);
-                    result.Add(Mount(element, parent));
-                }
-            }
-        }
-        catch
-        {
-            // Keep every node this pass still owns reachable, so whoever handles the error can unmount them.
-            if (keyedOld is not null) result.AddRange(keyedOld.Values);
-            if (unkeyedOld is not null) result.AddRange(unkeyedOld.OfType<Node>());
-            parent.Children = result;
-            throw;
-        }
-
-        var errors = new List<Exception>();
-        if (keyedOld is not null)
-            foreach (var stale in keyedOld.Values) Unmount(stale, errors);
-        if (unkeyedOld is not null)
-            foreach (var stale in unkeyedOld) if (stale is not null) Unmount(stale, errors);
-
-        parent.Children = result;
-        Report(errors);
+        // An Element?[] is an Element[] at run time; the diff skips the nulls itself.
+        var next = elements as Element[] ?? [.. elements!];
+        var teardown = new TeardownErrors();
+        ChildReconciler<Element, Node, ChildHost>.Reconcile(
+            parent.ChildElements, next, parent.ChildList, new ChildHost(this, parent, teardown), NoRerender, parent);
+        parent.ChildElements = next;
+        if (teardown.Errors is { } errors) Report(errors);
     }
+
+    // Each node wires its own re-render callback; the diff's is never called.
+    private static readonly Action NoRerender = static () => { };
+
+    /// <summary>Teardown errors collected while reconciling, reported once the children are in place.</summary>
+    private sealed class TeardownErrors
+    {
+        public List<Exception>? Errors;
+        public void Add(List<Exception> errors)
+        {
+            if (errors.Count > 0) (Errors ??= []).AddRange(errors);
+        }
+    }
+
+    /// <summary>
+    /// The engine's answers to the core's child diff, with child nodes as its "native" children.
+    /// The engine has no exit transitions, ambient animation, skip hints or pooled natives, so those
+    /// answers are constant.
+    /// </summary>
+    private readonly struct ChildHost(ReactorRoot root, Node parent, TeardownErrors teardown) : IChildReconcileHost<Element, Node>
+    {
+        public Node? Mount(Element element, Action requestRerender) => root.Mount(element, parent);
+
+        public Node? UpdateChildTracked(Element oldElement, Element newElement, Node control, Action requestRerender, out bool unmountedByUpdate)
+        {
+            unmountedByUpdate = false;
+            root.Update(control, newElement);
+            return null;
+        }
+
+        public void UnmountChild(Node control)
+        {
+            var errors = new List<Exception>();
+            Unmount(control, errors);
+            teardown.Add(errors);
+        }
+
+        public bool CanUpdate(Element oldElement, Element newElement) =>
+            SameIdentity(oldElement, newElement)
+            && (IsCompositional(newElement) || root._registry.Get(newElement.GetType()).CanUpdate(oldElement, newElement));
+
+        // A child whose element is unchanged is skipped, unless it is dirty itself (ResolveDirtyChildIndices).
+        public bool CanSkipUpdate(Element oldElement, Element newElement) => ReferenceEquals(oldElement, newElement);
+        public bool ForceFullRenderActive => false;
+        public bool ForceRenderThroughWrapper(Element newElement) => false;
+        public bool HasActiveContextValues => false;
+        public bool ShouldDeclineSkip(Node control) => false;
+        public bool NeedsRefreshOnSkip(Element oldElement, Element newElement) => false;
+        public void RefreshSkippedChildState(Node control, Element oldElement, Element newElement) { }
+        public void CountSkipped(int count) { }
+
+        public bool TryGetChangedIndices(Element[] oldChildren, Element[] newChildren, out int[] changedIndices)
+        {
+            changedIndices = null!;
+            return false;
+        }
+
+        // A dirty component re-renders in this pass even when its element is unchanged; its dirty
+        // descendants are rendered by the batch itself.
+        public DirtyChildIndices ResolveDirtyChildIndices(Node? parentControl, IChildList<Node> children)
+        {
+            foreach (var child in parent.Children)
+                if (child.Dirty) return DirtyChildIndices.ProbeEachChild;
+            return default;
+        }
+
+        public bool IsOnDirtyAncestorPath(Node control) => control.Dirty;
+
+        public bool HasExitingControls => false;
+        public bool HoldsExitingControlIn(IChildList<Node> children) => false;
+        public bool IsExiting(Node control) => false;
+
+        public void RemoveChildWithExitTransition(IChildList<Node> children, int index)
+        {
+            var node = children.Get(index);
+            children.RemoveAt(index);
+            UnmountChild(node);
+        }
+
+        public bool ReplaceChildWithExitTransition(IChildList<Node> children, int index, Node newControl)
+        {
+            var old = children.Get(index);
+            children.Replace(index, newControl);
+            UnmountChild(old);
+            return false;
+        }
+
+        public bool TryGetMountedKey(Node control, out string? key)
+        {
+            key = control.Element.Key;
+            return true;
+        }
+
+        public void ReportDuplicateSiblingKeys(Element[] children, Node? parentControl)
+        {
+            var seen = new HashSet<string>();
+            foreach (var child in children)
+                if (child?.Key is { } key && !seen.Add(key))
+                    throw new InvalidOperationException(
+                        $"Two children of {parent.Element.GetType().Name} have the key '{key}'. Keys must be unique among siblings.");
+        }
+
+        public bool IsEmpty(Element element) => element is EmptyElement;
+        public bool HasAmbientAnimation => false;
+        public void OnInsertedUnderAmbient(Node control, Element element) { }
+        public void OnMovedUnderAmbient(Node control) { }
+    }
+
+    private static bool IsCompositional(Element element) =>
+        element is EmptyElement or GroupElement or ContextProviderElement or ErrorBoundaryElement
+            or ComponentElement or FuncElement or MemoElement;
 
     /// <summary>
     /// Unmounts <paramref name="node"/> and its subtree, children first. A throwing cleanup or handler

@@ -47,6 +47,13 @@ internal sealed class Node : ComponentNode, ILiveElement
     public NodeKind Kind { get; }
     public List<Node> Children { get; set; } = [];
 
+    /// <summary>The child elements the last reconcile mounted <see cref="Children"/> for, nulls and empties included.</summary>
+    public Element[] ChildElements { get; set; } = [];
+
+    /// <summary><see cref="Children"/> as the core's child diff edits it.</summary>
+    public IChildList<Node> ChildList => _childList ??= new NodeChildList(this);
+    private NodeChildList? _childList;
+
     // Host nodes only.
     public IHandlerAdapter? Handler { get; set; }
     public object? Native { get; set; }
@@ -77,4 +84,20 @@ internal sealed class Node : ComponentNode, ILiveElement
     /// created it. Each provider links to the next one up, so context lookups walk providers only.
     /// </summary>
     public Node? NearestProvider { get; }
+
+    private sealed class NodeChildList(Node parent) : IChildList<Node>
+    {
+        public int Count => parent.Children.Count;
+        public Node Get(int index) => parent.Children[index];
+        public void Insert(int index, Node element) => parent.Children.Insert(index, element);
+        public void RemoveAt(int index) => parent.Children.RemoveAt(index);
+        public void Replace(int index, Node element) => parent.Children[index] = element;
+
+        public void Move(int oldIndex, int newIndex)
+        {
+            var node = parent.Children[oldIndex];
+            parent.Children.RemoveAt(oldIndex);
+            parent.Children.Insert(newIndex, node);
+        }
+    }
 }

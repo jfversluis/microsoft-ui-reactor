@@ -410,7 +410,9 @@ public static class Fixtures
         await c.Settle();
         // Showing the second stack makes it reconcile (it loads), with the first stack's modal up.
         tabs.CurrentPage = tabs.Children[1];
-        await c.WaitFor(() => tabs.Children[1].IsLoaded, "the second stack to load");
+        // UIKit loads a tab beneath a modal on its own schedule; a hosted CI simulator has taken
+        // more than five seconds (MAUI run 45514660132), so this wait allows longer.
+        await c.WaitFor(() => tabs.Children[1].IsLoaded, "the second stack to load", timeoutMs: 20000);
         await c.Settle(2000);
         // The second stack declares no modals; it must leave the first stack's one alone.
         Equal(1, c.Window.Navigation.ModalStack.Count, "modals shown");
