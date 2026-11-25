@@ -20,6 +20,10 @@ public sealed class FixtureContext(Window window)
 {
     private ReactorRoot? _root;
     private readonly ContentPage _viewHost = new();
+    private readonly WindowPageSetter _pages = new(window);
+
+    /// <summary>The window-page setter ReactorWindow uses, so fixtures exercise its Android workaround.</summary>
+    internal WindowPageSetter Pages => _pages;
 
     public Window Window => window;
     public List<Exception> UnhandledErrors { get; } = [];
@@ -48,11 +52,11 @@ public sealed class FixtureContext(Window window)
         if (native is null && _keepWindowPage) return;
         if (native is Page page)
         {
-            window.Page = page;
+            _pages.Set(page);
             return;
         }
         _viewHost.Content = native is null ? null : Props.AsView(native);
-        if (!ReferenceEquals(window.Page, _viewHost)) window.Page = _viewHost;
+        _pages.Set(_viewHost);
     }
 
     /// <summary>Waits, letting the UI thread run, until <paramref name="condition"/> holds.</summary>
