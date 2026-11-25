@@ -14,7 +14,7 @@ shared core, rather than by growing a second one.
 | 4b-2 | Declarative Shell |
 | 4b-3 | Page dialogs, the system back button, modal presentation style, app and window lifecycle hooks |
 
-This spec details 4b-1. §4 and §5 outline 4b-2 and 4b-3; each is detailed in this spec before its
+This spec details 4b-1 (§2) and 4b-2 (§4); §5 outlines 4b-3, which is detailed here before its
 implementation starts.
 
 ## 1. What WinUI has (the source of truth)
@@ -126,7 +126,7 @@ Each host provides:
     its task.
   - A pop the user started has no task: it completes when MAUI's stack no longer lists the page,
     which the adapter already tracks. If that hasn't happened within the platform-pop window (spec
-    065 §7), it completes when the window expires. 4b-2 replaces the window with MAUI's
+    065 §7), it completes when the window expires. Inside Shell, 4b-2 replaces the window with MAUI's
     navigation-completed signal.
 - **Supersession**, as WinUI's `NavigationHostLifecycle` does today. Each navigation has a
   generation. When a newer navigation supersedes one in flight:
@@ -177,7 +177,8 @@ return NavigationHost(nav, route => route switch
     handles it. A device fixture checks exactly-once guard invocation, including a back press
     during a push.
   - **Restoring a refused pop.** It is bounded by today's 3-second platform-pop window (spec 065
-    §7). 4b-2 replaces that window with MAUI's navigation-completed signal.
+    §7). Inside Shell, 4b-2 replaces that window with MAUI's navigation-completed signal; a
+    `NavigationPage` keeps it.
 - **Lifecycle** follows §2.3's order and supersession rule, so the contexts and order match WinUI
   (as built, in MAUI's own binding; §2.6 lists the divergences).
 - **`NavigationStack(pages)`** stays as the lower-level primitive, and `UseRouteStack` as a plain
@@ -309,23 +310,27 @@ var (tab, setTab) = UseState("home");
 var homeNav = UseNavigation<HomeRoute>(new HomeRoute.List());
 return Shell(tab, setTab,
     TabBar(
-        ShellTab("home", "Home", Icons.Home, NavigationHost(homeNav, MapHome)),
-        ShellTab("settings", "Settings", Icons.Settings, Page("Settings", SettingsView()))))
+        ShellTab("home", "Home", NavigationHost(homeNav, MapHome), Icons.Home),
+        ShellTab("settings", "Settings", Page("Settings", SettingsView()), Icons.Settings)))
     .FlyoutBehavior(FlyoutBehavior.Disabled);
 ```
 
-- **`Shell(string selected, Action<string>? onSelected, params Element[] items)`** renders a
-  `Shell`. `selected` is the key of the tab (or top tab) shown. Items are `TabBar(...)`,
-  `FlyoutItem(...)` and `MenuItem(...)` elements.
-- **`TabBar(params ShellTabElement[])`** and **`FlyoutItem(string title, ImageSource? icon, params
-  ShellTabElement[])`** render a `TabBar` and a `FlyoutItem`.
-- **`ShellTab(string key, string? title, ImageSource? icon, Element content)`** renders a `Tab` (a
+(As built; §4.7 lists what changed from the reviewed design: the callback is `onSelectedChanged`, the
+menu item is `ShellMenuItem`, icons are optional and last, and children may be null.)
+
+- **`Shell(string? selected, Action<string>? onSelectedChanged, params Element?[] items)`** renders
+  a `Shell`. `selected` is the key of the tab (or top tab) shown. Items are `TabBar(...)`,
+  `FlyoutItem(...)` and `ShellMenuItem(...)` elements.
+- **`TabBar(params ShellTabElement?[])`** and **`FlyoutItem(string? title, params
+  ShellTabElement?[])`** (icon with `.Icon(...)`) render a `TabBar` and a `FlyoutItem`. A null tab
+  is skipped, so a tab can be conditional.
+- **`ShellTab(string key, string? title, Element? content, ImageSource? icon = null)`** renders a `Tab` (a
   `ShellSection`) with one `ShellContent`. `content` is a `Page(...)` or a `NavigationHost(...)`.
   - With a `NavigationHost`, the host's root route is the content's page, and the routes above it
     are pushed onto the section's stack (§4.2).
   - A section has exactly one stack owner.
-- **Top tabs:** `ShellTab(key, title, icon, params ShellContentElement[])`, where each
-  `ShellContent(key, title, icon, page)` holds a page. In 4b-2 top-tab contents are pages, not
+- **Top tabs:** `ShellTab(key, title, params ShellContentElement?[])`, where each
+  `ShellContent(key, title, page, icon = null)` holds a page. In 4b-2 top-tab contents are pages, not
   navigation hosts. A section has one stack, shared by its contents, so independent per-top-tab
   histories would need saving and restoring stacks on every switch. None of the seven ports uses
   top tabs with a stack; this waits for one that does.
@@ -438,22 +443,22 @@ return Shell(tab, setTab,
   `Navigating` with `CanCancel = false` for these, followed by `Navigated`. Reactor tags these as its
   own, as the adapter does.
 - **A user's switch** (a tab tap, a flyout item, a top-tab swipe) is reported when it is committed:
-  `onSelected` runs from `Navigated`, with the key of the selection now shown. Reactor doesn't
+  `onSelectedChanged` runs from `Navigated`, with the key of the selection now shown. Reactor doesn't
   report from `Navigating`, which is only a proposal.
 - **A refused switch is restored**, like any controlled control (spec 067 §14). If the app doesn't
   change state, the latest declared selection is set back once state settles. Each restore has a
   generation, so rapid switches restore only to the latest declaration. Cancelling in `Navigating`
   isn't used, because Windows' `NavigationView` has already changed visually by then.
 - **A tab switch isn't a navigation** in the model, so `UseNavigationLifecycle` guards don't run
-  for it. An app that wants to refuse a switch refuses it in `onSelected`.
+  for it. An app that wants to refuse a switch refuses it in `onSelectedChanged`.
 - **Structural changes are staged:** add new items, select, let the selection settle, then remove
   old items. MAUI's own fallback for a removed current item re-navigates asynchronously, which
   Reactor never relies on. A removed section's adapter stops.
 - **Invalid or missing selection:**
-  - A Shell with nothing selectable (empty, or menu items only) has no selection, and `onSelected`
+  - A Shell with nothing selectable (empty, or menu items only) has no selection, and `onSelectedChanged`
     isn't called.
   - In a Shell with selectable items, a selected key that doesn't exist selects the first selectable
-    item. `onSelected` reports that once, when the selection shown changes, not on every render.
+    item. `onSelectedChanged` reports that once, when the selection shown changes, not on every render.
 - **Swapping `ShellItem`s is heavy** (a new native item renderer on iOS, a fragment swap on
   Android). Apps with tabs should use one `TabBar` and change its tabs, which MAUI updates
   incrementally.
@@ -518,24 +523,39 @@ differs from §4.1–4.6, or §4 left a choice open:
 - **Where the events are handled.** Reactor renders a `Shell` subclass, `ReactorShell`, and handles
   navigation in its `OnNavigating` and `OnNavigated` overrides, which run after every `Navigating` and
   `Navigated` subscriber, so a cancel by another handler is already visible.
+- **The Android back key is taken in `OnBackButtonPressed`.** On MAUI 11.0.0 both the Android back
+  key and the toolbar back reach `Shell.OnBackButtonPressed` (dotnet/maui#9095). `ReactorShell`
+  overrides it on Android: a page that handles the key goes first; then, with the shown section's
+  host showing its model, the guards run as in the preflight (`PreflightBack`) and an accepted back is
+  committed to the model at once, after which the navigator pops as its own operation. So Android
+  has no preflighted platform pop, no approval held across a transition and no 16 ms polling. A back
+  the host can't preflight is the guarded `GoBack` of §2.6; at the root the key is passed on. iOS and
+  Mac Catalyst keep the `Navigating` preflight: the swipe never reaches `OnBackButtonPressed`.
+- **The surface is one-directional.** The binding declares pages to `INativeStack`; a user's back
+  reaches the binding through the navigator's `Binding` (`PreflightBack`, `CommitBack`,
+  `DiscardBack`, `OnBackButton`), not through the interface.
 - **Origin tagging** is by kind (push or pop) and section, not by depth: a pop's target is `..`, which
   carries no depth. A relative target (`..`, or a pushed page's route) belongs to the section shown;
   an absolute one names the section's route or, since Shell trims implicit item and section routes from
-  the location, its content's route. Each of the navigator's operations claims one event. A user's back
-  must target the shown section too.
+  the location, its content's route. Each of the navigator's operations claims one event, and the
+  claim clears the tag, so it covers only the part of the call before MAUI raises `Navigating` (its
+  first await, or a pending navigation of the section), never the animation. A user's back must
+  target the shown section too.
 - **The iOS and Mac Catalyst coordinator.** UIKit has no `NotifyWhenTransitionCompleted`; the
   navigator registers `AnimateAlongsideTransition` with an empty animation, whose completion UIKit
   runs after the completion or rollback animation, and `NotifyWhenInteractionChanges`, which logs a
   cancelled swipe. A cancelled transition settles the back as cancelled; a completed one settles at
   `Navigated` for the section, when MAUI has removed the page. After 3 s without either, Reactor logs a
-  warning through `DiagnosticLog` and settles once the departing page's navigation controller has no
-  transition coordinator, by whether the page is still in the section's stack. On MAUI 11.0.0 the
+  warning through `DiagnosticLog`. Nothing settles on time alone: only a transition the coordinator
+  reported, and that has ended without a callback, is settled, by whether the page is still in the
+  section's stack. Before the transition starts (a `Navigating` deferral holding the pop) the back keeps
+  waiting for `Navigated` or a cancel. On MAUI 11.0.0 the
   iOS back button also arrives as `Navigating`: `ShellSectionRenderer.SendPop` goes through
   `Shell.OnBackButtonPressed`, which pops through `ShellSection.Navigation`.
-- **Android settlement.** MAUI's deferral state isn't public, so the navigator re-reads the same
-  `ShellNavigatingEventArgs.Cancelled` every dispatcher turn (16 ms) until the back settles: a cancel
-  by a later handler, or a deferral that ends cancelled, is seen on the next turn; otherwise the back
-  settles at `Navigated`.
+- **Cancels after the preflight.** MAUI's deferral state isn't public, so while a preflighted back is
+  pending the navigator re-reads the same `ShellNavigatingEventArgs.Cancelled` every dispatcher turn
+  (16 ms): a cancel by a later handler, or a deferral that ends cancelled, is seen on the next turn.
+  On Android this applies only to a back MAUI offers without the key (the key itself is taken above).
 - **A back that can't be preflighted** (the host isn't showing the model, or the navigator is in the
   middle of its own operation) is cancelled and becomes a guarded back of the model, which the
   navigator then shows, as the back key does for a `NavigationPage` (§2.6).
@@ -557,10 +577,33 @@ differs from §4.1–4.6, or §4 left a choice open:
   selection synchronously, so "let the selection settle" needed no extra wait on the three platforms.
 - **A new root** (`Reset`, `Replace` at the root) pops the section to its root without animation and
   then sets `ShellContent.Content`; the device fixtures check the platform shows the new page.
+- **A navigator outlives its section until it settles.** When its tab goes, its content changes or
+  the Shell's tree unmounts (a root swap: the engine unmounts the old tree before the window's page is
+  replaced), a navigator that is running an operation or waiting on a user's back stays listed by its
+  Shell (`ReactorShell.Lingering`) until that finishes, so `WindowPageSetter` keeps waiting. A tab whose
+  content changes from a host to a page or to top tabs is then popped to its root without animation, as
+  the navigator's own operation. The stopped navigator then dismisses its modals.
+- **Modals.** `OwnedModals` is shared with the `NavigationPage` navigator: each stack pops only its own
+  modals when they are on top and, once unmounted, dismisses them through the window it presented them
+  in, waiting for a covered one to be uncovered. A page change in a section while one of its modals is
+  shown is held until the modal is gone (Shell would dismiss the modal first and report it as the
+  user's); the host's lifecycle completes once the page change is shown.
+- **Modal route pages are rejected.** A route page of a Shell tab's host with a modal
+  `PresentationMode` throws, pointing at the host's `Modals`: Shell would put it on the window's modal
+  stack, outside the section's stack the navigator reconciles.
+- **A host in a `ShellTab` ignores the stack's title, icon and bar colors** (the tab's come from
+  `ShellTab`, the colors from the Shell's appearance) and logs a warning once if they are set.
 - **`TitleView`** is an element in a second slot of the page; `SearchHandler` is the app's object.
   Page properties are applied whether or not the page is in a Shell (nothing else reads them), and
   `PresentationMode` is set at mount, before the page can be pushed.
-- **`MenuItem`** is built: Reactor wraps the `MenuItem` into MAUI's `MenuShellItem` itself.
+- **`ShellMenuItem`** is built: Reactor wraps a `MenuItem` into MAUI's `MenuShellItem` itself. The
+  factory is named `ShellMenuItem`, leaving `MenuItem` for the menus of 4e.
+- **API after review.** `onSelected` became `onSelectedChanged` (like `OnSelectedIndexChanged`); icons
+  are an optional last argument (`ShellTab`, `ShellContent`) or `.Icon(...)` (`FlyoutItem`, the top-tab
+  `ShellTab`); `TabBar`, `FlyoutItem` and the top-tab `ShellTab` take nullable children.
+- **A relative back with a result** (`..?refresh=true`) is a result in app state or context that the
+  destination reads, then `GoBack`: the destination stays mounted. Putting the result in the
+  destination's route (`PopTo` and `Replace`) also works but remounts the page.
 - **Naming.** With `using static Microsoft.UI.Reactor.Maui.Factories;`, `Shell` names the factory, as
   `Label` and `Button` do, so MAUI's type needs `Microsoft.Maui.Controls.Shell` (or an alias).
 - **Tests.** Headless Shell raises `Navigated` only for a window that belongs to an app, and only once
@@ -571,14 +614,14 @@ differs from §4.1–4.6, or §4 left a choice open:
   `IShellItemController.ProposeSection`, which the tab bars call; the native back is
   `ShellSectionRenderer.ShouldPopItem` (the back button's path; a direct `PopViewController` bypasses
   Shell) on iOS and Mac Catalyst, and the activity's back dispatcher on Android.
-- **Gate evidence.** Headless: `tests/Reactor.Maui.Tests/ShellTests.cs` (28 tests). Device: the 17
+- **Gate evidence.** Headless: `tests/Reactor.Maui.Tests/ShellTests.cs` (45 tests). Device: the 17
   `Shell_*` fixtures pass on Mac Catalyst, the iOS simulator and the Android emulator, with the rest
   of the suite. Each key oracle was mutation-checked (the code broken, the test seen to fail).
 - **The real iOS edge swipe** was driven through Appium (XCUITest, iPhone 18 Pro simulator, iOS 27)
   against opt-in `ManualSwipe_*` fixtures, which run only when the filter names them and wait for the
   gesture. A completed swipe passed, with and without an app navigation made while it was in flight:
   the guard ran once, the page left, the model followed, and the held navigation was shown after the
-  gesture (with a window swap after it). A swipe released early could not be produced: every
+  gesture. A swipe released early could not be produced: every
   synthesized edge drag, even 38 pt over 3 s, completed, so the cancelled path is covered headlessly
   only (the coordinator's cancelled completion), and those two fixtures wait for a human release.
 - **Not done in 4b-2:** a declarative search element and top tabs with their own stacks, which wait

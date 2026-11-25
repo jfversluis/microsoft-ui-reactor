@@ -215,7 +215,10 @@ Design choices that differ from today's WinUI Reactor, and why:
   `ShellSectionNavigator`, which pushes and pops through the section one awaited operation at a time,
   tags them as its own, preflights the user's back in `Shell.Navigating` and stays busy until the
   platform has finished it (the iOS transition coordinator, `Navigated`, or a cancel), holding app
-  navigations meanwhile. `WindowPageSetter` waits for a busy section as for a busy navigation page.
+  navigations meanwhile; on Android the back key is a guarded back of the model taken in
+  `ReactorShell.OnBackButtonPressed`. A page change waits while the section's own modal is shown. Both
+  navigators share `OwnedModals`. `WindowPageSetter` waits for a busy section as for a busy navigation
+  page, including one whose Shell has just unmounted (it stays listed until it settles).
 
 ## 6. What has been proven
 
@@ -235,7 +238,7 @@ shared navigation model (spec 069): the stack's operations and guard order, `Pop
 state restored without guards, the lifecycle hook's order and lookup, and a handle over an injected
 scheduler (including one that refuses).
 
-**Renderer, headless** (`tests/Reactor.Maui.Tests`, 124 tests). Real Controls objects and direct
+**Renderer, headless** (`tests/Reactor.Maui.Tests`, 141 tests). Real Controls objects and direct
 views, no platform handlers: modifiers, every control's props and echo-free events, the hybrid
 fallback and mixed trees, `CollectionView` cells as child roots, pages, toolbar items, the
 navigation stack's reconcile, the user-pop rule (below), tabs and flyout (including swapping the
@@ -258,9 +261,15 @@ code at each level and from the user (reported once, from `Navigated`), a refuse
 tab removed with the declared one selected first, stacks in tabs (the root as the content's page,
 kept across selection, two sections navigating at once), the user's back accepted, refused by either
 guard, to the root (`PopToRoot`), at the root and during a modal, the iOS swipe's state machine
-(completed, cancelled, never settling, cancelled by another handler, with an app navigation held
-through it), the window swap waiting for a busy section, the pages' Shell properties, the flyout,
-and the README snippet.
+(completed, cancelled, never settling, a deferral longer than the warning, a transition ending
+without `Navigated`, a second offer, cancelled by another handler, with an app navigation held
+through it), a back the host can't preflight (before a push is shown, during a push), the Android
+back key as a guarded model back (accepted, refused by either guard, at the root), the window swap
+waiting for a busy section (also after a root swap unmounts the Shell), modals (a page change held
+while one is shown, a user dismissal reported, dismissed when the Shell unmounts, a host tab removed
+with its modal shown or mid-push), modal route pages rejected, a tab's content changing from a deep
+host, a nested host in a tab's page, conditional tabs, the pages' Shell properties, the flyout, and
+the README snippet.
 
 **Device tier** (`tests/Reactor.Maui.DeviceTests`, 71 fixtures). All pass on Mac Catalyst (macOS 26,
 Apple silicon), an iPhone 18 Pro simulator (iOS 27) and the Android API 37 emulator; the 25 earlier
@@ -296,14 +305,16 @@ native views show, not the virtual tree:
   `onNavigatedTo` only once the navigator is idle; the animation argument of each push, pop and modal
   follows `NavigateOptions.Animated` and the host's configured default. Shell (spec 069 §4.6), each
   checking the page the platform displays and, on iOS and Mac Catalyst, the section's native depth:
-  a tab tap reported and a refused one undone (also rapid taps); push, pop, reset and a new root in
-  a tab; a restored history; the native back (the back button's path on iOS and Mac Catalyst, the
-  back dispatcher on Android) accepted with the guard once and the callbacks in order, refused by
-  either guard with no page moving; back at the root passed on; stacks kept across tab switches;
-  rapid push, switch and back; reordering and removing the selected tab; `NavBarIsVisible` and
-  `TabBarIsVisible` live (read from the native bars); the flyout header and content updated in place
-  and the user's flyout reported; a modal from a Shell page; typed reset and back with a query; a
-  deep link; and a window swap waiting for a busy section. Also: tab selection accepted and refused, `CollectionView` virtualizes
+  a tab tap reported and a refused one undone (also rapid taps, refused and accepted); push, pop,
+  reset and a new root in a tab; a restored history; the native back (the back button's path on iOS
+  and Mac Catalyst, the back dispatcher on Android) accepted with the guard once and the callbacks in
+  order, refused by either guard with no page moving; back at the root passed on; stacks kept across
+  tab switches; rapid push, switch and back, and a back right after a push not yet shown;
+  reordering and removing the selected tab; `NavBarIsVisible` and `TabBarIsVisible` live (read from
+  the native bars on all three); the flyout header and content updated in place and the user's
+  flyout reported; a modal from a Shell page, with a push held until it goes; typed reset and a back
+  with a result kept in state; a deep link; and a root swap from the Shell to a page waiting for a busy
+  section. Also: tab selection accepted and refused, `CollectionView` virtualizes
   (a few of 200 cells realized) and reports selection, `UseWindowSize` and `UseAppTheme` follow the
   window and the theme, an `ErrorBoundary` catches an event-handler failure, and effects clean up on
   unmount.
