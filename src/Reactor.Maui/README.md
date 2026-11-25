@@ -69,6 +69,20 @@ Both renderers take the same components. They differ only in the registry you pa
 | `DirectHandlers.CreateRegistry()` (needs `UseReactorDirectViews()`) | Labels, buttons, entries, check boxes, switches, sliders, progress, images and the stack and grid layouts as lightweight views that MAUI's platform handlers render directly, skipping the Controls layer (no bindable properties, bindings or logical tree). Everything else is a regular MAUI control. | You want the fastest rendering. Mounting and full updates are 27–58% faster, with 59–87% fewer allocations (spec 065 §4.1). |
 | `MauiHandlers.CreateRegistry()`, or no registry | Regular MAUI controls for everything. | You rely on implicit styles, `VisualStateManager`, effects or behaviors for every view. |
 
+To render an element with your own handler, or replace a built-in one, register it on the
+registry you pass. The last registration for a type wins, so yours overrides the built-in one:
+
+```csharp
+var registry = MauiHandlers.CreateRegistry()
+    .Register(new RatingHandler())             // IElementHandler<RatingElement, RatingView>
+    .RegisterForDerivedTypes(new ChipHandler()); // every record derived from ChipBase
+```
+
+`RegisterForDerivedTypes` covers a family of element records with a non-generic base, such as the
+closed types of a generic `Chip<T> : ChipBase`. A registration for exactly one type wins over it.
+Unlike WinUI's process-wide `ControlRegistry`, where the first registration wins, a MAUI registry
+belongs to the roots you pass it to.
+
 The direct renderer switches an element to its Controls version when it uses a setting that only
 Controls supports (`.Style()`, `.StyleClass()`, gestures, shadows, clipping, `MaxLines`…), so you
 never lose a feature by choosing it. Implicit styles in `App.xaml` (`Styles.xaml` in the template)

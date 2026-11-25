@@ -2,24 +2,57 @@ using Microsoft.UI.Reactor.Core;
 
 namespace Microsoft.UI.Reactor.Hosting;
 
-/// <summary>The element-type to handler map a renderer hands to a <see cref="ReactorRoot"/>.</summary>
+/// <summary>
+/// The element-type to handler map a renderer hands to a <see cref="ReactorRoot"/>. A later
+/// registration for the same type replaces the earlier one, so an app can override a built-in
+/// handler. An element type with no registration of its own uses the handler registered for its
+/// nearest base type with <see cref="RegisterForDerivedTypes"/>. The lookup is the shared core's
+/// (spec 067 §15), the one WinUI's <c>ControlRegistry</c> uses.
+/// </summary>
 public sealed class ElementHandlerRegistry
 {
-    private readonly Dictionary<Type, IHandlerAdapter> _handlers = [];
+    private readonly HandlerTable<IHandlerAdapter> _handlers = new();
 
+    /// <summary>Registers <paramref name="handler"/> for exactly <typeparamref name="TElement"/>, replacing any earlier one.</summary>
     public ElementHandlerRegistry Register<TElement, TControl>(IElementHandler<TElement, TControl> handler)
         where TElement : Element
         where TControl : class
     {
-        _handlers[typeof(TElement)] = new HandlerAdapter<TElement, TControl>(handler);
+        ArgumentNullException.ThrowIfNull(handler);
+        _handlers.Set(typeof(TElement), new HandlerAdapter<TElement, TControl>(handler));
+        return this;
+    }
+
+    /// <summary>
+    /// Registers <paramref name="handler"/> for every element type derived from
+    /// <typeparamref name="TBase"/> that has no registration of its own, replacing any earlier one
+    /// for <typeparamref name="TBase"/>'s derived types. Use it for a family of element records that
+    /// one handler renders, such as the closed types <c>Chip&lt;int&gt;</c> and
+    /// <c>Chip&lt;string&gt;</c> of a generic record that derives from a non-generic base
+    /// (<c>abstract record ChipBase : Element</c>): register the handler for that base.
+    /// </summary>
+    /// <remarks>
+    /// <typeparamref name="TBase"/> itself is not covered, only the types derived from it. An exact
+    /// <see cref="Register{TElement, TControl}"/> wins over this, and the nearest registered base type
+    /// wins over a more distant one.
+    /// </remarks>
+    public ElementHandlerRegistry RegisterForDerivedTypes<TBase, TControl>(IElementHandler<TBase, TControl> handler)
+        where TBase : Element
+        where TControl : class
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        _handlers.Set(typeof(TBase), new HandlerAdapter<TBase, TControl>(handler), forDerivedTypes: true);
         return this;
     }
 
     internal IHandlerAdapter Get(Type elementType) =>
-        _handlers.TryGetValue(elementType, out var handler)
+        _handlers.TryResolve(elementType, out var handler)
             ? handler
             : throw new InvalidOperationException(
-                $"No handler is registered for {elementType.Name}. Register one on the renderer's ElementHandlerRegistry.");
+                $"No handler is registered for {elementType}. Register one on the renderer's ElementHandlerRegistry"
+                + (elementType.BaseType is { } baseType && baseType != typeof(Element)
+                    ? $", or one for the types derived from {baseType} with RegisterForDerivedTypes."
+                    : "."));
 }
 
 /// <summary>Erases the handler's generic types so the reconciler can dispatch on element type.</summary>
