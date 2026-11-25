@@ -60,13 +60,13 @@ is doesn't work:
 
 So the **behaviour** moves to the core, and each renderer keeps a thin public **handle**:
 
-| In the core (`src/Reactor.Core/Navigation`, namespace `Microsoft.UI.Reactor.Navigation`) | Per renderer |
+| In the core (`src/Reactor.Core/Navigation`, namespace `Microsoft.UI.Reactor.Navigation` unless noted) | Per renderer |
 |---|---|
-| `NavigationStack<TRoute>` (internal, moved as is) | `NavigationHandle<TRoute>`: the public facade over the model. WinUI's is unchanged; MAUI's has the same names and members |
+| `NavigationStack<TRoute>` (internal, moved as is) is the model: the back, current and forward routes, the guard, and change notification. The handles delegate to it, as WinUI's already does | `NavigationHandle<TRoute>`: the public facade over the model. WinUI's is unchanged; MAUI's has the same names and members |
 | `NavigationState<TRoute>`, `DeepLinkMap<TRoute>` and its helpers (public, moved: same namespace and names) | `NavigateOptions`: WinUI keeps `Transition`, `ConnectedAnimationKey` and `PushToBackStack`; MAUI has `Animated` and `PushToBackStack` |
 | `NavigationMode` and the four lifecycle contexts (public, moved) | `NavigationEventArgs<TRoute>` and `INavigationHandle` |
-| `NavigationStack<TRoute>` (internal, moved as is) is the model: the back, current and forward routes, the guard, and change notification. The handles delegate to it, as WinUI's already does | `NavigationContext<TRoute>`, because it carries the renderer's handle type |
-| The lifecycle hook's state and registration (`NavigationLifecycleHooks`, internal): the slot the hook stores, and the lookup a host uses to find a component's callbacks | `UseNavigation<TRoute>(initial)`, `UseNavigation<TRoute>()` and `UseNavigationLifecycle(...)`, as thin public hooks. WinUI's `UseNavigationLifecycle` stays in `WinUIHooks`, so binaries built against it keep resolving |
+| The lifecycle hook's state and registration (`NavigationLifecycleHooks`, internal, in namespace `Microsoft.UI.Reactor.Core`): the slot the hook stores, and the lookup a host uses to find a component's callbacks | `NavigationContext<TRoute>`, because it carries the renderer's handle type |
+| | `UseNavigation<TRoute>(initial)`, `UseNavigation<TRoute>()` and `UseNavigationLifecycle(...)`, as thin public hooks. WinUI's `UseNavigationLifecycle` stays in `WinUIHooks`, so binaries built against it keep resolving |
 | | `NavigationDiagnostics`: WinUI's public class is unchanged. The moved model types raise no diagnostics, so no sink is needed; MAUI's handle writes the same ETW events through `ReactorEventSource` |
 | | Hosts, transitions, cache and the system back button |
 
@@ -82,8 +82,9 @@ So the **behaviour** moves to the core, and each renderer keeps a thin public **
 ### 2.2 The model
 
 - **Thread marshaling, one transaction per call.** Navigation from another thread runs on the
-  owning root's render thread. The model captures `RenderContext.RenderThreadEnqueue` when
-  `UseNavigation` creates it, and falls back to the process dispatcher, as WinUI does today.
+  owning root's render thread. MAUI's handle captures `RenderContext.RenderThreadEnqueue` when
+  `UseNavigation` creates it and falls back to the process dispatcher; WinUI's handle keeps using
+  the process dispatcher, as today. Both go through the core's `UIThreadMarshal`.
   - Each facade mutator keeps today's shape: it checks the thread first, and if it's off the render
     thread, it schedules the whole call and returns. On the render thread it runs everything
     synchronously in WinUI's current order: pending options, the model operation, connected history,
@@ -102,11 +103,17 @@ So the **behaviour** moves to the core, and each renderer keeps a thin public **
 - **State.** `GetState` and `SetState` behave as on WinUI: a snapshot the caller serializes, restored
   without running guards.
 
-### 2.3 Lifecycle: shared policy, renderer discovery
+### 2.3 Lifecycle: shared hook state, policy per renderer in 4b-1
 
-The core owns the hook state that `UseNavigationLifecycle` stores, and the invocation policy. A
-host drives it through a **non-generic binding over the model**, with no runtime generic
-construction. The host provides two things:
+The core owns the hook state that `UseNavigationLifecycle` stores. The design put the invocation
+policy in the core too, with each host driving it through a non-generic binding. **As built in
+4b-1, the policy is per renderer**: WinUI's `NavigationHostLifecycle` is unchanged, and MAUI's
+`NavigationHostBinding` (non-generic, no runtime generic construction) implements the same order and
+supersession rule. Discovery and completion differ enough between the two hosts (a swapped child
+and a transition on WinUI; a declared stack, proposals and an asynchronous navigator on MAUI) that
+moving WinUI's policy would have meant changing WinUI's host in this PR, which 4b-1 avoids. The
+known divergences are in §2.6; converging the policy into the core is listed there as not done.
+Each host provides:
 
 - **Discovery.** The lifecycle hooks of the active page's components only. Pages retained in the
   back stack and nested navigation hosts are excluded, as WinUI's reconciler does today
@@ -128,8 +135,8 @@ construction. The host provides two things:
 
   Interrupted-navigation tests assert both.
 
-WinUI's host calls the binding where its current code runs, so there is no new virtual dispatch on
-the render path.
+When the policy converges, WinUI's host calls the shared binding where its current code runs, so
+there is no new virtual dispatch on the render path.
 
 ### 2.4 MAUI `NavigationHost`
 
@@ -171,9 +178,11 @@ return NavigationHost(nav, route => route switch
     during a push.
   - **Restoring a refused pop.** It is bounded by today's 3-second platform-pop window (spec 065
     §7). 4b-2 replaces that window with MAUI's navigation-completed signal.
-- **Lifecycle** goes through the shared policy (§2.3), so the contexts and order match WinUI.
-- **`NavigationStack(pages)`** stays as the lower-level primitive. `NavigationHost` is the
-  recommended API, the same as on WinUI.
+- **Lifecycle** follows §2.3's order and supersession rule, so the contexts and order match WinUI
+  (as built, in MAUI's own binding; §2.6 lists the divergences).
+- **`NavigationStack(pages)`** stays as the lower-level primitive, and `UseRouteStack` as a plain
+  list in state for it. `NavigationHost` with `UseNavigation` is the recommended API, the same as on
+  WinUI.
 
 ### 2.5 Gate for 4b-1
 
@@ -195,6 +204,9 @@ return NavigationHost(nav, route => route switch
   - hot reload keeping the handle and its history.
 - **AOT:** a trimmed MAUI build that resolves a deep link and round-trips a snapshot.
 - **The WinUI and perf gates apply to 4b-2 and 4b-3 as well.**
+- **The `Slide` compatibility corpus isn't needed as built**: WinUI's handle, `NavigateOptions` and
+  transitions didn't move (§2.1), so no `Slide` form can break; only model types moved, with type
+  forwards.
 
 ### 2.6 As built (4b-1, MAUI side)
 
@@ -203,38 +215,62 @@ return NavigationHost(nav, route => route switch
   restore path doesn't re-sync children, so only a component can re-render the declaration; it
   subscribes to the handle's `RouteChanged`, so a host under a parent that skipped still updates.
   The route map is `Func<TRoute, Element?>`; a route mapped to `null` keeps its position as an empty
-  page, so a declared depth is always an entry index.
+  page, so a declared depth is always an entry index. An optional third argument configures the
+  stack (`s => s with { Title = …, Modals = …, Animated = false }`); the host sets its pages and
+  `OnPopped`.
+- **Animation.** The configured stack's `Animated` is the host's default. `NavigateOptions.Animated`
+  is a `bool?`: `null` (the default) uses the host's, and a value overrides it for that `Navigate`
+  call only. Every other change (`GoBack`, `GoForward`, `Replace`, `Reset`, `PopTo`, `SetState`, the
+  user's back) uses the host's default. It applies to pushes, pops and modal presentations.
 - **Keys use a prefix rule**: an entry keeps its key while it *and every entry below it* equal the
   declared ones. Keeping a page above a replaced one would make MAUI reorder pages; the cases §2.4
   lists behave as specified.
 - **A destination that must be mounted to be asked** (push, forward, replace, a new route from
   `SetState`) is first declared as a *proposal*: the pages shown plus the destination on top,
   without telling the navigator. Its `onNavigatingTo` runs once it has mounted. Accepted, the final
-  declaration follows (for a push it is the proposal itself); refused, the destination unmounts and
-  the pages shown were never touched, so a replaced page keeps its state, as WinUI keeps the old
+  declaration follows (for a push the proposal itself becomes it); refused, the destination unmounts
+  and the pages shown were never touched, so a replaced page keeps its state, as WinUI keeps the old
   page. A destination already mounted (a pop) is asked before the declaration changes. As on WinUI,
-  a refusing destination leaves the model at the new route while the host keeps the previous page.
-- **The previous route** in the lifecycle contexts is the route the host showed. `SetState` runs no
-  guard, as on WinUI, but its departure is reported with mode `Reset` and gets `onNavigatedFrom`
-  (WinUI reports such a change as `Push` without `onNavigatedFrom`).
-- **Completion** runs, posted, when the navigator is idle and no user pop is pending (MAUI no longer
-  lists the page, or its window expired). Navigations still in flight then complete together, in
-  order: every page left gets `onNavigatedFrom`, and only the latest generation's destination gets
-  `onNavigatedTo`. A navigation is tracked from the render that commits it, so one replaced by a
-  newer render before the navigator saw it still reports its departure.
+  a refusing destination leaves the model at the new route while the host keeps the previous page,
+  and the next render of the host asks it again. A user's back (or the back key) to that route while
+  the host still shows the page above it is another attempt to arrive there.
 - **A user's pop** maps to `NavigationStack.PopToIndex`, a new internal core method that `PopTo`
-  now delegates to. It runs only while the model still holds the declared pages below that depth;
-  otherwise the pop is refused and the page restored.
-- **The back key**: `ReactorNavigationPage.OnBackButtonPressed` gives a nested current page the key
-  first, as `NavigationPage` does, then runs the guarded `GoBack` only under a `NavigationHost`; a
-  plain `NavigationStack` keeps MAUI's behaviour.
+  now delegates to. It runs only while the model is the one the host shows (or one whose destination
+  refused) and still holds the declared pages below that depth; otherwise the pop is refused, the
+  page restored, and the host goes on to show the model.
+- **The back key** (`ReactorNavigationPage.OnBackButtonPressed`) gives a nested current page the key
+  first, as `NavigationPage` does; under a `NavigationHost` it then decides from the pages the host
+  shows: at the shown root it is not consumed, otherwise it is one guarded back to the page below.
+  A plain `NavigationStack` keeps MAUI's behaviour.
+- **Errors in lifecycle callbacks** go to the error boundaries above the component that registered
+  them, posted like a handler's asynchronous failure (`ReactorRoot.ReportCallbackError`); a
+  component unmounted by then (a page just left) hands it to its nearest mounted ancestor. A
+  throwing `onNavigatingFrom` or `onNavigatingTo` cancels the navigation. (On WinUI the exception
+  propagates to the caller of `Navigate` or to the reconciler.)
+- **Lifecycle divergences from WinUI's policy**, which stays in `NavigationHostLifecycle` (§2.3):
+  - the previous route in the contexts is the route the host showed;
+  - `SetState` runs no guard, as on WinUI, but its departure is reported with mode `Reset` and gets
+    `onNavigatedFrom` (WinUI reports it as `Push` without `onNavigatedFrom`);
+  - completion runs, posted, when the navigator is idle, no user pop is pending (MAUI no longer
+    lists the page, or its window expired), and every change of the model has been shown.
+    Navigations then complete together, in order: every page left gets `onNavigatedFrom`, and only
+    the latest generation's destination gets `onNavigatedTo`. WinUI completes an interrupted
+    navigation when it is interrupted. A navigation is tracked from the render that commits it, so
+    one replaced by a newer render before the navigator saw it still reports its departure.
 - **Diagnostics** are written where WinUI's are: `NavigationCompleted` from `Navigate`, and
   `NavigationCancelled` ("destination guard") for a refusing destination.
-- **`NavigationMode` is ambiguous** with `Microsoft.Maui.ApplicationModel.NavigationMode` in a file
-  that imports `Microsoft.UI.Reactor.Navigation` under MAUI's implicit usings; such a file aliases it.
-  The package's global usings don't import the navigation namespace.
-- **Not done in 4b-1:** the AOT gate (a trimmed MAUI build resolving a deep link and round-tripping
-  a snapshot) and the core's neutral-harness tests of the model.
+- **`NavigationMode`** would be ambiguous with `Microsoft.Maui.ApplicationModel.NavigationMode` in a
+  file that imports `Microsoft.UI.Reactor.Navigation`, so the package's global usings declare a
+  `NavigationMode` alias for Reactor's, beside the `Element` one (opt out with
+  `ReactorImplicitUsings=false`).
+- **Gate evidence.** Core: `tests/Reactor.Maui.Engine.Tests/NavigationModelTests.cs` (operations,
+  guard order, `PopToIndex` bounds, state, the hook's order and lookup, a handle over an injected
+  scheduler). AOT: `tests/aot_trim_proof/Reactor.Navigation.AotSmoke`, a Native AOT console over
+  `Reactor.Core` that resolves a deep link and round-trips a `NavigationState` through a
+  source-generated `JsonSerializerContext`; published for osx-arm64 with no trim or AOT warning, it
+  prints `PASS`, and CI runs it (`maui.yml`). It covers the shared model, not a trimmed MAUI app.
+- **Not done in 4b-1:** converging the lifecycle policy into the core and having WinUI's host call
+  it; a trimmed MAUI app build (the AOT gate runs on the model alone).
 
 ## 3. Decisions to review
 
@@ -244,6 +280,9 @@ return NavigationHost(nav, route => route switch
    - moving the handle, which breaks `Slide` usages, as measured above;
    - a neutral easing type, which changes a public property's type;
    - mirroring everything, which gives two copies of the guard and lifecycle semantics.
+
+   As built, the model and the hook state are shared, but the lifecycle policy is still per
+   renderer (§2.3, §2.6), so 4b-1 has two copies of the lifecycle semantics until it converges.
 2. **A platform pop becomes one depth-aware guarded navigation.** A refused pop restores the page,
    as today.
 3. **Android hardware back is consumed by the host when there is a page to go back to,** and passed

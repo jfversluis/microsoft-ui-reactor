@@ -6,7 +6,10 @@ using Microsoft.UI.Reactor.Maui.Handlers;
 namespace Microsoft.UI.Reactor.Navigation;
 
 /// <summary>The props of the component <c>NavigationHost</c> renders.</summary>
-internal sealed record NavigationHostProps<TRoute>(NavigationHandle<TRoute> Navigation, Func<TRoute, Element?> RouteMap)
+internal sealed record NavigationHostProps<TRoute>(
+    NavigationHandle<TRoute> Navigation,
+    Func<TRoute, Element?> RouteMap,
+    Func<NavigationStackElement, NavigationStackElement>? Configure)
     where TRoute : notnull;
 
 /// <summary>Marks a <c>NavigationHost</c>'s component, so lifecycle discovery stops at a nested host.</summary>
@@ -42,10 +45,13 @@ internal sealed class NavigationHostComponent<TRoute> : Component<NavigationHost
             pages[i] = page.WithKey(entries[i].Key);
         }
 
-        return NavigationContext<TRoute>.Instance.Provide(Props.Navigation, new NavigationStackElement(pages)
+        var stack = new NavigationStackElement(pages);
+        if (Props.Configure is { } configure) stack = configure(stack);
+        // The configured Animated is the host's default; the binding applies a Navigate call's options.
+        return NavigationContext<TRoute>.Instance.Provide(Props.Navigation, stack with
         {
+            Pages = pages,
             OnPopped = binding.OnUserPop,
-            Animated = declaration.Animated,
             HostBinding = binding,
             HostDeclaration = declaration,
         });
@@ -53,16 +59,19 @@ internal sealed class NavigationHostComponent<TRoute> : Component<NavigationHost
 }
 
 /// <summary>One declaration a <c>NavigationHost</c> rendered.</summary>
-internal sealed class HostDeclaration(NavigationHostBinding.Entry[] entries, bool animated, bool isProposal)
+internal sealed class HostDeclaration(NavigationHostBinding.Entry[] entries, bool? animated, bool isProposal)
 {
     public NavigationHostBinding.Entry[] Entries { get; } = entries;
-    public bool Animated { get; } = animated;
+
+    /// <summary>The animation the last navigation asked for, or <see langword="null"/> for the host's default.</summary>
+    public bool? Animated { get; set; } = animated;
 
     /// <summary>
     /// A proposal mounts the destination above the pages shown, without telling the navigator, so
     /// its <c>onNavigatingTo</c> can run before anything else changes; the final declaration follows.
+    /// A push's proposal becomes the committed declaration once accepted.
     /// </summary>
-    public bool IsProposal { get; } = isProposal;
+    public bool IsProposal { get; set; } = isProposal;
 
     /// <summary>For a proposal: set once its destination's <c>onNavigatingTo</c> has run.</summary>
     public bool Processed { get; set; }
@@ -74,19 +83,26 @@ internal sealed class HostDeclaration(NavigationHostBinding.Entry[] entries, boo
 /// guard over the active page, checks a destination's <c>onNavigatingTo</c>, turns a user's back
 /// navigation into one guarded navigation, and completes navigations when the navigator settles.
 /// </summary>
+/// <remarks>
+/// A lifecycle callback that throws is reported to the error boundaries above its component, as a
+/// handler's asynchronous failure is (an unmounted component's error goes to its nearest mounted
+/// ancestor). A throwing <c>onNavigatingFrom</c> or <c>onNavigatingTo</c> cancels the navigation.
+/// </remarks>
 internal sealed class NavigationHostBinding
 {
     internal readonly record struct Entry(object Route, string Key);
 
+    internal readonly record struct OwnedHook(Node Owner, NavigationLifecycleHookState Hook);
+
     internal sealed class Transition
     {
         public long Generation;
-        public required List<NavigationLifecycleHookState> OldHooks { get; init; }
+        public required List<OwnedHook> OldHooks { get; init; }
         public required string DestinationKey { get; init; }
         public required object Route { get; init; }
         public required object? PreviousRoute { get; init; }
         public required NavigationMode Mode { get; init; }
-        public required bool Animated { get; init; }
+        public required bool? Animated { get; init; }
     }
 
     private enum ProposalState { Pending, Accepted, Rejected }
@@ -111,10 +127,13 @@ internal sealed class NavigationHostBinding
     private Node? _stackNode;
     private ReactorNavigationPage? _page;
 
-    // The committed declaration: what the navigator was last asked to show.
+    // The committed declaration: what the navigator was last asked to show, and the model version it
+    // shows. A version whose destination refused stays unshown, so the next render asks again, as
+    // WinUI's host does; _refusedVersion remembers it, so the user going back is still understood.
     private Entry[] _rendered = [];
     private HostDeclaration? _committed;
     private long _renderedVersion = -1;
+    private long _refusedVersion = long.MinValue;
     private int _nextKey;
 
     private Proposal? _proposal;
@@ -129,7 +148,7 @@ internal sealed class NavigationHostBinding
         _routeChanged = () => Rerender?.Invoke();
         _onNavigatorIdle = OnNavigatorIdle;
         _complete = Complete;
-        OnUserPop = UserPop;
+        OnUserPop = depth => BackTo(depth);
     }
 
     /// <summary>Re-renders the host component.</summary>
@@ -149,6 +168,7 @@ internal sealed class NavigationHostBinding
             handle.RouteChanged += _routeChanged;
             // Another handle's history: recompute the declaration from it.
             _renderedVersion = long.MinValue;
+            _refusedVersion = long.MinValue;
             _proposal = null;
         }
         handle.LifecycleGuard = _guard;
@@ -202,8 +222,8 @@ internal sealed class NavigationHostBinding
                         _proposal = null;
                         return Commit(proposal.Final, version, proposal.Transition);
                     default:
+                        // Refused: show the committed pages; the next render asks again.
                         _proposal = null;
-                        _renderedVersion = version;
                         return _committed!;
                 }
             }
@@ -214,9 +234,7 @@ internal sealed class NavigationHostBinding
         if (version == _renderedVersion && _committed is not null) return _committed;
 
         var final = Entries(handle);
-        if (_renderedVersion == -1 || _rendered.Length == 0)
-            return Commit(final, version, null);
-        if (SameKeys(final, _rendered))
+        if (_committed is null || _rendered.Length == 0 || SameKeys(final, _rendered))
             return Commit(final, version, null);
 
         var destination = final[^1];
@@ -227,7 +245,7 @@ internal sealed class NavigationHostBinding
             Route = destination.Route,
             PreviousRoute = _rendered[^1].Route,
             Mode = handle.LastMode,
-            Animated = handle.LastOptions?.Animated ?? true,
+            Animated = handle.LastOptions?.Animated,
         };
 
         if (Contains(_rendered, destination.Key))
@@ -235,19 +253,19 @@ internal sealed class NavigationHostBinding
             // The destination is mounted already (a pop): ask it before changing anything.
             if (!NavigatingTo(transition))
             {
-                _renderedVersion = version;
-                return _committed!;
+                _refusedVersion = version;
+                return _committed;
             }
             return Commit(final, version, transition);
         }
 
         // The destination has to be mounted to be asked: propose it above the pages shown.
-        var declaration = new HostDeclaration([.. _rendered, destination], _committed?.Animated ?? true, isProposal: true);
+        var declaration = new HostDeclaration([.. _rendered, destination], _committed.Animated, isProposal: true);
         _proposal = new Proposal { Version = version, Final = final, Transition = transition, Declaration = declaration };
         return declaration;
     }
 
-    private HostDeclaration Commit(Entry[] entries, long version, Transition? transition)
+    private HostDeclaration Commit(Entry[] entries, long version, Transition? transition, HostDeclaration? promote = null)
     {
         if (transition is not null)
         {
@@ -256,9 +274,21 @@ internal sealed class NavigationHostBinding
             transition.Generation = ++_generation;
             _inFlight.Add(transition);
         }
+        var animated = transition is not null ? transition.Animated : _committed?.Animated;
         _rendered = entries;
         _renderedVersion = version;
-        _committed = new HostDeclaration(entries, transition?.Animated ?? _committed?.Animated ?? true, isProposal: false);
+        if (promote is not null)
+        {
+            // The proposal the stack element already carries becomes the committed declaration, so
+            // a later sync of that element (a page re-rendering) reaches the navigator.
+            promote.IsProposal = false;
+            promote.Animated = animated;
+            _committed = promote;
+        }
+        else
+        {
+            _committed = new HostDeclaration(entries, animated, isProposal: false);
+        }
         return _committed;
     }
 
@@ -298,12 +328,15 @@ internal sealed class NavigationHostBinding
 
     /// <summary>
     /// Called by the stack's children strategy with the pages of <paramref name="declaration"/>,
-    /// once they are mounted. Decides what the navigator is asked to show.
+    /// once they are mounted. Decides what the navigator is asked to show. <paramref name="animated"/>
+    /// is the host's default, which a navigation's own options override.
     /// </summary>
-    public void Sync(HostDeclaration declaration, IReadOnlyList<Page> pages, IReadOnlyList<Page> modals, StackNavigator navigator)
+    public void Sync(
+        HostDeclaration declaration, bool animated, IReadOnlyList<Page> pages, IReadOnlyList<Page> modals, StackNavigator navigator)
     {
         if (declaration.IsProposal)
         {
+            // Until the follow-up render, the navigator keeps the committed pages.
             if (declaration.Processed) return;
             declaration.Processed = true;
             if (_proposal is not { State: ProposalState.Pending } proposal || !ReferenceEquals(proposal.Declaration, declaration)) return;
@@ -311,13 +344,14 @@ internal sealed class NavigationHostBinding
             if (!NavigatingTo(proposal.Transition))
             {
                 proposal.State = ProposalState.Rejected;
+                _refusedVersion = proposal.Version;
             }
             else if (SameKeys(proposal.Final, declaration.Entries))
             {
                 // A push: the proposal is the final declaration.
                 _proposal = null;
-                var committed = Commit(proposal.Final, proposal.Version, proposal.Transition);
-                navigator.SetDesired(pages, modals, committed.Animated);
+                Commit(proposal.Final, proposal.Version, proposal.Transition, promote: declaration);
+                navigator.SetDesired(pages, modals, declaration.Animated ?? animated);
                 return;
             }
             else
@@ -328,30 +362,42 @@ internal sealed class NavigationHostBinding
             return;
         }
 
-        navigator.SetDesired(pages, modals, declaration.Animated);
+        navigator.SetDesired(pages, modals, declaration.Animated ?? animated);
     }
 
     // ── Back ─────────────────────────────────────────────────────────────────
 
-    /// <summary>The user went back to declared depth <paramref name="depth"/>: one guarded navigation there.</summary>
-    private void UserPop(int depth)
+    /// <summary>
+    /// The user went back to declared depth <paramref name="depth"/>: one guarded navigation there.
+    /// Understood only while the model is the one the host shows (or one whose destination refused);
+    /// otherwise the pop is refused, the page is pushed back, and the host goes on to show the model.
+    /// Going back to the model's current route, which the host isn't showing because its destination
+    /// refused, is another attempt to arrive there.
+    /// </summary>
+    private bool BackTo(int depth)
     {
-        if (_handle is not { } handle || depth < 1 || depth >= handle.Depth || depth > _rendered.Length) return;
-        // Only while the model still holds the declared pages below that depth; otherwise the pop
-        // is refused and the page is pushed back, and the host shows the model's stack.
+        if (_handle is not { } handle || depth < 1 || depth >= _rendered.Length || depth > handle.Depth) return false;
+        if (handle.Version != _renderedVersion && handle.Version != _refusedVersion) return false;
         for (var i = 0; i < depth; i++)
-            if (!_routeEquals(_rendered[i].Route, handle.RouteAt(i))) return;
-        handle.PopToDepth(depth);
+            if (!_routeEquals(_rendered[i].Route, handle.RouteAt(i))) return false;
+
+        if (depth == handle.Depth)
+        {
+            Rerender?.Invoke();
+            return true;
+        }
+        return handle.PopToDepth(depth);
     }
 
     /// <summary>
-    /// The system back button (Android): a guarded back navigation, consuming the key whether it is
-    /// accepted or refused, so MAUI doesn't pop as well. At the root the key is not consumed.
+    /// The system back button (Android): one guarded back navigation from the page shown, consuming
+    /// the key whether it is accepted or refused, so MAUI doesn't pop as well. When the host shows its
+    /// root the key is not consumed, so the app or the OS handles it.
     /// </summary>
     public bool OnBackButton()
     {
-        if (_handle is not { CanGoBack: true } handle) return false;
-        handle.GoBack();
+        if (_rendered.Length <= 1) return false;
+        BackTo(_rendered.Length - 1);
         return true;
     }
 
@@ -369,9 +415,18 @@ internal sealed class NavigationHostBinding
 
     private void OnNavigatingFrom(NavigatingFromContext context)
     {
-        foreach (var hook in CollectHooks(ActivePage()))
+        foreach (var (owner, hook) in CollectHooks(ActivePage()))
         {
-            hook.OnNavigatingFrom?.Invoke(context);
+            if (hook.OnNavigatingFrom is not { } callback) continue;
+            try
+            {
+                callback(context);
+            }
+            catch (Exception ex)
+            {
+                context.Cancel();
+                Report(owner, ex);
+            }
             if (context.IsCancelled) return;
         }
     }
@@ -379,9 +434,18 @@ internal sealed class NavigationHostBinding
     private bool NavigatingTo(Transition transition)
     {
         var context = new NavigatingToContext(transition.Route, transition.PreviousRoute, transition.Mode);
-        foreach (var hook in CollectHooks(FindPage(transition.DestinationKey)))
+        foreach (var (owner, hook) in CollectHooks(FindPage(transition.DestinationKey)))
         {
-            hook.OnNavigatingTo?.Invoke(context);
+            if (hook.OnNavigatingTo is not { } callback) continue;
+            try
+            {
+                callback(context);
+            }
+            catch (Exception ex)
+            {
+                context.Cancel();
+                Report(owner, ex);
+            }
             if (context.IsCancelled)
             {
                 MauiNavigationDiagnostics.Cancelled(transition.Route, "destination guard");
@@ -391,20 +455,22 @@ internal sealed class NavigationHostBinding
         return true;
     }
 
+    private static void Report(Node owner, Exception error) => owner.Root.ReportCallbackError(owner, error);
+
     /// <summary>
     /// The lifecycle hooks of a page's components, parents first. A nested navigation stack or host
     /// owns its own pages' lifecycle, so the walk stops there.
     /// </summary>
-    private static List<NavigationLifecycleHookState> CollectHooks(Node? page)
+    private static List<OwnedHook> CollectHooks(Node? page)
     {
-        var hooks = new List<NavigationLifecycleHookState>();
+        var hooks = new List<OwnedHook>();
         if (page is not null) Collect(page, hooks);
         return hooks;
 
-        static void Collect(Node node, List<NavigationLifecycleHookState> hooks)
+        static void Collect(Node node, List<OwnedHook> hooks)
         {
             if (node.Element is NavigationStackElement || node.Component is INavigationHostComponent) return;
-            if (node.IsRenderable && node.HookContext?.GetNavigationLifecycleHook() is { } hook) hooks.Add(hook);
+            if (node.IsRenderable && node.HookContext?.GetNavigationLifecycleHook() is { } hook) hooks.Add(new(node, hook));
             foreach (var child in node.Children) Collect(child, hooks);
         }
     }
@@ -419,13 +485,17 @@ internal sealed class NavigationHostBinding
 
     /// <summary>
     /// Completes the navigations the navigator has finished: when it is idle and MAUI no longer
-    /// lists a page the user popped (or that pop's window expired). Every page left gets
-    /// <c>onNavigatedFrom</c>; only the latest destination gets <c>onNavigatedTo</c>.
+    /// lists a page the user popped (or that pop's window expired), and every change of the model has
+    /// been shown. Every page left gets <c>onNavigatedFrom</c>; only the latest destination gets
+    /// <c>onNavigatedTo</c>.
     /// </summary>
     private void Complete()
     {
         _completionPosted = false;
         if (_page is not { } page || !page.Navigator.IsIdle || page.Navigator.HasPendingPlatformPops) return;
+        // A change the host hasn't shown yet may supersede these: complete them once it is shown
+        // (the navigator goes idle again after that sync).
+        if (_proposal is not null || (_handle is { } handle && handle.Version != _renderedVersion && handle.Version != _refusedVersion)) return;
         var finished = _inFlight.ToArray();
         _inFlight.Clear();
         foreach (var transition in finished)
@@ -433,14 +503,26 @@ internal sealed class NavigationHostBinding
             if (transition.Generation == _generation)
             {
                 var to = new NavigatedToContext(transition.Route, transition.PreviousRoute, transition.Mode);
-                foreach (var hook in CollectHooks(FindPage(transition.DestinationKey)))
-                    hook.OnNavigatedTo?.Invoke(to);
+                foreach (var (owner, hook) in CollectHooks(FindPage(transition.DestinationKey)))
+                    Invoke(owner, hook.OnNavigatedTo, to);
             }
             if (transition.OldHooks.Count > 0)
             {
                 var from = new NavigatedFromContext(transition.PreviousRoute!, transition.Route, transition.Mode);
-                foreach (var hook in transition.OldHooks)
-                    hook.OnNavigatedFrom?.Invoke(from);
+                foreach (var (owner, hook) in transition.OldHooks)
+                    Invoke(owner, hook.OnNavigatedFrom, from);
+            }
+        }
+
+        static void Invoke<T>(Node owner, Action<T>? callback, T context)
+        {
+            try
+            {
+                callback?.Invoke(context);
+            }
+            catch (Exception ex)
+            {
+                Report(owner, ex);
             }
         }
     }

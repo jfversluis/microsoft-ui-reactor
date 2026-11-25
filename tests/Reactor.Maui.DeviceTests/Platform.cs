@@ -153,6 +153,30 @@ public static class Platform
         return (0, 0);
     }
 
+    /// <summary>
+    /// Goes back the way the platform does for the user. iOS and Mac Catalyst: the navigation
+    /// controller pops its top view controller, as its back button does, and MAUI follows. Android: the
+    /// activity's back dispatcher, the back key's path through MAUI's window. Returns whether the
+    /// platform popped the page itself (iOS) rather than asking the app first (Android).
+    /// </summary>
+    public static bool NativeBack(NavigationPage page)
+    {
+#if IOS || MACCATALYST
+        if (page.Handler is IPlatformViewHandler { ViewController: UIKit.UINavigationController controller })
+        {
+            controller.PopViewController(true);
+            return true;
+        }
+        throw new CheckFailedException("the navigation page has no UINavigationController");
+#elif ANDROID
+        ((AndroidX.Activity.ComponentActivity)Microsoft.Maui.ApplicationModel.Platform.CurrentActivity!).OnBackPressedDispatcher.OnBackPressed();
+        return false;
+#else
+        page.SendBackButtonPressed();
+        return false;
+#endif
+    }
+
     /// <summary>Clicks a button through its virtual view, the path the platform's tap handler takes.</summary>
     public static void Tap(IView view)
     {

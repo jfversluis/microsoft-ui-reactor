@@ -112,10 +112,16 @@ internal static class UIThreadMarshal
     /// idempotent by simply re-calling the same public method (which re-enters the
     /// gate and falls through inline on the UI thread).
     /// </param>
-    public static bool MarshalOffUIThread(int uiThreadId, string operation, global::System.Action work)
+    /// <param name="tryEnqueue">
+    /// The render thread's queue when it isn't the process-wide one (MAUI's is per root); by default
+    /// <see cref="RenderScheduler.TryEnqueueOnUIThread"/>.
+    /// </param>
+    public static bool MarshalOffUIThread(
+        int uiThreadId, string operation, global::System.Action work,
+        global::System.Func<global::System.Action, bool>? tryEnqueue = null)
     {
         return EnqueueOrThrow(
-            RenderScheduler.TryEnqueueOnUIThread,
+            tryEnqueue ?? RenderScheduler.TryEnqueueOnUIThread,
             work,
             () =>
             {

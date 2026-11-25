@@ -142,6 +142,15 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
     /// <summary>Whether the operations toward the current declaration animate.</summary>
     internal bool Animated => _animated;
 
+    /// <summary>The animation argument of the last push or pop (modal or not) the navigator started.</summary>
+    internal bool? LastOperationAnimated { get; private set; }
+
+    private bool Started(bool animated)
+    {
+        LastOperationAnimated = animated;
+        return animated;
+    }
+
     /// <summary>
     /// Makes <paramref name="pages"/> and <paramref name="modals"/> the stacks to reconcile toward.
     /// <paramref name="animated"/> applies to the pushes and pops that run toward them.
@@ -266,13 +275,13 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
             if (common < actual.Count - 1) return Sync(() => navigation.RemovePage(actual[common]));
             var animated = _animated;
             return common == desired.Count
-                ? () => navigationPage.PopAsync(animated)
-                : () => navigationPage.PushAsync(desired[common], animated);
+                ? () => navigationPage.PopAsync(Started(animated))
+                : () => navigationPage.PushAsync(desired[common], Started(animated));
         }
         if (common < desired.Count)
         {
             var animated = _animated;
-            return () => navigationPage.PushAsync(desired[common], animated);
+            return () => navigationPage.PushAsync(desired[common], Started(animated));
         }
 
         return NextModalOperation(navigation);
@@ -296,7 +305,7 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
                 _poppingModal = top;
                 try
                 {
-                    await navigation.PopModalAsync(_animated);
+                    await navigation.PopModalAsync(Started(_animated));
                 }
                 finally
                 {
@@ -311,7 +320,7 @@ internal sealed class StackNavigator(NavigationPage navigationPage)
             {
                 _ownedModals.Add(next);
                 _modalWindow = navigationPage.Window;
-                return navigation.PushModalAsync(next, _animated);
+                return navigation.PushModalAsync(next, Started(_animated));
             };
         }
         return null;
@@ -484,7 +493,7 @@ internal sealed class NavigationStackHandler : Reactor.Hosting.IElementHandler<N
             var pages = slots.Take(element.Pages.Length).SelectMany(static s => s).Select(AsPage).ToList();
             var modals = slots.Skip(element.Pages.Length).SelectMany(static s => s).Select(AsPage).ToList();
             if (element.HostBinding is { } binding && element.HostDeclaration is { } declaration)
-                binding.Sync(declaration, pages, modals, control.Navigator);
+                binding.Sync(declaration, element.Animated, pages, modals, control.Navigator);
             else
                 control.Navigator.SetDesired(pages, modals, element.Animated);
         }

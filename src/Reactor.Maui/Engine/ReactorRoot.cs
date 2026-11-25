@@ -121,6 +121,21 @@ public sealed class ReactorRoot
     /// <summary>Queues <paramref name="work"/> on this root's render thread.</summary>
     internal void Post(Action work) => _scheduler.Post(work);
 
+    /// <summary>
+    /// Reports a failure of app code a renderer called for <paramref name="owner"/> outside a render,
+    /// such as a navigation lifecycle callback. Like <see cref="ReportHandlerError"/>, but when the owner
+    /// has been unmounted by then (a page that was just left) the error goes to its nearest mounted
+    /// ancestor; a tree that is gone entirely reports it through <see cref="UnhandledException"/>.
+    /// </summary>
+    internal void ReportCallbackError(Node owner, Exception error) => _scheduler.Post(() =>
+    {
+        var target = owner;
+        while (target.Unmounted && target.Parent is { } parent) target = parent;
+        if (!target.Unmounted) HandleChildError(target, error);
+        else if (UnhandledException is { } handler) handler(error);
+        else System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
+    });
+
     // Posted, like child-root errors, so it never runs inside the handler code that reported it.
     internal void ReportHandlerError(Node node, Exception error) => _scheduler.Post(() => HandleChildError(node, error));
 

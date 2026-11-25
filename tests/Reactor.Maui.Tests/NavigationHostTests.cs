@@ -2,11 +2,14 @@ using Microsoft.UI.Reactor.Core;
 using Microsoft.UI.Reactor.Maui.Handlers;
 using Microsoft.UI.Reactor.Navigation;
 using static Microsoft.UI.Reactor.Maui.Factories;
-using NavigationMode = Microsoft.UI.Reactor.Navigation.NavigationMode;
 
 namespace Microsoft.UI.Reactor.Maui.Tests;
 
-public sealed record NavAppProps(Action<NavigationHandle<string>> Report, Func<string, Element?> Map);
+public sealed record NavAppProps(
+    Action<NavigationHandle<string>> Report,
+    Func<string, Element?> Map,
+    Func<NavigationStackElement, NavigationStackElement>? Stack = null,
+    Action? Rendered = null);
 
 public sealed class NavApp : Component<NavAppProps>
 {
@@ -14,7 +17,8 @@ public sealed class NavApp : Component<NavAppProps>
     {
         var nav = UseNavigation("home");
         Props.Report(nav);
-        return NavigationHost(nav, Props.Map);
+        Props.Rendered?.Invoke();
+        return NavigationHost(nav, Props.Map, Props.Stack);
     }
 }
 
@@ -26,6 +30,15 @@ public sealed class NavLog
     public HashSet<string> RefuseTo { get; } = [];
     public Dictionary<string, Action<NavigatingToContext>> OnNavigatingTo { get; } = [];
     public Dictionary<string, int> Mounts { get; } = [];
+
+    /// <summary>Callbacks that throw, as "route:phase" (for example "detail:navigatedTo").</summary>
+    public HashSet<string> Throw { get; } = [];
+
+    public void Note(string route, string phase, NavigationMode mode)
+    {
+        Entries.Add($"{route}:{phase}:{mode}");
+        if (Throw.Contains($"{route}:{phase}")) throw new InvalidOperationException($"boom {route}:{phase}");
+    }
 }
 
 public sealed record LogPageProps(string Route, NavLog Log);
@@ -38,17 +51,17 @@ public sealed class LogPage : Component<LogPageProps>
         UseNavigationLifecycle(
             onNavigatingTo: c =>
             {
-                log.Entries.Add($"{route}:navigatingTo:{c.Mode}");
+                log.Note(route, "navigatingTo", c.Mode);
                 if (log.RefuseTo.Contains(route)) c.Cancel();
                 if (log.OnNavigatingTo.TryGetValue(route, out var then)) then(c);
             },
-            onNavigatedTo: c => log.Entries.Add($"{route}:navigatedTo:{c.Mode}"),
+            onNavigatedTo: c => log.Note(route, "navigatedTo", c.Mode),
             onNavigatingFrom: c =>
             {
-                log.Entries.Add($"{route}:navigatingFrom:{c.Mode}");
+                log.Note(route, "navigatingFrom", c.Mode);
                 if (log.RefuseFrom.Contains(route)) c.Cancel();
             },
-            onNavigatedFrom: c => log.Entries.Add($"{route}:navigatedFrom:{c.Mode}"));
+            onNavigatedFrom: c => log.Note(route, "navigatedFrom", c.Mode));
         UseEffect(() => { log.Mounts[route] = log.Mounts.GetValueOrDefault(route) + 1; }, Array.Empty<object>());
         return Page(route, Label(route));
     }
@@ -93,6 +106,50 @@ public sealed class ReadmeApp : Component
     }
 }
 
+/// <summary>A page that replaces its own native page (a new key) when its state changes.</summary>
+public sealed record SwapPageProps(string Route, Dictionary<string, Action<int>> Setters);
+
+public sealed class SwapPage : Component<SwapPageProps>
+{
+    public override Element Render()
+    {
+        var (version, setVersion) = UseState(0);
+        Props.Setters[Props.Route] = setVersion;
+        return Page($"{Props.Route} {version}", null).WithKey($"v{version}");
+    }
+}
+
+/// <summary>A page holding a flyout whose detail is a second NavigationHost.</summary>
+public sealed record NestedProps(NavLog Log, Action<NavigationHandle<string>> Report);
+
+public sealed class NestedPage : Component<NestedProps>
+{
+    public override Element Render()
+    {
+        var inner = UseNavigation("i0");
+        Props.Report(inner);
+        return Flyout(
+            Component<LogPage, LogPageProps>(new("menu", Props.Log)),
+            NavigationHost(inner, route => Component<LogPage, LogPageProps>(new(route, Props.Log))),
+            isPresented: false);
+    }
+}
+
+/// <summary>Renders a NavigationHost over one of two handles.</summary>
+public sealed record TwoHandlesProps(NavLog Log, Action<NavigationHandle<string>, NavigationHandle<string>, Action<bool>> Report);
+
+public sealed class TwoHandlesApp : Component<TwoHandlesProps>
+{
+    public override Element Render()
+    {
+        var first = UseNavigation("home");
+        var second = UseNavigation("other");
+        var (useSecond, setUseSecond) = UseState(false);
+        Props.Report(first, second, setUseSecond);
+        return NavigationHost(useSecond ? second : first, route => Component<LogPage, LogPageProps>(new(route, Props.Log)));
+    }
+}
+
 public class NavigationHostTests
 {
     [Fact]
@@ -112,9 +169,17 @@ public class NavigationHostTests
         public NavLog Log { get; } = new();
         public NavigationHandle<string> Nav = null!;
 
-        public Harness()
+        public List<Exception> Errors { get; } = [];
+        public int AppRenders;
+
+        public Harness(
+            Func<string, NavLog, Element?>? map = null,
+            Func<NavigationStackElement, NavigationStackElement>? stack = null,
+            bool reportErrors = true)
         {
-            Host.Render(Component<NavApp, NavAppProps>(new(nav => Nav = nav, route => Component<LogPage, LogPageProps>(new(route, Log)))));
+            if (reportErrors) Host.Root.UnhandledException += Errors.Add;
+            map ??= static (route, log) => Component<LogPage, LogPageProps>(new(route, log));
+            Host.Render(Component<NavApp, NavAppProps>(new(nav => Nav = nav, route => map(route, Log), stack, () => AppRenders++)));
             Settle();
         }
 
@@ -425,12 +490,54 @@ public class NavigationHostTests
         var h = new Harness();
         h.Nav.Navigate("a", new NavigateOptions { Animated = false });
         h.Settle();
-        Assert.False(h.Page.Navigator.Animated);
+        Assert.False(h.Page.Navigator.LastOperationAnimated);
         Assert.Equal("home,a", h.Titles);
 
         h.Nav.Navigate("b");
         h.Settle();
-        Assert.True(h.Page.Navigator.Animated);
+        Assert.True(h.Page.Navigator.LastOperationAnimated);
+        h.Nav.GoBack();
+        h.Settle();
+        Assert.True(h.Page.Navigator.LastOperationAnimated);
+    }
+
+    [Fact]
+    public void AHostConfiguredNotAnimated_UsesThatForEveryChange_UnlessNavigateSaysOtherwise()
+    {
+        var h = new Harness(stack: static s => s with { Animated = false });
+        h.Nav.Navigate("a");
+        h.Settle();
+        Assert.Equal("home,a", h.Titles);
+        Assert.False(h.Page.Navigator.LastOperationAnimated);
+
+        h.Nav.GoBack();
+        h.Settle();
+        Assert.Equal("home", h.Titles);
+        Assert.False(h.Page.Navigator.LastOperationAnimated);
+
+        h.Nav.Navigate("b", new NavigateOptions { Animated = true });
+        h.Settle();
+        Assert.True(h.Page.Navigator.LastOperationAnimated);
+
+        h.Nav.Reset("home");
+        h.Settle();
+        Assert.Equal("home", h.Titles);
+        Assert.False(h.Page.Navigator.LastOperationAnimated);
+    }
+
+    [Fact]
+    public void AHostInTabs_ShowsTheConfiguredTabTitle()
+    {
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(RenderEachTime(ctx =>
+        {
+            var nav = ctx.UseNavigation("home");
+            return Tabs(0, null, NavigationHost(nav, route => Page(route, null), static s => s with { Title = "Inbox" }), Page("Other", null));
+        }));
+        host.Scheduler.Drain();
+
+        var tabs = host.View<TabbedPage>();
+        Assert.Equal(["Inbox", "Other"], tabs.Children.Select(p => p.Title));
+        Assert.Equal("home", Assert.IsType<ReactorNavigationPage>(tabs.Children[0]).CurrentPage.Title);
     }
 
     [Fact]
@@ -446,7 +553,28 @@ public class NavigationHostTests
         Assert.Equal("home,a,b", h.Titles);
         Assert.Same(home, h.Stack[0]);
         Assert.Equal(["c"], h.Nav.ForwardStack);
-        Assert.DoesNotContain("navigatingFrom", h.TakeLog());
+        Assert.Equal("b:navigatingTo:Reset b:navigatedTo:Reset home:navigatedFrom:Reset", h.TakeLog());
+    }
+
+    [Fact]
+    public void SetState_OffTheRenderThread_AppliesTheSnapshotAsItWasPassed()
+    {
+        var h = new Harness();
+        List<string> back = ["home", "a"];
+        List<string> forward = ["c"];
+
+        OnAnotherThread(() =>
+        {
+            h.Nav.SetState(new NavigationState<string>(back, "b", forward));
+            back.Add("late");
+            forward.Clear();
+            return true;
+        });
+        h.Settle();
+
+        Assert.Equal(["home", "a"], h.Nav.BackStack);
+        Assert.Equal(["c"], h.Nav.ForwardStack);
+        Assert.Equal("home,a,b", h.Titles);
     }
 
     [Fact]
@@ -516,6 +644,283 @@ public class NavigationHostTests
         Assert.Equal("home", nav!.CurrentRoute);
     }
 
+    [Fact]
+    public void APushedPage_ThatReplacesItsOwnPage_ReachesTheNativeStack()
+    {
+        var setters = new Dictionary<string, Action<int>>();
+        var h = new Harness(map: (route, _) => Component<SwapPage, SwapPageProps>(new(route, setters)));
+        h.Nav.Navigate("detail");
+        h.Settle();
+        var first = h.Stack[1];
+
+        setters["detail"](1);
+        h.Settle();
+
+        Assert.Equal("home 0,detail 1", h.Titles);
+        Assert.NotSame(first, h.Stack[1]);
+    }
+
+    private static Func<string, NavLog, Element?> WithBoundaries =>
+        static (route, log) => ErrorBoundary(
+            Component<LogPage, LogPageProps>(new(route, log)),
+            error => Page($"fallback {error.Message}", null));
+
+    [Fact]
+    public void AThrowingOnNavigatedTo_ReachesThePagesErrorBoundary()
+    {
+        var h = new Harness(map: WithBoundaries);
+        h.Log.Throw.Add("detail:navigatedTo");
+        h.Nav.Navigate("detail");
+        h.Settle();
+
+        Assert.Equal("home,fallback boom detail:navigatedTo", h.Titles);
+        Assert.Empty(h.Errors);
+    }
+
+    [Fact]
+    public void AThrowingOnNavigatedTo_WithoutABoundary_ReachesUnhandledException()
+    {
+        var h = new Harness();
+        h.Log.Throw.Add("detail:navigatedTo");
+        h.Nav.Navigate("detail");
+        h.Settle();
+
+        Assert.Equal("boom detail:navigatedTo", Assert.Single(h.Errors).Message);
+    }
+
+    [Fact]
+    public void AThrowingOnNavigatedFrom_OfAPageThatLeft_ReachesTheNearestMountedBoundary()
+    {
+        var host = new TestHost(MauiHandlers.CreateRegistry());
+        var log = new NavLog();
+        NavigationHandle<string>? nav = null;
+        host.Render(ErrorBoundary(
+            Component<NavApp, NavAppProps>(new(n => nav = n, route => Component<LogPage, LogPageProps>(new(route, log)))),
+            error => Page($"host fallback {error.Message}", null)));
+        nav!.Navigate("detail");
+        host.Scheduler.Drain();
+        log.Throw.Add("detail:navigatedFrom");
+
+        nav.GoBack();
+        host.Scheduler.Drain();
+
+        Assert.Equal("host fallback boom detail:navigatedFrom", host.View<ContentPage>().Title);
+    }
+
+    [Fact]
+    public void AThrowingOnNavigatingFrom_CancelsTheNavigation_AndReachesThePagesBoundary()
+    {
+        var h = new Harness(map: WithBoundaries);
+        h.Log.Throw.Add("home:navigatingFrom");
+
+        Assert.False(h.Nav.Navigate("detail"));
+        h.Settle();
+
+        Assert.Equal("home", h.Nav.CurrentRoute);
+        Assert.Equal("fallback boom home:navigatingFrom", h.Titles);
+        Assert.Empty(h.Errors);
+    }
+
+    [Fact]
+    public void AThrowingOnNavigatingTo_CancelsTheNavigation_AndIsReported()
+    {
+        var h = new Harness();
+        h.Log.Throw.Add("detail:navigatingTo");
+        h.Nav.Navigate("detail");
+        h.Settle();
+
+        Assert.Equal("boom detail:navigatingTo", Assert.Single(h.Errors).Message);
+        Assert.DoesNotContain("detail:navigatedTo", h.TakeLog());
+    }
+
+    [Fact]
+    public void ARefusedPopDestination_IsAskedAgain_WhenTheUserGoesBack()
+    {
+        var h = new Harness();
+        h.Nav.Navigate("detail");
+        h.Settle();
+        h.TakeLog();
+        h.Log.RefuseTo.Add("home");
+        h.Nav.GoBack();
+        h.Settle();
+        Assert.Equal("home,detail", h.Titles);
+        Assert.Equal("detail:navigatingFrom:Pop home:navigatingTo:Pop", h.TakeLog());
+
+        h.Log.RefuseTo.Clear();
+        h.UserBack();
+
+        Assert.Equal("home", h.Titles);
+        Assert.Equal("home:navigatingTo:Pop home:navigatedTo:Pop detail:navigatedFrom:Pop", h.TakeLog());
+    }
+
+    [Fact]
+    public void ARefusedPopDestination_IsAskedAgain_ByTheBackKey()
+    {
+        var h = new Harness();
+        h.Nav.Navigate("detail");
+        h.Settle();
+        h.Log.RefuseTo.Add("home");
+        h.Nav.GoBack();
+        h.Settle();
+        h.TakeLog();
+
+        Assert.True(h.Page.SendBackButtonPressed());
+        h.Settle();
+        Assert.Equal("home,detail", h.Titles);
+        Assert.Equal("home:navigatingTo:Pop", h.TakeLog());
+
+        h.Log.RefuseTo.Clear();
+        Assert.True(h.Page.SendBackButtonPressed());
+        h.Settle();
+        Assert.Equal("home", h.Titles);
+        Assert.Equal("home:navigatingTo:Pop home:navigatedTo:Pop detail:navigatedFrom:Pop", h.TakeLog());
+    }
+
+    [Fact]
+    public void TheBackKey_RightAfterAPushIsShown_SupersedesIt()
+    {
+        var h = new Harness();
+        h.Nav.Navigate("detail");
+        h.Host.Scheduler.RunOne();
+        Assert.Equal("home,detail", h.Titles);
+
+        Assert.True(h.Page.SendBackButtonPressed());
+        h.Settle();
+
+        Assert.Equal("home", h.Titles);
+        Assert.Equal(
+            "home:navigatingFrom:Push detail:navigatingTo:Push detail:navigatingFrom:Pop home:navigatingTo:Pop "
+            + "home:navigatedFrom:Push home:navigatedTo:Pop detail:navigatedFrom:Pop",
+            h.TakeLog());
+    }
+
+    [Fact]
+    public void TheBackKey_BeforeAPushIsShown_IsNotConsumed()
+    {
+        var h = new Harness();
+        h.Nav.Navigate("detail");
+
+        // The host still shows its root: the key is the app's or the OS's.
+        Assert.False(h.Page.SendBackButtonPressed());
+        h.Settle();
+
+        Assert.Equal("home,detail", h.Titles);
+        Assert.Equal("home:navigatingFrom:Push detail:navigatingTo:Push detail:navigatedTo:Push home:navigatedFrom:Push", h.TakeLog());
+    }
+
+    [Fact]
+    public void AUserPopOfSeveralLevels_IsOneGuardedNavigation()
+    {
+        var h = new Harness();
+        h.Nav.Navigate("a");
+        h.Nav.Navigate("b");
+        h.Settle();
+        h.TakeLog();
+        var a = h.Stack[1];
+
+        // What the iOS back button's menu does: back to the root, reporting the page above it.
+        h.Page.PopToRootAsync();
+        h.Page.ReportPopped!(a);
+        h.Settle();
+
+        Assert.Equal("home", h.Nav.CurrentRoute);
+        Assert.Equal("home", h.Titles);
+        Assert.Equal("b:navigatingFrom:Pop home:navigatingTo:Pop home:navigatedTo:Pop b:navigatedFrom:Pop", h.TakeLog());
+    }
+
+    [Fact]
+    public void AUserPop_WhileTheModelHasMovedOn_IsRefused_AndTheHostShowsTheModel()
+    {
+        var h = new Harness();
+        h.Nav.Navigate("detail");
+        h.Settle();
+        h.Nav.Navigate("x");
+        h.TakeLog();
+
+        h.UserBack();
+
+        Assert.Equal("x", h.Nav.CurrentRoute);
+        Assert.Equal("home,detail,x", h.Titles);
+        Assert.DoesNotContain("navigatingFrom", h.TakeLog());
+    }
+
+    [Fact]
+    public void ANestedHost_OwnsItsPages_ForTheGuardAndTheBackKey()
+    {
+        NavigationHandle<string>? inner = null;
+        var h = new Harness(map: (route, log) => route == "nested"
+            ? Component<NestedPage, NestedProps>(new(log, n => inner = n))
+            : Component<LogPage, LogPageProps>(new(route, log)));
+        h.Nav.Navigate("nested");
+        h.Settle();
+        inner!.Navigate("i1");
+        h.Settle();
+        h.Log.RefuseFrom.Add("i1");
+        h.TakeLog();
+
+        // The key goes to the inner stack's page first.
+        Assert.True(h.Page.SendBackButtonPressed());
+        h.Settle();
+        Assert.Equal("i1:navigatingFrom:Pop", h.TakeLog());
+        Assert.Equal("nested", h.Nav.CurrentRoute);
+        Assert.Equal("i1", inner.CurrentRoute);
+
+        // The outer guard asks the outer page's components, not the inner host's pages.
+        Assert.True(h.Nav.Navigate("x"));
+        h.Settle();
+        Assert.Equal("menu:navigatingFrom:Push x:navigatingTo:Push x:navigatedTo:Push menu:navigatedFrom:Push", h.TakeLog());
+    }
+
+    [Fact]
+    public void UnmountingTheHostMidPush_RunsNoLifecycleAfter_AndReleasesTheGuard()
+    {
+        var h = new Harness();
+        h.Nav.Navigate("detail");
+        h.Host.Scheduler.RunOne();
+        Assert.Equal("home,detail", h.Titles);
+
+        h.Host.Render(Page("gone", null));
+        h.Settle();
+
+        Assert.Equal("home:navigatingFrom:Push detail:navigatingTo:Push", h.TakeLog());
+        Assert.Null(((INavigationHandle)h.Nav).LifecycleGuard);
+
+        // The handle outlives its host: navigating it is harmless.
+        Assert.True(h.Nav.Navigate("y"));
+        h.Settle();
+        Assert.Empty(h.TakeLog());
+        Assert.Equal("gone", h.Host.View<ContentPage>().Title);
+    }
+
+    [Fact]
+    public void AHostMovedToAnotherHandle_ShowsItsStack_AndReleasesTheFirst()
+    {
+        var host = new TestHost(MauiHandlers.CreateRegistry());
+        var log = new NavLog();
+        NavigationHandle<string>? first = null, second = null;
+        Action<bool>? useSecond = null;
+        host.Render(Component<TwoHandlesApp, TwoHandlesProps>(new(log, (a, b, set) => (first, second, useSecond) = (a, b, set))));
+        first!.Navigate("a");
+        host.Scheduler.Drain();
+        log.Entries.Clear();
+        var page = host.View<ReactorNavigationPage>();
+
+        useSecond!(true);
+        host.Scheduler.Drain();
+
+        Assert.Equal(["other"], page.Navigation.NavigationStack.Select(p => p.Title));
+        Assert.Equal("other:navigatingTo:Push other:navigatedTo:Push a:navigatedFrom:Push", string.Join(" ", log.Entries));
+        Assert.Null(((INavigationHandle)first).LifecycleGuard);
+        Assert.NotNull(((INavigationHandle)second!).LifecycleGuard);
+        log.Entries.Clear();
+
+        first.Navigate("z");
+        second.Navigate("b");
+        host.Scheduler.Drain();
+        Assert.Equal(["other", "b"], page.Navigation.NavigationStack.Select(p => p.Title));
+        Assert.Equal("other:navigatingFrom:Push b:navigatingTo:Push b:navigatedTo:Push other:navigatedFrom:Push", string.Join(" ", log.Entries));
+    }
+
     private static T OnAnotherThread<T>(Func<T> work)
     {
         T result = default!;
@@ -541,21 +946,30 @@ public class NavigationHostTests
     public void Mutators_OnTheRenderThread_DoNotAllocate()
     {
         var nav = new NavigationHandle<string>(new NavigationStack<string>("a"));
+        Func<string, bool> isA = static r => r == "a";
         nav.Navigate("b");
-        nav.GoBack();
-        nav.GoForward();
-        nav.Replace("a");
-        nav.Replace("b");
+        Cycle();
 
         var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 100; i++)
+        for (var i = 0; i < 100; i++) Cycle();
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        Assert.Equal("b", nav.CurrentRoute);
+
+        // From back [a], current b, through every mutator, back to the same state.
+        void Cycle()
         {
             nav.Replace("a");
             nav.Replace("b");
             nav.GoBack();
             nav.GoForward();
+            nav.Navigate("c");
+            nav.GoBack();
+            nav.Navigate("c");
+            nav.PopTo(isA);
+            nav.GoForward();
+            nav.Reset("a");
+            nav.Navigate("b");
         }
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
     }
 }
 
@@ -579,9 +993,11 @@ public class NavigationHotReloadTests
         var page = host.View<ReactorNavigationPage>();
         var pages = page.Navigation.NavigationStack.ToArray();
 
+        nav = null;
         Microsoft.UI.Reactor.Hosting.ReactorRoot.RerenderAll();
         host.Scheduler.Drain();
 
+        // The component did render again (it reported its handle), and kept it.
         Assert.Same(handle, nav);
         Assert.Equal(["home", "a"], handle.BackStack);
         Assert.Equal(pages, page.Navigation.NavigationStack);

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Spec 069 §2.5 AOT gate for the shared navigation model: a Native AOT console that resolves a
+    DeepLinkMap route and round-trips a NavigationState snapshot through a source-generated
+    JsonSerializerContext, with no UI framework. Run it on any OS:
+      dotnet publish tests/aot_trim_proof/Reactor.Navigation.AotSmoke -r osx-arm64 -c Release
+      tests/aot_trim_proof/Reactor.Navigation.AotSmoke/bin/Release/net11.0/osx-arm64/publish/Reactor.Navigation.AotSmoke
+    It prints "PASS" and exits 0; trim/AOT analysis warnings are errors in Release.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0</TargetFramework>
+    <LangVersion>15</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\Reactor.Core\Reactor.Core.csproj" />
+  </ItemGroup>
+
+</Project>

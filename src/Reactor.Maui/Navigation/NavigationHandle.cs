@@ -9,10 +9,13 @@ namespace Microsoft.UI.Reactor.Navigation;
 public sealed record NavigateOptions
 {
     /// <summary>
-    /// Whether the platform animates the push or pop this navigation causes (default
-    /// <see langword="true"/>). A back gesture the user is already making can't be made non-animated.
+    /// Whether the platform animates the push or pop this <c>Navigate</c> call causes.
+    /// <see langword="null"/> (the default) uses the host's: <c>NavigationHost</c>'s stack
+    /// <c>Animated</c>, which is <see langword="true"/> unless configured. Other changes
+    /// (<c>GoBack</c>, <c>Replace</c>, <c>Reset</c>, …) always use the host's. A back gesture the
+    /// user is already making can't be made non-animated.
     /// </summary>
-    public bool Animated { get; init; } = true;
+    public bool? Animated { get; init; }
 
     /// <summary>
     /// When true (default), the current route is pushed onto the back stack.
@@ -116,21 +119,8 @@ public sealed class NavigationHandle<TRoute> : INavigationHandle where TRoute : 
 
     // The off-thread paths build their closures in these helpers, never in the mutators: a lambda
     // over a mutator's parameters would make the mutator allocate its closure on every call.
-    private bool Schedule(string operation, Action work)
-    {
-        var uiThreadId = _uiThreadId;
-        return UIThreadMarshal.EnqueueOrThrow(
-            _enqueue ?? RenderScheduler.TryEnqueueOnUIThread,
-            work,
-            () => $"NavigationHandle.{operation} was called from thread {Environment.CurrentManagedThreadId}, " +
-                $"but the captured UI thread is {uiThreadId}, and no UI dispatcher is " +
-                $"available to marshal the call. Invoke it on the UI thread.",
-            () => $"NavigationHandle.{operation} was called from thread {Environment.CurrentManagedThreadId}, " +
-                $"but the UI dispatcher refused the marshaled call (TryEnqueue returned " +
-                $"false — typically because the dispatcher is shutting down). The mutation " +
-                $"was dropped. Cancel background work in effect cleanup before window/app " +
-                $"shutdown.");
-    }
+    private bool Schedule(string operation, Action work) =>
+        UIThreadMarshal.MarshalOffUIThread(_uiThreadId, $"NavigationHandle.{operation}", work, _enqueue);
 
     private bool ScheduleNavigate(TRoute route, NavigateOptions? options) => Schedule(nameof(Navigate), () => Navigate(route, options));
     private bool ScheduleReplace(TRoute route) => Schedule(nameof(Replace), () => Replace(route));

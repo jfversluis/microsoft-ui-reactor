@@ -54,9 +54,9 @@ public partial class App : Application
 ```
 
 The package adds global usings for `Microsoft.UI.Reactor.Core`, `Microsoft.UI.Reactor.Maui`,
-`Microsoft.UI.Reactor.Maui.Hosting` and `Microsoft.UI.Reactor.Maui.Direct`, plus an `Element`
-alias, because MAUI's own `Microsoft.Maui.Controls.Element` would otherwise make a bare `Element`
-ambiguous. The factories are a `using static` you add per file, since names such as `Grid` and
+`Microsoft.UI.Reactor.Maui.Hosting` and `Microsoft.UI.Reactor.Maui.Direct`, plus `Element` and
+`NavigationMode` aliases, because MAUI's own `Microsoft.Maui.Controls.Element` and
+`Microsoft.Maui.ApplicationModel.NavigationMode` would otherwise make the bare names ambiguous. The factories are a `using static` you add per file, since names such as `Grid` and
 `Label` would otherwise shadow MAUI's types everywhere. Set
 `<ReactorImplicitUsings>false</ReactorImplicitUsings>` in the project to opt out of the global usings.
 
@@ -148,7 +148,7 @@ Hooks are called in `Render()`, unconditionally and in the same order every rend
 | `UseContext(context)` | Read a value provided higher up with `context.Provide(value, child)`. |
 | `UseResource(load, deps…)` | Load data asynchronously; returns loading, value or error, and cancels stale loads. |
 | `UseNavigation(initial)`, `UseNavigationLifecycle(…)` | Typed navigation, as on WinUI (below). |
-| `UseRouteStack(root)` | A navigation stack held in state (below). |
+| `UseRouteStack(root)` | A plain list of routes in state, for the lower-level `NavigationStack` (below). |
 | `UseAppTheme()`, `UseWindowSize()` | The app theme and the window size, re-rendering when they change. In a component class call them on `this`. |
 
 State setters can be called from any thread; the update is applied on the UI thread, and several
@@ -195,16 +195,17 @@ public sealed class App : Component
 }
 ```
 
-`Navigate`, `GoBack`, `Replace`, `Reset`, `PopTo` and `SetState` push and pop pages
-(`new NavigateOptions { Animated = false }` skips the animation). A page reads the handle with
-`UseNavigation<Route>()`, and `UseNavigationLifecycle(onNavigatingFrom: c => c.Cancel())` can refuse
-to be left: the back button, the swipe and the Android back key all go through the handle, so a
-refused back keeps the page. In a file that imports `Microsoft.UI.Reactor.Navigation`, MAUI's
-implicit usings make `NavigationMode` ambiguous; alias it
-(`using NavigationMode = Microsoft.UI.Reactor.Navigation.NavigationMode;`).
+`Navigate`, `GoBack`, `Replace`, `Reset`, `PopTo` and `SetState` push and pop pages. A page reads
+the handle with `UseNavigation<Route>()`, and `UseNavigationLifecycle(onNavigatingFrom: c => c.Cancel())`
+can refuse to be left: the back button, the swipe and the Android back key all go through the
+handle, so a refused back keeps the page. A third argument configures the stack, for example its
+title as a tab, its modals, or `Animated = false` for every change;
+`Navigate(route, new NavigateOptions { Animated = false })` skips the animation of that one push.
+This is the recommended navigation API, and the one shared with WinUI.
 
-The lower-level navigation stack is state. Render it with `NavigationStack`, and pass `stack.PopTo` so that the
-back button and back gesture update your state:
+`UseRouteStack` is the lower level: the navigation stack is a plain list in state. Render it with
+`NavigationStack`, and pass `stack.PopTo` so that the back button and back gesture update your
+state:
 
 ```csharp
 public sealed class App : Component

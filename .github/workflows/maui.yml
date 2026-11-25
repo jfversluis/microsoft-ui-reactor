@@ -13,6 +13,7 @@ on:
       - 'tests/Reactor.Maui.Tests/**'
       - 'tests/Reactor.Maui.Benchmark/**'
       - 'tests/Reactor.Maui.DeviceTests/**'
+      - 'tests/aot_trim_proof/Reactor.Navigation.AotSmoke/**'
       - 'samples/maui/**'
       - 'Reactor.Maui.slnx'
       - 'Directory.Build.props'
@@ -82,6 +83,11 @@ jobs:
 
       - name: Build (Release, all platforms)
         run: dotnet build Reactor.Maui.slnx --no-restore -c Release
+
+      - name: Navigation model under Native AOT (spec 069 §2.5)
+        run: |
+          dotnet publish tests/aot_trim_proof/Reactor.Navigation.AotSmoke -r osx-arm64 -c Release
+          tests/aot_trim_proof/Reactor.Navigation.AotSmoke/bin/Release/net11.0/osx-arm64/publish/Reactor.Navigation.AotSmoke
 
       - name: Pack
         run: |

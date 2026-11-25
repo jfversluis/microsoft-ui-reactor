@@ -13,6 +13,12 @@ public sealed class TestScheduler : IRenderScheduler
 
     public void Post(Action work) => _queue.Enqueue(work);
 
+    /// <summary>Runs only the work posted first, if any.</summary>
+    public void RunOne()
+    {
+        if (_queue.TryDequeue(out var work)) work();
+    }
+
     public void Drain()
     {
         while (_queue.TryDequeue(out var work)) work();
