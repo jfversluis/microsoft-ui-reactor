@@ -71,9 +71,9 @@ public static partial class Fixtures
         public static Element Default(ShellLab l) =>
             Shell(l.Tab, l.OnSelected,
                 TabBar(
-                    ShellTab("a", "A", null, l.Host(l.A)),
-                    ShellTab("b", "B", null, l.Host(l.B)),
-                    ShellTab("c", "C", null, Page("c", Label("c page")))));
+                    ShellTab("a", "A", l.Host(l.A)),
+                    ShellTab("b", "B", l.Host(l.B)),
+                    ShellTab("c", "C", Page("c", Label("c page")))));
     }
 
     private sealed record ShellLabProps(ShellLab Lab, int Generation);
@@ -154,6 +154,14 @@ public static partial class Fixtures
         await c.WaitFor(() => lab.Selected.Count == 1, "the tap to be reported");
         Equal("b", lab.Selected[0], "the reported key");
         await ShellShows(c, shell, "a", "a0", "the refused tap undone");
+
+        // Rapid refused taps: each is reported, and the declared tab is shown again.
+        UserTaps(shell, "b");
+        UserTaps(shell, "c");
+        await c.WaitFor(() => lab.Selected.Count == 3, "both taps to be reported");
+        Equal("b,b,c", string.Join(",", lab.Selected), "the reported keys");
+        await ShellShows(c, shell, "a", "a0", "rapid refused taps undone");
+        Check(!Platform.IsDisplayed(TopOf(SectionOf(shell, "c"))), "tab c's page isn't displayed");
 
         // Rapid taps: the restore goes to the latest declaration, here the one the app accepts last.
         lab.Accept = true;
@@ -274,6 +282,18 @@ public static partial class Fixtures
         Equal("b0,b1", SectionPages(SectionOf(shell, "b")), "tab b's stack");
         // The handle's back ran its guard (over the page shown when it was called); no user back was seen.
         Equal(1, lab.Log.Entries.Count(e => e.Contains(":navigatingFrom:Pop")), "back guards");
+
+        // The user's back right after a push the host hasn't shown: one guarded back of the model.
+        lab.A.Navigate("a1");
+        await ShellShows(c, shell, "a", "a0,a1", "a push");
+        lab.Log.Entries.Clear();
+        lab.A.Navigate("a2");
+        Platform.ShellBack(SectionOf(shell, "a"));
+        await ShellShows(c, shell, "a", "a0,a1", "the back superseding the push");
+        await c.Settle(500);
+        Equal("a1", lab.A.CurrentRoute, "the model");
+        Equal("a0,a1", SectionPages(SectionOf(shell, "a")), "the stack stays");
+        Equal(1, lab.Log.Entries.Count(e => e.Contains(":navigatingFrom:Pop")), "back guards for the user's back");
     }
 
     private static async Task ShellRemoveSelected(FixtureContext c)
@@ -282,7 +302,7 @@ public static partial class Fixtures
         var (lab, shell) = await ShowShell(c, l =>
         {
             l.InitialTab = "b";
-            l.Build = lb => Shell(lb.Tab, lb.OnSelected, TabBar([.. tabs.Select(k => ShellTab(k, k.ToUpperInvariant(), null, Page(k, Label($"{k} page"))))]));
+            l.Build = lb => Shell(lb.Tab, lb.OnSelected, TabBar([.. tabs.Select(k => ShellTab(k, k.ToUpperInvariant(), Page(k, Label($"{k} page"))))]));
         });
         await ShellShows(c, shell, "b", "b", "tab b");
 
@@ -317,8 +337,8 @@ public static partial class Fixtures
             var (visible, setVisible) = UseState(true);
             Props.Report(setVisible);
             return Shell("a", null, TabBar(
-                ShellTab("a", "A", null, Page("bars", Label("bars")).NavBarIsVisible(visible).TabBarIsVisible(visible)),
-                ShellTab("b", "B", null, Page("other", Label("other")))));
+                ShellTab("a", "A", Page("bars", Label("bars")).NavBarIsVisible(visible).TabBarIsVisible(visible)),
+                ShellTab("b", "B", Page("other", Label("other")))));
         }
     }
 
@@ -330,14 +350,16 @@ public static partial class Fixtures
         var page = (Page)SectionOf(shell, "a").CurrentItem.Content;
         await c.WaitFor(() => Platform.IsDisplayed(page), "the page");
         await c.Settle(300);
-        Check(Platform.NavBarShown(page) is null or true, "the navigation bar shows");
-        Check(Platform.TabBarShown(page) is null or true, "the tab bar shows");
+        Check(Platform.NavBarShown(page) is not null, "the native navigation bar can be read");
+        Check(Platform.TabBarShown(page) is not null, "the native tab bar can be read");
+        Check(Platform.NavBarShown(page) == true, "the navigation bar shows");
+        Check(Platform.TabBarShown(page) == true, "the tab bar shows");
 
         setVisible!(false);
         try
         {
-            await c.WaitFor(() => !MauiShell.GetNavBarIsVisible(page) && Platform.NavBarShown(page) is null or false
-                && Platform.TabBarShown(page) is null or false, "both bars to hide", 5000);
+            await c.WaitFor(() => !MauiShell.GetNavBarIsVisible(page) && Platform.NavBarShown(page) == false
+                && Platform.TabBarShown(page) == false, "both bars to hide", 5000);
         }
         catch (CheckFailedException ex)
         {
@@ -346,8 +368,7 @@ public static partial class Fixtures
         Check(!MauiShell.GetTabBarIsVisible(page), "the page's tab bar property");
 
         setVisible(true);
-        await c.WaitFor(() => Platform.NavBarShown(page) is null or true && Platform.TabBarShown(page) is null or true, "both bars to show again", 5000);
-        Console.WriteLine($"#   native bars read: nav {Platform.NavBarShown(page)?.ToString() ?? "n/a"}, tabs {Platform.TabBarShown(page)?.ToString() ?? "n/a"}");
+        await c.WaitFor(() => Platform.NavBarShown(page) == true && Platform.TabBarShown(page) == true, "both bars to show again", 5000);
     }
 
     private sealed record FlyoutAppProps(Action<Action<string>, Action<bool>> Report, List<bool> Reported);
@@ -360,8 +381,8 @@ public static partial class Fixtures
             var (open, setOpen) = UseState(false);
             Props.Report(setHeader, setOpen);
             return Shell("a", null,
-                    FlyoutItem("A", null, ShellTab("a", "A", null, Page("a", Label("a page")))),
-                    FlyoutItem("B", null, ShellTab("b", "B", null, Page("b", Label("b page")))))
+                    FlyoutItem("A", ShellTab("a", "A", Page("a", Label("a page")))),
+                    FlyoutItem("B", ShellTab("b", "B", Page("b", Label("b page")))))
                 .FlyoutBehavior(FlyoutBehavior.Flyout)
                 .FlyoutIsPresented(open, value =>
                 {
@@ -421,10 +442,14 @@ public static partial class Fixtures
             lab.A = UseNavigation("a0");
             var (modal, setModal) = UseState(false);
             Props.Report(setModal);
-            return Shell("a", null, TabBar(ShellTab("a", "A", null, lab.Host(lab.A, s => s with
+            return Shell("a", null, TabBar(ShellTab("a", "A", lab.Host(lab.A, s => s with
             {
                 Modals = modal ? [Page("sheet", Label("sheet page"))] : [],
-                OnModalDismissed = remaining => setModal(remaining > 0),
+                OnModalDismissed = remaining =>
+                {
+                    lab.Selected.Add($"dismissed:{remaining}");
+                    setModal(remaining > 0);
+                },
             }))));
         }
     }
@@ -445,9 +470,18 @@ public static partial class Fixtures
             "the modal to show", 10_000);
         Equal("a1", lab.A.CurrentRoute, "the model under the modal");
 
+        // A page change waits while the modal is shown: Shell would dismiss it.
+        lab.A.Navigate("a2");
+        await c.Settle(800);
+        Equal(1, section.Navigation.ModalStack.Count, "the modal stays");
+        Check(Platform.IsDisplayed(section.Navigation.ModalStack[0]), "the modal is still displayed");
+        Equal("a0,a1", SectionPages(section), "the stack under the modal waits");
+        Equal("", string.Join(",", lab.Selected), "dismissals reported");
+
         setModal(false);
         await c.WaitFor(() => section.Navigation.ModalStack.Count == 0 && SectionIdle(section), "the modal to go", 10_000);
-        await ShellShows(c, shell, "a", "a0,a1", "the stack under the modal");
+        await ShellShows(c, shell, "a", "a0,a1,a2", "the held push after the modal");
+        Equal("", string.Join(",", lab.Selected), "dismissals reported");
         Equal(0, lab.Log.Guards("a1"), "no back was seen");
     }
 
@@ -463,6 +497,7 @@ public static partial class Fixtures
     {
         public NavigationHandle<ShopRoute> Orders = null!;
         public Action<string> SetTab = null!;
+        public Action<bool> SetRefresh = null!;
     }
 
     private sealed class ShopApp : Component<ShopLab>
@@ -471,14 +506,17 @@ public static partial class Fixtures
         {
             var (tab, setTab) = UseState("home");
             var orders = UseNavigation<ShopRoute>(new ShopRoute.List());
+            // A result for the page below, held in app state: the typed "..?refresh=true".
+            var (refresh, setRefresh) = UseState(false);
             Props.Orders = orders;
             Props.SetTab = setTab;
+            Props.SetRefresh = setRefresh;
             return Shell(tab, setTab, TabBar(
-                ShellTab("home", "Home", null, Page("home", Label("home page"))),
-                ShellTab("orders", "Orders", null, NavigationHost(orders, route => route switch
+                ShellTab("home", "Home", Page("home", Label("home page"))),
+                ShellTab("orders", "Orders", NavigationHost(orders, route => route switch
                 {
                     ShopRoute.Detail d => Page($"order {d.Id}", Label($"order {d.Id}")),
-                    ShopRoute.List l => Page(l.Refresh ? "orders refreshed" : "orders", Label("orders")),
+                    ShopRoute.List l => Page(l.Refresh || refresh ? "orders refreshed" : "orders", Label("orders")),
                     _ => null,
                 }))));
         }
@@ -494,16 +532,20 @@ public static partial class Fixtures
         lab.Orders.Navigate(new ShopRoute.Detail(2));
         await ShellShows(c, shell, "orders", "orders,order 1,order 2", "two orders");
 
-        // "..?refresh=true": back, with the query as a field of the destination's route.
+        // "..?refresh=true": the result goes into app state the list reads, then one back. The list
+        // page stays mounted (no remount).
         lab.Orders.GoBack();
         await ShellShows(c, shell, "orders", "orders,order 1", "back");
-        lab.Orders.PopTo(r => r is ShopRoute.List);
-        lab.Orders.Replace(new ShopRoute.List(Refresh: true));
+        var list = SectionOf(shell, "orders").CurrentItem.Content;
+        lab.SetRefresh(true);
+        lab.Orders.GoBack();
         await ShellShows(c, shell, "orders", "orders refreshed", "back to the list with refresh=true");
+        Check(ReferenceEquals(list, SectionOf(shell, "orders").CurrentItem.Content), "the list page stayed mounted");
 
         // "//home": an absolute route is a selection plus a reset of that tab's stack.
         lab.Orders.Navigate(new ShopRoute.Detail(3));
         await ShellShows(c, shell, "orders", "orders refreshed,order 3", "another order");
+        lab.SetRefresh(false);
         lab.SetTab("home");
         lab.Orders.Reset(new ShopRoute.List());
         await c.WaitFor(() => shell.ShownKey() == "home" && Platform.IsDisplayed(TopOf(SectionOf(shell, "home"))), "home", 10_000);
@@ -534,17 +576,19 @@ public static partial class Fixtures
         await ShellShows(c, shell, "a", "a0,a1", "the push");
         var section = SectionOf(shell, "a");
         var navigator = ShellNatives.GetNavigator(section)!;
-        var setter = new Microsoft.UI.Reactor.Maui.Hosting.WindowPageSetter(c.Window, c.UnhandledErrors.Add) { WaitForNavigation = true };
+        // The fixture's window-page setter is the one ReactorWindow uses; wait on every platform here.
+        c.Pages.WaitForNavigation = true;
 
         Platform.ShellBack(section);
-        var busy = !navigator.IsIdle;
-        var next = new ContentPage { Content = new Label { Text = "next" } };
-        setter.Set(next);
-        Equal(busy, setter.IsPending, "the swap waits exactly while the section is busy");
-        await c.WaitFor(() => ReferenceEquals(c.Window.Page, next), "the swap", 10_000);
-        Console.WriteLine($"#   section busy at the swap: {busy}");
+        Check(!navigator.IsIdle, "the section is busy with the user's back");
+        // The root renders a page instead of the Shell: the Shell's tree unmounts before the swap.
+        lab.Build = _ => Page("next", Label("next page"));
+        RenderAgain(c, lab);
+        Check(c.Pages.IsPending, "the swap waits for the busy section");
+        Check(ReferenceEquals(c.Window.Page, shell), "the Shell stays until the section settles");
+        await c.WaitFor(() => c.Window.Page is { Title: "next" }, "the swap", 10_000);
         Check(navigator.IsIdle, "the section settled before the swap");
-        Equal("a0", lab.A.CurrentRoute, "the back reached the handle");
+        Check(shell.Lingering.Count == 0, "the Shell lists no busy navigator after the swap");
     }
 
     /// <summary>
