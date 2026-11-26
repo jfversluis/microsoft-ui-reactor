@@ -117,7 +117,7 @@ public static class DirectHandlers
             };
             view.OnCompleted = () => context.Live?.OnCompleted?.Invoke();
             view.OnSelectionChanged = () => SelectionTracker.Find(view)?.Notified(context);
-            view.HandlerChanged += () => SelectionTracker.Find(view)?.ObservePlatform();
+            view.HandlerChanged += () => SelectionTracker.Find(view)?.ObservePlatform(context);
         }
 
         protected override void Apply(HandlerContext<EntryElement> context, DirectEntry view, EntryElement? previous, EntryElement next)

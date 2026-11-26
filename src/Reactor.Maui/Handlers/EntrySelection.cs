@@ -78,10 +78,15 @@ internal sealed class SelectionTracker
     public static bool IsUsed(EntryElement element) =>
         element.OnSelectionChanged is not null || element.CursorPosition is not null || element.SelectionLength is not null;
 
-    /// <summary>The platform view appeared (a handler connected): what it shows is the baseline.</summary>
-    public void ObservePlatform()
+    /// <summary>
+    /// The platform view appeared (a handler connected): what it shows is the baseline. MAUI sets a
+    /// Core view's handler before the handler creates and maps its platform view, so with
+    /// <paramref name="context"/> an observation that finds no platform view yet is posted once.
+    /// </summary>
+    public void ObservePlatform(HandlerContext<EntryElement>? context = null)
     {
         if (PlatformSelection.Read(_view) is { } state) _baseline = state;
+        else if (context is { } c) c.PostReport(() => ObservePlatform());
     }
 
     /// <summary>A programmatic write: its effective value, clamped to the text as the platform clamps, is the baseline.</summary>

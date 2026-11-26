@@ -169,8 +169,8 @@ internal sealed class ScrollBridge
 #endif
         // No platform view (headless): the content's measured or arranged size.
         var content = scrollView.ContentSize;
-        if (scrollView.Content is { } view)
-            content = new Size(Math.Max(content.Width, view.Frame.Width), Math.Max(content.Height, view.Frame.Height));
+        if (scrollView.Content is { } contentView)
+            content = new Size(Math.Max(content.Width, contentView.Frame.Width), Math.Max(content.Height, contentView.Frame.Height));
         return verticalAxis
             ? scrollView.ScrollY >= content.Height - scrollView.Height - pixel
             : scrollView.ScrollX >= content.Width - scrollView.Width - pixel;

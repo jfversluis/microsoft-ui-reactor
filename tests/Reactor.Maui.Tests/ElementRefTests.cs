@@ -616,3 +616,74 @@ public class ReadmeRefSnippetTests
         Assert.Equal("https://learn.microsoft.com/dotnet/maui", ((UrlWebViewSource)((MauiWebView)web).Source).Url);
     }
 }
+
+public class ElementFocusTests
+{
+    private sealed class FocusProbe : Component<List<Action>>
+    {
+        public override Element Render()
+        {
+            var (entry, requestFocus) = UseElementFocus();
+            Props.Add(requestFocus);
+            return Entry("x").Ref(entry);
+        }
+    }
+
+    [Fact]
+    public void RequestFocus_FocusesADirectViewOnceItIsReady_AndKeepsItsIdentity()
+    {
+        var requests = new List<Action>();
+        var host = new TestHost(DirectHandlers.CreateRegistry()).Render(Component<FocusProbe, List<Action>>(requests));
+        var entry = (DirectEntry)host.RootView!;
+        var handler = new StubViewHandler { PlatformView = null };
+        entry.Handler = handler;
+
+        // No platform view yet: nothing to focus (the headless dispatcher runs every poll at once).
+        requests[0]();
+        Assert.DoesNotContain(handler.Commands, c => c.Command == nameof(IView.Focus));
+
+        handler.PlatformView = new object();
+        requests[0]();
+        Assert.Contains(handler.Commands, c => c.Command == nameof(IView.Focus));
+
+        host.Render(Component<FocusProbe, List<Action>>(requests));
+        Assert.Same(requests[0], requests[^1]);
+    }
+}
+
+public class DirectSelectionBaselineTests
+{
+    [Fact]
+    public void ADirectEntrysBaseline_IsObservedOnceItsPlatformViewExists()
+    {
+        var ready = false;
+        var platform = new FakeSelection { Text = "hello" };
+        PlatformSelection.TestReader.Value = _ => ready ? new PlatformSelectionState(platform.Cursor, platform.Length, platform.Text) : null;
+        try
+        {
+            var reports = new List<string>();
+            var host = new TestHost(DirectHandlers.CreateRegistry()).Render(Entry("hello", _ => { }) with
+            {
+                OnSelectionChanged = (_, c, l) => reports.Add($"{c},{l}"),
+            });
+            var entry = (DirectEntry)host.RootView!;
+            host.Scheduler.Drain();
+
+            // MAUI sets a Core view's handler before it creates and maps the platform view.
+            entry.Handler = new StubViewHandler();
+            ready = true;
+            host.Scheduler.Drain();
+
+            platform.Set(2, 1);
+            entry.CursorPosition = 2;
+            entry.SelectionLength = 1;
+            host.Scheduler.Drain();
+
+            Assert.Equal(["2,1"], reports);
+        }
+        finally
+        {
+            PlatformSelection.TestReader.Value = null;
+        }
+    }
+}

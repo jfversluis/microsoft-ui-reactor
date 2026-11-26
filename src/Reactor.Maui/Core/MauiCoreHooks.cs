@@ -33,6 +33,18 @@ public static class MauiCoreHooks
             context.UseMemo(static () => new Microsoft.UI.Reactor.Input.ElementRef<T>(), Array.Empty<object>());
 
         /// <summary>
+        /// A ref to attach to a view with <c>.Ref(...)</c>, and a <c>RequestFocus</c> that focuses it as
+        /// soon as it can: at once when the view is on screen, otherwise when it gets there (Android
+        /// can't focus a view in the first effect of a newly shown tree; spec 070 §2.6.2). Callable from
+        /// any thread; a request pending when the element unmounts is dropped. WinUI's name and shape.
+        /// </summary>
+        public (Microsoft.UI.Reactor.Input.ElementRef<IView> Ref, Action RequestFocus) UseElementFocus()
+        {
+            var focus = context.UseMemo(static () => new ElementFocus(), Array.Empty<object>());
+            return (focus.Ref, focus.Request);
+        }
+
+        /// <summary>
         /// Root mode: creates a navigation stack with the given initial route and returns a
         /// <see cref="Navigation.NavigationHandle{TRoute}"/> that is stable across re-renders. Render it
         /// with <c>NavigationHost</c>, which also provides it to descendants, so a child component can

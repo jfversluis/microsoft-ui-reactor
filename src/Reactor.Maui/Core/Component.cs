@@ -42,6 +42,9 @@ public abstract class Component : ReactorComponent
     /// <inheritdoc cref="MauiCoreHooks.UseElementRef{T}(RenderContext)"/>
     protected Microsoft.UI.Reactor.Input.ElementRef<T> UseElementRef<T>() where T : class, IView => Context.UseElementRef<T>();
 
+    /// <inheritdoc cref="MauiCoreHooks.UseElementFocus(RenderContext)"/>
+    protected (Microsoft.UI.Reactor.Input.ElementRef<IView> Ref, Action RequestFocus) UseElementFocus() => Context.UseElementFocus();
+
     protected AppTheme UseAppTheme() => Context.UseAppTheme();
 
     /// <summary>The size of the window the tree is shown in, or (0, 0) before it is known.</summary>
