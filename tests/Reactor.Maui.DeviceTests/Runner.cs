@@ -12,6 +12,9 @@ public sealed record Fixture(string Name, Func<FixtureContext, Task> Run);
 /// <summary>A failed check inside a fixture.</summary>
 public sealed class CheckFailedException(string message) : Exception(message);
 
+/// <summary>A fixture that doesn't apply on this platform; reported as TAP's <c># SKIP</c>.</summary>
+public sealed class SkipException(string reason) : Exception(reason);
+
 /// <summary>
 /// Mounts one fixture's tree into the test window, through the real MAUI handlers of the platform
 /// the app runs on, and gives the fixture ways to wait for and inspect the result.
@@ -134,17 +137,23 @@ public static class Runner
         Emit($"# Reactor MAUI device tests on {DeviceInfo.Platform} {DeviceInfo.VersionString} ({DeviceInfo.Idiom}, {DeviceInfo.DeviceType})");
         Emit($"1..{fixtures.Count}");
         var failures = 0;
+        var skips = 0;
         for (var i = 0; i < fixtures.Count; i++)
         {
             var fixture = fixtures[i];
             var context = new FixtureContext(window);
             var clock = Stopwatch.StartNew();
             string? failure = null;
+            string? skipped = null;
             try
             {
                 var run = fixture.Run(context);
                 if (await Task.WhenAny(run, Task.Delay(30_000)) != run) failure = "timed out after 30 s";
                 else await run;
+            }
+            catch (SkipException skip)
+            {
+                skipped = skip.Message;
             }
             catch (Exception ex)
             {
@@ -152,6 +161,9 @@ public static class Runner
             }
             finally
             {
+                // A dialog left on screen would hold back every later fixture's dialogs: close it first.
+                if (NativeDialogs.Count(window) > 0 && !await NativeDialogs.CloseAll(window))
+                    failure ??= $"teardown: a native dialog could not be closed: {NativeDialogs.Describe(window)}";
                 try
                 {
                     context.Unmount();
@@ -178,7 +190,12 @@ public static class Runner
             // Checked after teardown: unmounting runs effect cleanups, which can fail too.
             if (failure is null && context.UnhandledErrors.Count > 0) failure = "unhandled render error: " + context.UnhandledErrors[0];
 
-            if (failure is null)
+            if (failure is null && skipped is not null)
+            {
+                skips++;
+                Emit($"ok {i + 1} - {fixture.Name} # SKIP {skipped}");
+            }
+            else if (failure is null)
             {
                 Emit($"ok {i + 1} - {fixture.Name} # {clock.ElapsedMilliseconds} ms");
             }
@@ -197,7 +214,7 @@ public static class Runner
             Emit($"not ok 1 - no fixture matches the filter '{filter}'");
         }
 
-        Emit($"# passed {fixtures.Count - failures}, failed {failures}");
+        Emit($"# passed {fixtures.Count - failures - skips}, skipped {skips}, failed {failures}");
         Emit($"{DoneMarker} exit={(failures == 0 ? 0 : 1)}");
         try
         {

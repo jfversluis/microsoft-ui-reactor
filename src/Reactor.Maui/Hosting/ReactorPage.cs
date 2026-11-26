@@ -24,19 +24,57 @@ public class ReactorWindow : Window
     private readonly ReactorRoot _root;
     private readonly WindowPageSetter _pages;
     private ContentPage? _viewHost;
+    private List<Exception>? _destroyingErrors;
 
     public ReactorWindow(Element root, ElementHandlerRegistry? registry = null)
     {
         Page = new ContentPage();
         _root = new ReactorRoot(registry ?? MauiHandlers.CreateRegistry(), new MauiRenderScheduler(Dispatcher), SetRootNative);
         _pages = new WindowPageSetter(this, _root.ReportHostError);
+        // Its queue subscribes to Destroying before the tree does, so a dialog a later Destroying
+        // handler requests is settled at once instead of being shown on the dying window.
+        DialogQueue.For(this);
         Render(root);
-        Destroying += (_, _) =>
+    }
+
+    internal ReactorRoot Root => _root;
+
+    /// <summary>
+    /// Unmounts the tree, running every effect cleanup. MAUI calls this after the <c>Destroying</c>
+    /// event's handlers, so <c>UseWindowLifecycle</c>'s <c>onDestroying</c> runs while the tree is
+    /// still mounted (spec 069 §5.4). Errors those callbacks threw are reported after the teardown.
+    /// </summary>
+    protected override void OnDestroying()
+    {
+        base.OnDestroying();
+        Exception? teardown = null;
+        try
         {
             _root.Unmount();
+        }
+        catch (Exception ex)
+        {
+            // Unmount rethrows cleanup errors when nothing handles UnhandledException.
+            teardown = ex;
+        }
+        finally
+        {
             _pages.Cancel();
-        };
+        }
+
+        var held = _destroyingErrors;
+        _destroyingErrors = null;
+        if (held is null)
+        {
+            if (teardown is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(teardown).Throw();
+            return;
+        }
+        if (teardown is not null) held.Add(teardown);
+        _root.ReportUnhandled(held.Count == 1 ? held[0] : new AggregateException("Callbacks failed while the window was being destroyed.", held));
     }
+
+    /// <summary>Holds an <c>onDestroying</c> callback's error until the tree has been unmounted.</summary>
+    internal void HoldDestroyingError(Exception error) => (_destroyingErrors ??= []).Add(error);
 
     /// <summary>Raised for errors no error boundary caught, after the tree has been unmounted.</summary>
     public event Action<Exception>? UnhandledException
@@ -80,6 +118,8 @@ public class ReactorPage : ContentPage
                     throw new InvalidOperationException("A ReactorPage hosts a view. Use ReactorWindow to host pages and navigation.");
                 Content = native is null ? null : Props.AsView(native);
             });
+        // A back handler above every view of this tree belongs to this page (spec 069 §5.2).
+        _root.HostPage = this;
         Render(root);
     }
 

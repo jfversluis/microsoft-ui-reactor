@@ -14,8 +14,7 @@ shared core, rather than by growing a second one.
 | 4b-2 | Declarative Shell |
 | 4b-3 | Page dialogs, the system back button, modal presentation style, app and window lifecycle hooks |
 
-This spec details 4b-1 (§2) and 4b-2 (§4); §5 outlines 4b-3, which is detailed here before its
-implementation starts.
+This spec details 4b-1 (§2), 4b-2 (§4) and 4b-3 (§5), each with an "as built" section.
 
 ## 1. What WinUI has (the source of truth)
 
@@ -648,23 +647,303 @@ differs from §4.1–4.6, or §4 left a choice open:
 - **Not done in 4b-2:** a declarative search element and top tabs with their own stacks, which wait
   for a port that needs them (§4.1, §4.5).
 
-## 5. Outline: 4b-3, dialogs, back button, lifecycle
+## 5. 4b-3: dialogs, the system back button, presentation style, lifecycle
 
-- **Page dialogs** are declarative, like WinUI's `ContentDialog`: `Alert(...)`, `ActionSheet(...)`
-  and `Prompt(...)` elements with `IsOpen` and `OnClosed(result)`. 4b-3 specifies:
-  - which page presents a dialog (the active page of the element's window);
-  - one dialog at a time, with later ones queued;
-  - a queue per window;
-  - stale results dropped by generation after unmount, navigation or reopening. So `OnClosed` runs
-    at most once per open, and exactly once for an open that is still live when the user answers.
+### 5.1 Page dialogs
 
-  MAUI can't close an alert from code, so turning `IsOpen` off while one is showing takes effect
-  when the user answers.
-- **System back button:** `UseSystemBackButton(nav)` (the WinUI name, without the `Window`), plus an
-  overload taking `Func<bool>` for back handling outside navigation. It is wired through the window's
-  back handling on Android.
-- **Modal presentation style:** a `PageElement` property mapped to MAUI's iOS-specific presentation
-  style, ignored elsewhere.
-- **App and window lifecycle:** a hook raising `Activated`, `Deactivated`, `Stopped`, `Resumed` and
-  `Destroying` from the window. Its name converges with whatever WinUI has, or is proposed for both
-  renderers.
+Five of the seven ports show alerts, action sheets or prompts (spec 068 §2), and they do it from
+event handlers: `if (await DisplayAlertAsync(...)) Delete();`. Reactor offers that shape directly,
+and a declarative one like WinUI's `ContentDialog`. Both feed the same queue.
+
+- **Imperative: `UseDialogs()`** returns a `Dialogs` object bound to the component's window. It is
+  stable across renders, so handlers and effects can capture it.
+  - `Task Alert(string title, string? message, string close)`: an informational alert with one
+    button (MAUI's one-button overload).
+  - `Task<bool> Alert(string title, string? message, string accept, string cancel)`: true for
+    `accept`.
+  - `Task<string?> ActionSheet(string? title, string? cancel, string? destruction, params string[] buttons)`.
+  - `Task<string?> Prompt(string title, string? message, string accept = "OK", string cancel = "Cancel", string? placeholder = null, int maxLength = -1, Keyboard? keyboard = null, string? initialValue = null)`.
+- **Declarative: `Alert(...)`, `ActionSheet(...)` and `Prompt(...)` elements**, with `IsOpen` and
+  `OnClosed(result)`, placed anywhere in the tree. They render nothing native. While `IsOpen` is
+  true, the dialog is queued once; the answer is reported through `OnClosed`, and the app sets
+  `IsOpen` to false. Re-opening (false, then true) queues a new dialog.
+- **The presenter is resolved when a dialog is dequeued**, not when it is requested. It is the
+  window's top modal if one is shown, otherwise the window's `Page`. Inside a `ReactorPage` hosted by
+  a non-Reactor app, the window is the page's, followed as it changes (§5.4), as `UseWindowSize` does.
+- **One native dialog at a time, per window.**
+  - The next dialog is presented only once the previous one's native UI has gone, not when its
+    answer arrives (the answer can arrive before the dismissal has finished; see §5.6 for when).
+  - The barrier is the platform reporting no presented dialog:
+    - iOS and Mac Catalyst: the queue's own last alert has left the window's presentation chain. An
+      alert shown outside the queue (by the app through UIKit or `DisplayAlertAsync` directly, or by
+      the system) never holds a Reactor dialog back: MAUI presents the next one above it;
+    - Android: the dialog is dismissed. AppCompat's dialog dismisses itself in the looper turn after
+      the button's callback (a list row's click, right after it), so the next dialog is shown from a
+      turn the queue posts when the answer arrives;
+    - on iOS and Mac Catalyst, checked once per frame.
+  - A dialog is also held while the window's page or a modal is in a navigation transition: the
+    queue waits for the running navigator's `BecameIdle`.
+  - Queues are per window, so two windows don't block each other. Every queue operation runs on the
+    window's dispatcher.
+- **Outcomes.**
+  - **Answered:** an imperative task completes with the answer.
+  - **The imperative tasks never fault and are never cancelled**, so `if (await dialogs.Alert(…))` is
+    safe in an `async void` event handler. A dialog the user can't answer completes with the cancel
+    answer: `false` for a two-button alert, `null` for an action sheet or a prompt.
+  - **Window destroyed:** every queued or showing dialog of that window completes with the cancel
+    answer (a declarative one is dropped); MAUI unsubscribes its alert manager then, and a request
+    without a subscriber is silently dropped. The window's queue stays destroyed, so a dialog
+    requested later (even from a later `Destroying` handler) is settled at once, until MAUI creates
+    the window again (an Android activity recreated).
+  - **Presentation failed** (no presenter, or the platform threw): an imperative dialog completes
+    with the cancel answer, the error is logged (`DiagnosticLog`), and it goes to the calling
+    component's error boundary if there is one; a declarative dialog reports the error to its
+    element's boundary. The queue moves on.
+  - **The dispatcher refused the work** (the app is shutting down): the request is settled where it
+    is, and so is everything the queue holds (the dialog shown included); the queue is then terminal,
+    settling every later request at once, until MAUI creates the window again. Nothing is left waiting.
+  - **A dialog being presented when the queue terminates** (the presentation destroyed the window, say)
+    is settled too: it is reserved as the dialog shown, under the queue's lock, before it is presented.
+  - **A failure report that can't be delivered** (the render thread refuses it) is logged; the task
+    has already completed, and the queue goes on.
+  - **Declarative `OnClosed`** runs at most once per open, and only while that open is still the
+    element's current one. Unmounting, turning `IsOpen` off (from the render that does it, before
+    the window can take a waiting request), or re-opening makes an earlier open stale. A stale answer
+    is dropped, and a stale dialog that hasn't been shown is removed from the queue.
+  - **The answer goes to the `OnClosed` of the content shown.** The element's latest title and
+    buttons are read when the dialog is dequeued, and the `OnClosed` of that same render receives the
+    answer. A dialog showing "Delete A?" never runs a later render's callback for B.
+  - MAUI can't dismiss a dialog from code. A dialog made stale while it is showing stays on screen
+    until the user answers, and that answer is dropped.
+  - An exception from `OnClosed` goes to the element's error boundary.
+
+### 5.2 The system back button
+
+- **`UseSystemBackButton(Func<bool> onBack)`** registers a handler for the window's back request:
+  the Android back key, and Windows' back button in 4g. The handler returns true when it handled
+  the back.
+- **`UseSystemBackButton(NavigationHandle<TRoute> nav)`** is WinUI's shape, without the `Window`. Like
+  WinUI's, it consumes the back whenever `nav.CanGoBack` is true, whether or not a guard lets
+  `GoBack` happen. A refused back must not fall through to the page or the OS.
+- **Where it is wired (as built, §5.6).** On Android each window with a registered handler gets one
+  AndroidX `OnBackPressedCallback`, added after MAUI's so it is asked first, and enabled only while a
+  handler is registered for a tree shown in that window. It routes the back as MAUI's window does
+  (`IWindow.BackButtonClicked`: the top modal, else the window's `Page`), asks the handlers, and if
+  none handles it, disables itself and dispatches the key again, so MAUI's own handling runs
+  unchanged. A MAUI modal on Android is a dialog with its own back dispatcher, which takes the key
+  while the modal is shown and never reaches the activity's, so each modal's dialog gets the same
+  callback. A Shell adds a back callback of its own, which can be asked before Reactor's, so the
+  Shell's `OnBackButtonPressed` asks the handlers too; a back asks them at most once whichever path it
+  takes. Reactor's pages don't override `OnBackButtonPressed` otherwise; the navigation page's and the
+  Shell's overrides from §2.4 and §4.2 stay.
+- **Only for the system back key, on Android.** Windows' back button joins in 4g. On iOS and Mac
+  Catalyst there is no callback: MAUI calls `SendBackButtonPressed` only for Shell's navigation-bar
+  back (`Shell.cs`, 11.0.0), which goes through the stack's guards (§4.2).
+- **Only the visible page's handlers are eligible.** A handler belongs to the page its component
+  renders (a route's component returning `Page(…)`), else the nearest page above its component. A
+  back asks only the handlers of the page the user sees, and of the components above every page
+  (those that render the tree's root page):
+  - for a navigation stack, its top page;
+  - for a Shell, the current tab's top page;
+  - for tabs, the selected tab;
+  - for a flyout, the detail page (and the flyout while it is presented);
+  - for a modal, the modal itself.
+
+  Pages kept in a back stack and deselected tabs never intercept. Among eligible handlers, the
+  deepest component goes first; between siblings at the same depth, the one mounted most recently.
+  The handler list is snapshotted when the back arrives, and each handler runs at most once per
+  back.
+- **Fall-through.** If no handler handles it, the back continues as before: a `NavigationHost`'s or
+  Shell's guarded back, then MAUI and the OS.
+- **The root on Android.** Android shows the predictive back-to-home preview only while no back
+  callback is enabled. Reactor's callback is enabled only while a `UseSystemBackButton` handler is
+  registered in the window, so a `Page` or `Tabs` root without one keeps the preview (MAUI itself
+  keeps its callback enabled for a page that overrides `OnBackButtonPressed`, as the navigation page
+  and the Shell do since 4b-1 and 4b-2).
+  - When nothing handles the back at the root, the key goes on to MAUI and then to the platform's
+    default: the activity moves to the back, as without Reactor.
+  - Device fixtures check a handler at the root, the default without one, and the callback's state
+    for a `Page` and a `Tabs` root with and without a handler (spec 065 §7).
+- **iOS** has no back key, so the hook doesn't fire there. A stack's back button and swipe go
+  through the stack's guards (§2.4, §4.2).
+
+### 5.3 Modal presentation style
+
+`PageElement.ModalPresentationStyle` maps to MAUI's iOS-specific `ModalPresentationStyle`
+(`FullScreen`, `PageSheet`, `FormSheet`, `OverFullScreen`, …). It is set before the page is
+presented, so it applies to modals in `NavigationStack.Modals`, `NavigationHost` modals and Shell
+modals. Other platforms ignore it, and it is not applied on Mac Catalyst (§5.6).
+
+### 5.4 App and window lifecycle
+
+- **`UseWindowLifecycle(onActivated, onDeactivated, onStopped, onResumed, onDestroying)`**, all
+  optional, subscribes to the component's window, using MAUI's `Window` events of the same names. The
+  callbacks are refreshed every render, like `UseNavigationLifecycle`, and the subscriptions end at
+  unmount.
+- **A window that arrives late** (a `ReactorPage` in a non-Reactor app) is found when the page gets
+  one; the resolver follows the page's `Window` property, so a page moved to another window, or
+  removed from its window, stops following the old one. `UseWindowSize`, `UseDialogs`,
+  `UseWindowLifecycle` and `UseSystemBackButton` share it.
+- **`Destroying` runs before teardown.** `ReactorWindow` unmounts its tree in its `OnDestroying`
+  override, which MAUI calls after the `Destroying` event's subscribers. So the hook's callbacks run
+  while the tree and its error boundaries are still mounted.
+- **Naming.** WinUI has no such hook today (only `UseWindow()` and the window's own events). The
+  name `UseWindowLifecycle` is proposed for both renderers. When WinUI adopts it, it can map it to
+  its window's `Activated` and `Closed` events and to visibility.
+- **Errors** in a callback go to the component's error boundary. An error in `onDestroying` is
+  different: the tree is about to be unmounted, and boundary handling is posted, so it would run
+  after teardown. Such an error is held:
+  - every `onDestroying` callback still runs;
+  - the tree is unmounted in `OnDestroying`;
+  - the held errors are then reported to the root's `UnhandledException`, or rethrown without a
+    subscriber.
+
+  A throw therefore never stops MAUI's `Destroying` before the teardown has run.
+
+### 5.5 Gate for 4b-3
+
+- **Headless tests:**
+  - **The dialog queue:** order, one at a time, per window, and the dismissal barrier. Also
+    presentation failure, window destruction cancelling queued tasks, and the presenter resolved at
+    dequeue (top modal, a late window).
+  - **Declarative dialogs:** stale answers (unmount, `IsOpen` off, re-open) and errors from
+    `OnClosed`.
+  - **Back handlers:** only the visible page's are eligible (back stack and deselected tabs
+    excluded), depth and recency order, each run once per back, and fall-through. The handle
+    overload consumes a refused back, with the guard running once.
+  - **Lifecycle:** subscriptions, unsubscription, a late window, and `Destroying` running before
+    teardown.
+  - **`ModalPresentationStyle`** written before the modal is presented.
+- **Device fixtures on Mac Catalyst, iOS and Android:**
+  - an alert (one and two buttons), an action sheet and a prompt, answered through their native
+    buttons, asserting that the native dialog disappears. On Android the button is clicked in
+    process; on iOS the gate drives the button through Appium if it can't be reached in process.
+  - two queued dialogs never shown at once, and a dialog requested during a navigation;
+  - the Android back key reaching a `UseSystemBackButton` handler before a `NavigationHost`, at the
+    root, and with a refusing guard;
+  - window `Stopped` and `Resumed` when the app is backgrounded, where the test can background it;
+  - a page sheet modal on iOS.
+- **WinUI tiers** green, and `/perf` within noise.
+
+### 5.6 As built (4b-3)
+
+- **The declarative dialogs are records over a built-in component.** `AlertElement`, `ActionSheetElement`
+  and `PromptElement` derive from `DialogElement : ComponentElement`, so the engine needs no new node
+  kind: each renders `DialogElementComponent`, which renders nothing and keeps its open on the
+  window's queue. Their properties write through to the component's props, so they are set with
+  `with { IsOpen = …, OnClosed = …, InitialValue = … }`. The factories are
+  `Alert(title, message, close)`, `Alert(title, message, accept, cancel)`,
+  `ActionSheet(title, cancel, destruction, buttons…)` and `Prompt(title, message)`. An alert's
+  `OnClosed` takes a `bool` for both shapes (a one-button alert reports `false`); the sheet's and the
+  prompt's take a `string?`.
+- **The Android barrier is a posted turn.** MAUI keeps no reference to the `AlertDialog` it shows,
+  and Android has no public "a dialog is on screen" query; but AppCompat's dialog runs a button's
+  callback from one posted message and posts its dismissal right after (a list row's click dismisses
+  synchronously after its callback). The queue awaits MAUI's task with `ConfigureAwait(false)`, so
+  the answer arrives inside that callback, and shows the next dialog from a turn it posts then: after
+  the dismissal. Nothing waits on the window focus, so an earlier dialog never delays a later one (a
+  MAUI modal, itself a focused dialog window on Android, shows the next dialog promptly). On iOS and
+  Mac Catalyst the barrier waits only for the queue's own last alert, until it has left the window's
+  presentation chain (checked once per frame, `DispatchDelayed(16 ms)`). Which alert is the queue's is
+  settled around MAUI's presentation: MAUI presents from a `BeginInvokeOnMainThread` turn, and the
+  queue posts on that same FIFO queue a snapshot of the chain in the turn just before it and the
+  capture in the turn just after (retried per frame if the alert isn't in the chain yet, and once more
+  inside the answer's continuation, before any callback). Exactly one alert is marked: the one not in
+  the snapshot (the request's title only breaks a tie between several new ones, then the lowest in
+  the chain). So neither an alert opened around the presentation, even one with the same title, nor
+  one the answer's own callback (an `OnClosed`) opens is taken for the queue's. The queue holds its alert's `UIAlertController` strongly until it has seen it leave the
+  chain: a weak managed wrapper could be collected while UIKit still presents the native alert, which
+  would have released the barrier early. It used to wait for any alert in the chain, so an alert the
+  app showed outside the queue (or one that never went) held every Reactor dialog back forever; that
+  was a product bug, fixed in the CI round. UIKit's tap runs an action's handler only
+  once the alert has gone (iOS 27), so for a tap the barrier is already met when the answer arrives;
+  it matters for an answer that arrives earlier, which a fixture produces on purpose.
+- **A navigation transition is one of Reactor's navigators running**: the window page's navigation
+  stack, those in its tabs or flyout, a Shell section's, or one in a modal page, as
+  `WindowPageSetter` finds them. The queue waits for that navigator's `BecameIdle` (posted), then
+  checks again. A push or pop the app makes through MAUI directly isn't seen.
+- **Imperative requests.** Arguments are validated when the method is called (an empty `cancel`
+  throws `ArgumentException`). A request made before a hosted page's window is known waits for it
+  (and while the page is out of any window); if the component unmounts first, its task completes with
+  the cancel answer. A request already queued on a window outlives its component, as MAUI's
+  `DisplayAlertAsync` outlives its page. A `ReactorWindow` creates its queue when it is constructed,
+  and `UseDialogs` when it first knows the window, so the queue sees `Destroying` before the tree's
+  own handlers do.
+- **The back key is an AndroidX callback per window**, not a page override (review M3): every page
+  overriding `OnBackButtonPressed` made MAUI keep its back callback enabled for every Reactor root
+  (`HasBackButtonPressedOverride` is a per-type reflection check), losing Android's predictive
+  back-to-home preview even without a handler. Handlers join the window their tree is shown in,
+  through the late-window resolver, and the window keeps them in an attached property (no static
+  table). The callback is added on the window's activity after MAUI's, and again (posted, after
+  MAUI's `OnCreate` has added its own) when the activity is recreated. When no handler handles the
+  back, it disables itself and calls `OnBackPressedDispatcher.OnBackPressed()` again, so MAUI's
+  callback (or the platform's default) gets the key, then re-enables.
+- **Modals and Shell on Android (verification round).** MAUI shows a modal in a `DialogFragment`
+  whose `ComponentDialog` has its own back dispatcher, with MAUI's callback forwarding to the window:
+  a real back key while a modal was shown never reached the activity's dispatcher, so it skipped
+  every handler and MAUI popped the modal. Reactor now finds each modal's dialog among the activity's
+  fragments (the dialog whose window holds the modal page's view, looked for again on `ModalPushed`
+  until it exists) and adds its callback to that dispatcher, after MAUI's, enabled with the window's.
+  MAUI's Shell adds a back callback when an item's view is created; `ReactorShell.OnBackButtonPressed`
+  asks the handlers (on Android only: iOS calls it for the navigation-bar back), in case that callback
+  is asked first. A back asks the handlers at most once, and every back asks them: the mark is scoped
+  to one back's dispatch, not to a turn of the UI thread. While Reactor's callback passes a back on to
+  MAUI, the Shell doesn't ask; when the Shell's path asked and passed the back on (it didn't handle
+  it), Reactor's callback, which that same back reaches next, takes the mark instead of asking (a
+  posted turn clears a mark nothing took). On the emulator Reactor's callback was asked before the
+  Shell's in every order tried, so the Shell path is covered headlessly.
+- **A handler belongs to the page it renders, else the nearest page above it.** A route's component
+  usually returns `Page(…)`, so the page is below the component: the walk first follows the
+  component's rendered chain (components, providers and boundaries with one child) down to a host,
+  and takes it if it is a page; a component that renders a `NavigationHost` belongs to its navigation
+  page. A component that renders the tree's root page is above every page, so it is always asked,
+  even while a modal is shown (an app's `UseSystemBackButton(nav)` at its root). Otherwise the nearest
+  page above counts, and so do Shell items, tabs and contents, so a component inside a deselected
+  `ShellTab` is never asked. A component in a list cell (a child root) continues at the list's node.
+  A `ReactorPage`'s top-level components belong to that page, so a hosted page in a MAUI back stack
+  isn't asked. The visible chain is built from the top modal, else the window's page: a navigation
+  page's `CurrentPage`, the selected tab, a flyout's detail (and its flyout while presented), a
+  Shell's current item, section, content and `CurrentPage`.
+- **A throwing back handler consumes the back**, like a throwing navigation guard, and its error goes
+  to the component's error boundary.
+- **`ModalPresentationStyle` is not applied on Mac Catalyst.** There MAUI's dismissal of a modal
+  presented as a sheet never completes (Mac Catalyst 26.7: `DismissViewControllerAsync` doesn't
+  return, for the app's own pop and for the cleanup at unmount alike), which blocks every later modal
+  of the window. So the property is iOS-only, as MAUI documents the platform-specific, and Mac
+  Catalyst keeps full-screen modals. It is written at mount and updated live; an update applies to
+  the next presentation.
+- **`onDestroying` in a hosted `ReactorPage`.** Only a `ReactorWindow` holds the errors until its tree
+  is unmounted (they bypass the boundaries). A `ReactorPage` is not torn down by its window's
+  `Destroying`, so the error goes to the component's boundary like any other callback's.
+- **Engine.** Hooks find their node through the root's render owner (`RootRenderOwner.Rendering`, set
+  while a component renders). `ReactorRoot.ReportUnhandled` reports without unmounting, `TopRoot`
+  reaches a list cell's owning tree, `RootNative` is the tree's root control and `HostPage` the
+  `ReactorPage` hosting it. No change in `Reactor.Core` or the WinUI renderer.
+- **Tests.** Headless: `DialogTests`, `SystemBackTests` and `WindowLifecycleTests`, driving the queue
+  through a fake platform (presentation, dismissal, the posted turn, navigation and frames), the back
+  key through `SystemBack.HandleBackKey` with MAUI's `IWindow.BackButtonClicked` as the pass-on, and
+  the window's lifecycle through `IWindow`. `SystemBackTests` builds a Shell, so it shares
+  `ShellTests`' collection: MAUI's Shell routes are process-wide, and building Shells on two threads
+  at once failed a Shell test now and then. Device: the dialogs are answered through their native
+  buttons in process on every platform: on Android the alert's window is found with
+  `WindowInspector` (a window with an alert's buttons; a MAUI modal is a dialog window too) and its
+  button clicked; on iOS and Mac Catalyst through UIKit's own tap path, so no Appium run was needed:
+  the button view's `accessibilityActivate` when an accessibility client is running (UIKit implements
+  it only then), else the alert's dismiss-for-action method the button calls on a tap, which
+  dismisses the alert and then runs the action. The action's private handler with a separate
+  dismissal is the last resort (the first helper used it, and on CI's slower simulator UIKit dropped
+  that dismissal, leaving an answered alert on screen that held back every later dialog). The helper
+  returns only once the alert has left the chain (`PresentingViewController` null), dismissing once
+  more without animation after 3 s, and fails with what is still shown after 10 s. Every dialog
+  fixture, and the runner's teardown for any fixture, closes whatever dialog is still on screen and
+  waits until it has gone, so one failure can't hold back the next fixture. Dialog waits allow 10 s
+  for CI's simulator. A recording platform
+  checks that no native dialog is on screen when the next is presented (on Android no frame could
+  show two at once even without the barrier). The back key on a modal and in a Shell is a real key
+  event: an app can't inject one into itself (`INJECT_EVENTS`), so the fixture logs
+  `REACTOR-KEY-BACK` and `run.sh` sends `adb shell input keyevent 4`. The other Android back fixtures put a stand-in
+  `OnBackPressedCallback` below MAUI's and Reactor's for the platform's default, so the app stays in
+  front. `Stopped` and `Resumed` are produced on Android by a second activity of the test app
+  covering the main one. The fixtures that can't run on a platform (the back key and backgrounding on
+  iOS and Mac Catalyst) report TAP's `# SKIP`. Each key oracle was mutation-checked (the code broken,
+  the test seen to fail).

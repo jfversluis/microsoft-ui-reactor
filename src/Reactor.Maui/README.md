@@ -150,6 +150,9 @@ Hooks are called in `Render()`, unconditionally and in the same order every rend
 | `UseNavigation(initial)`, `UseNavigationLifecycle(…)` | Typed navigation, as on WinUI (below). |
 | `UseRouteStack(root)` | A plain list of routes in state, for the lower-level `NavigationStack` (below). |
 | `UseAppTheme()`, `UseWindowSize()` | The app theme and the window size, re-rendering when they change. In a component class call them on `this`. |
+| `UseDialogs()` | Alerts, action sheets and prompts for the component's window (below). |
+| `UseSystemBackButton(onBack)` | Handle Android's back key (below). |
+| `UseWindowLifecycle(…)` | The window's `Activated`, `Deactivated`, `Stopped`, `Resumed` and `Destroying` (below). |
 
 State setters can be called from any thread; the update is applied on the UI thread, and several
 updates in a row render once.
@@ -286,6 +289,134 @@ public sealed class App : Component
   and `with { SearchHandler = …, PresentationMode = …, BackButtonBehavior = new ShellBackButton(…) }`.
 - With `using static Microsoft.UI.Reactor.Maui.Factories;`, `Shell` names the factory; write
   `Microsoft.Maui.Controls.Shell` for MAUI's type.
+
+## Dialogs
+
+`UseDialogs()` returns MAUI's page dialogs for the component's window. The object is stable, so a
+handler can await it:
+
+```csharp
+public sealed class DeleteButton : Component<Action>
+{
+    public override Element Render()
+    {
+        var dialogs = UseDialogs();
+        return Button("Delete", async () =>
+        {
+            if (await dialogs.Alert("Delete?", "This can't be undone.", "Delete", "Cancel")) Props();
+        });
+    }
+}
+```
+
+`Alert(title, message, close)` has one button; `ActionSheet(title, cancel, destruction, buttons…)`
+returns the button chosen; `Prompt(title, message, …)` returns the text, or `null` when cancelled.
+The same dialogs are elements, for a dialog that follows state, as WinUI's `ContentDialog` does:
+
+```csharp
+public sealed class Rename : Component<Action<string>>
+{
+    public override Element Render()
+    {
+        var (renaming, setRenaming) = UseState(false);
+        return VStack(
+            Button("Rename", () => setRenaming(true)),
+            Prompt("Rename", "New name") with
+            {
+                IsOpen = renaming,
+                InitialValue = "Untitled",
+                OnClosed = name =>
+                {
+                    setRenaming(false);
+                    if (name is not null) Props(name);
+                },
+            });
+    }
+}
+```
+
+A window shows one dialog at a time, in the order they were requested, on its top modal or else its
+page; the next waits until the previous one has left the screen, and while a navigation runs. The
+awaited dialogs never throw, so an `async` handler like the one above is safe: a dialog the user
+can't answer (its window was destroyed, or it couldn't be shown) completes with the cancel answer,
+`false` or `null`. One that couldn't be shown is also logged and reported to the component's
+`ErrorBoundary`, if it has one. An element's answer reaches `OnClosed` once, and only if the element
+is still open: closing, re-opening or unmounting it first drops that answer (a dialog already on
+screen stays until the user answers it; MAUI can't close one from code). The answer goes to the
+`OnClosed` of the render whose title and buttons the user saw, so a dialog showing "Delete A?" never
+runs a later render's callback for B.
+
+## The back key
+
+`UseSystemBackButton(onBack)` handles Android's back key: return `true` when you handled it.
+
+```csharp
+public sealed class Editor : Component<Action>
+{
+    public override Element Render()
+    {
+        var (dirty, setDirty) = UseState(true);
+        var dialogs = UseDialogs();
+        UseSystemBackButton(() =>
+        {
+            if (!dirty) return false;
+            _ = Discard();
+            return true;
+        });
+        return Page("Editor", Entry("draft", _ => setDirty(true)));
+
+        async Task Discard()
+        {
+            if (await dialogs.Alert("Discard changes?", null, "Discard", "Keep")) Props();
+        }
+    }
+}
+```
+
+Only the page on screen is asked (not the pages below it, nor other tabs), along with components
+above every page: the deepest first. When no handler takes the back, it goes on to the
+`NavigationHost` or Shell (a guarded back), then to Android. `UseSystemBackButton(nav)` is WinUI's
+shape: the key goes back in `nav` whenever `nav.CanGoBack`, even if a guard refuses. It is Android
+only (Windows' back button comes later); iOS has no back key, and its back button and swipe go
+through the stack's guards. While a handler is registered, Android doesn't show its "back to home"
+preview animation at the root, because Reactor takes the key first; without one, a `Page` or `Tabs`
+root keeps it.
+
+## Window lifecycle
+
+`UseWindowLifecycle(onActivated, onDeactivated, onStopped, onResumed, onDestroying)` subscribes to
+MAUI's window events while the component is mounted, for example to save work:
+
+```csharp
+public sealed class Autosave : Component<Action>
+{
+    public override Element Render()
+    {
+        var save = Props;
+        UseWindowLifecycle(onStopped: save, onDestroying: save);
+        return Label("Editing");
+    }
+}
+```
+
+A `ReactorWindow` calls `onDestroying` before it unmounts its tree. An error thrown there skips the
+error boundaries (the tree is about to go): it reaches the window's `UnhandledException` once the
+tree has been unmounted.
+
+`PageElement.ModalPresentationStyle` sets how iOS presents a page shown as a modal. Import the enum
+with an alias; importing the whole `iOSSpecific` namespace brings its own `Page`, `Entry` and others,
+which clash with MAUI's:
+
+```csharp
+using UIModalPresentationStyle = Microsoft.Maui.Controls.PlatformConfiguration.iOSSpecific.UIModalPresentationStyle;
+
+NavigationStack([Page("Notes", list)]) with
+{
+    Modals = editing ? [Page("Edit", editor) with { ModalPresentationStyle = UIModalPresentationStyle.PageSheet }] : [],
+}
+```
+
+It isn't applied on Mac Catalyst, where MAUI can't dismiss a sheet; modals stay full screen there.
 
 ## Hosting
 

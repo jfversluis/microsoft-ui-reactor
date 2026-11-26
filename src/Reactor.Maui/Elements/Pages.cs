@@ -58,6 +58,14 @@ public sealed record PageElement(string? Title, Element? Content) : Element
 
     /// <summary>The back button shown on this page in a Shell (live).</summary>
     public ShellBackButton? BackButtonBehavior { get; init; }
+
+    /// <summary>
+    /// How iOS presents this page when it is shown as a modal (a <c>NavigationStack</c>'s or
+    /// <c>NavigationHost</c>'s modals, or a Shell's): <c>PageSheet</c>, <c>FormSheet</c>,
+    /// <c>OverFullScreen</c>, … Set before the page is presented. iOS only: it is not applied on Mac
+    /// Catalyst, where MAUI can't dismiss a sheet-style modal, and Android ignores it.
+    /// </summary>
+    public Microsoft.Maui.Controls.PlatformConfiguration.iOSSpecific.UIModalPresentationStyle? ModalPresentationStyle { get; init; }
 }
 
 /// <summary>

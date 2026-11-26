@@ -129,6 +129,8 @@ internal sealed class FakeTransitions : IShellTransitions
     }
 }
 
+// MAUI's Shell routes (Routing) are process-wide and not thread-safe: classes that build Shells share a collection.
+[Collection("MauiShell")]
 public class ShellTests
 {
     // A page appears (and Shell raises Navigated) only in a window that belongs to an app.

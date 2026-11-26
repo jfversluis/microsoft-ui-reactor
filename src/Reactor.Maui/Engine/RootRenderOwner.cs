@@ -23,6 +23,12 @@ internal sealed class RootRenderOwner : IRenderOwner
 
     internal Func<Action, bool> Enqueue { get; }
 
+    /// <summary>
+    /// The node whose component is rendering, so a renderer hook can find its place in the tree (its
+    /// page, its window, its error boundary). <see langword="null"/> outside a render.
+    /// </summary>
+    internal Node? Rendering { get; set; }
+
     // No window-bounded persisted scope yet: PersistedScope.Window falls back to the application scope.
     public IPersistedStateScope? WindowPersistedScope => null;
 }

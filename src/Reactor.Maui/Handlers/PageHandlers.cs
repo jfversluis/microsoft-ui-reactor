@@ -4,6 +4,13 @@ namespace Microsoft.UI.Reactor.Maui.Handlers;
 
 internal sealed class PageHandler : Reactor.Hosting.IElementHandler<PageElement, ContentPage>
 {
+    /// <summary>
+    /// Whether <see cref="PageElement.ModalPresentationStyle"/> reaches MAUI. Not on Mac Catalyst: there
+    /// MAUI's dismissal of a sheet-style modal never completes (Mac Catalyst 26.7), which blocks every
+    /// later modal of the window, so modals stay full screen (spec 069 §5.6).
+    /// </summary>
+    internal static readonly bool WritesModalPresentationStyle = !OperatingSystem.IsMacCatalyst();
+
     public ContentPage Mount(HandlerContext<PageElement> context, PageElement element)
     {
         var page = new ContentPage();
@@ -32,6 +39,12 @@ internal sealed class PageHandler : Reactor.Hosting.IElementHandler<PageElement,
         Props.Set(page, Shell.TabBarIsVisibleProperty, previous?.TabBarIsVisible, next.TabBarIsVisible);
         Props.SetRef(page, Shell.SearchHandlerProperty, previous?.SearchHandler, next.SearchHandler);
         Props.Set(page, Shell.PresentationModeProperty, previous?.PresentationMode, next.PresentationMode);
+        // Read by iOS when the page is presented modally, so it is written at mount, before any presentation.
+        if (WritesModalPresentationStyle)
+        {
+            Props.Set(page, Microsoft.Maui.Controls.PlatformConfiguration.iOSSpecific.Page.ModalPresentationStyleProperty,
+                previous?.ModalPresentationStyle, next.ModalPresentationStyle);
+        }
         if (!Equals(previous?.BackButtonBehavior, next.BackButtonBehavior))
         {
             if (next.BackButtonBehavior is { } back)

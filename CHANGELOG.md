@@ -65,6 +65,21 @@ Conventions for contributors:
   waits for a busy tab, even after the Shell unmounts. Flyout state, header, footer and content, the
   appearance colors, and the pages' Shell properties (`NavBarIsVisible`, `TabBarIsVisible`,
   `TitleView`, `SearchHandler`, `PresentationMode`, `BackButtonBehavior`) are declarative too.
+  Page dialogs, the back key and the window's lifecycle (spec 069 §5): `UseDialogs()` returns a
+  stable `Dialogs` whose `Alert`, `ActionSheet` and `Prompt` are awaitable and never throw (a dialog
+  that can't be answered completes with the cancel answer), and the `Alert`, `ActionSheet` and
+  `Prompt` elements open with `IsOpen` and report to `OnClosed` for the content shown; a window shows
+  one dialog at a time, after its previous one has left the screen (an alert shown outside the queue
+  doesn't hold them back) and while no navigation runs, and
+  settles them when it is destroyed. `UseSystemBackButton(onBack)` and `UseSystemBackButton(nav)`
+  handle Android's back key on the page on screen, through an AndroidX back callback enabled only
+  while a handler is registered (and on each modal's own dialog), before a `NavigationHost`'s or
+  Shell's guarded back (Android's
+  back-to-home preview is lost at the root only then, spec 065 §7).
+  `UseWindowLifecycle(onActivated, onDeactivated, onStopped, onResumed, onDestroying)` follows the
+  window; a `ReactorWindow` now unmounts its tree in `OnDestroying`, after the `Destroying` event's
+  handlers. `PageElement.ModalPresentationStyle` sets an iOS modal's presentation (not on Mac
+  Catalyst, spec 069 §5.6).
   Built with `Reactor.Maui.slnx` and tested in `.github/workflows/maui.yml`, including a
   device tier that runs on the real platform controls. It doesn't change the WinUI packages.
 
