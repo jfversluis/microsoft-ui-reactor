@@ -240,6 +240,45 @@ public class EntrySelectionTests
     }
 
     [Theory]
+    [InlineData("controls", false)]
+    [InlineData("controls", true)]
+    [InlineData("direct", false)]
+    [InlineData("direct", true)]
+    public void AMaxLengthTruncationThePlatformMakes_IsReportedAsText_WithOrWithoutSelectionTracking(string registry, bool tracked)
+    {
+        var platform = new FakeSelection { Text = "abcdefgh" };
+        using var _ = platform.Install();
+        var texts = new List<string>();
+        EntryElement Field(int? maxLength) => Entry("abcdefgh", texts.Add) with
+        {
+            MaxLength = maxLength,
+            OnSelectionChanged = tracked ? (_, _, _) => { } : null,
+        };
+        var host = Host(registry).Render(Field(null));
+        // What the platform does when MaxLength shrinks under the text: it truncates the text and the
+        // handler writes the result back to the virtual view.
+        void Truncate() => Input(host).Text = (Input(host).Text ?? "")[..Math.Min(5, (Input(host).Text ?? "").Length)];
+        if (host.RootView is MauiEntry entry)
+            entry.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(MauiEntry.MaxLength)) Truncate(); };
+        else
+            ((DirectEntry)host.RootView!).Handler = new StubViewHandler { OnUpdateValue = p => { if (p == nameof(ITextInput.MaxLength)) Truncate(); } };
+
+        host.Render(Field(5));
+
+        Assert.Equal(["abcde"], texts);
+    }
+
+    [Theory]
+    [MemberData(nameof(Registries))]
+    public void ANegativeDeclaredSelection_IsClampedToZero(string registry)
+    {
+        var platform = new FakeSelection { Text = "hello" };
+        using var _ = platform.Install();
+        var host = Host(registry).Render(Field("hello", [], -3, -1));
+        Assert.Equal((0, 0), (Input(host).CursorPosition, Input(host).SelectionLength));
+    }
+
+    [Theory]
     [MemberData(nameof(Registries))]
     public void NothingIsReportedAfterUnmount(string registry)
     {

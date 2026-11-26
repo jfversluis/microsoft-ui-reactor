@@ -101,6 +101,51 @@ internal sealed class SelectionTracker
         previous is not null
         && (!Equals(previous.Keyboard, next.Keyboard) || previous.IsPassword != next.IsPassword || previous.MaxLength != next.MaxLength);
 
+    /// <summary>
+    /// Applies an entry element with its selection tracked (spec 070 §2.8), for both handlers.
+    /// <paramref name="applyRest"/> applies everything but the selection exactly as it does without
+    /// tracking (the text in its own echo scope, input-type and MaxLength outside one), so a text change
+    /// the platform makes, such as a MaxLength truncation, still reaches <c>OnTextChanged</c>; it returns
+    /// whether it wrote the text. The selection is written, clamped to zero, when the declaration changes.
+    /// </summary>
+    public static void Apply(HandlerContext<EntryElement> context, IView view, EntryElement? previous, EntryElement next,
+        Func<bool> applyRest, Action<int?, int?> writeSelection, Func<(int Cursor, int Length, string Text)> readSelection)
+    {
+        var selection = IsUsed(next) ? For(view) : Find(view);
+        if (selection is null)
+        {
+            applyRest();
+            return;
+        }
+        if (previous is null || !IsUsed(previous)) selection.ObservePlatform();
+        selection.BeginApply();
+        var wrote = false;
+        try
+        {
+            // An input-type or MaxLength change can move the selection on its own (Android restores only
+            // the cursor; UIKit can select all), so it is observed like a text write.
+            wrote = applyRest() | InputChanged(previous, next);
+            if ((next.CursorPosition != previous?.CursorPosition || next.SelectionLength != previous?.SelectionLength)
+                && (next.CursorPosition is not null || next.SelectionLength is not null))
+            {
+                // A Controls entry rejects a negative value (InputView validates it); a direct one clamps.
+                context.WriteSuppressed(view, () => writeSelection(
+                    next.CursorPosition is { } c ? Math.Max(0, c) : null,
+                    next.SelectionLength is { } l ? Math.Max(0, l) : null));
+                var (cursor, length, text) = readSelection();
+                selection.Wrote(cursor, length, text);
+                wrote = true;
+            }
+        }
+        finally
+        {
+            selection.EndApply(context, wrote);
+        }
+    }
+
+    // Separate from the echo scope: the scope covers only the text and selection writes, so a text
+    // change the platform makes during an input-type update is still reported, while every selection
+    // notification during the whole apply waits for the observation after it.
     public void BeginApply() => _applyDepth++;
 
     /// <summary>

@@ -11,14 +11,10 @@ internal sealed class ReactorScrollView : MauiScrollView, IScrollView
 {
     public ReactorScrollView()
     {
-        ScrollToRequested += (_, _) => Bridge.OnRequested();
-        HandlerChanged += (_, _) =>
-        {
-            if (Handler is null) Bridge.Cancel();
-        };
+        Bridge = new ScrollBridge(this, observesFinishes: true);
     }
 
-    internal ScrollBridge Bridge { get; } = new();
+    internal ScrollBridge Bridge { get; }
 
     /// <summary>How many finishes MAUI reported; for the device characterization (spec 070 §2.15).</summary>
     internal int FinishCount { get; private set; }
@@ -26,68 +22,156 @@ internal sealed class ReactorScrollView : MauiScrollView, IScrollView
     void IScrollView.ScrollFinished()
     {
         FinishCount++;
-        Bridge.OnFinished(this);
+        // The bookkeeping runs first; the bridge's tasks run their continuations asynchronously, so
+        // one that starts another scroll can't have that request completed by this finish.
+        Bridge.OnFinished();
         SendScrollFinished();
     }
 }
 
 /// <summary>
 /// The scroll bridge's completion protocol (spec 070 §2.6.1): one outstanding request per scroll view,
-/// confirmed only by a finish at its target.
+/// confirmed only by a finish at its target. A <see cref="ReactorScrollView"/> reports every finish; on
+/// any other scroll view the bridge sees only the finish that completes MAUI's task for its own
+/// request (an earlier request's late finish completes it too), so it checks the position then.
 /// </summary>
 internal sealed class ScrollBridge
 {
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<MauiScrollView, ScrollBridge> Foreign = new();
+
+    // How long after a stale finish (one an earlier request's animation produced) the bridge waits for
+    // its own before deciding the scroll ended elsewhere.
+    internal static readonly TimeSpan StaleFinishGrace = TimeSpan.FromMilliseconds(1500);
+
+    /// <summary>Schedules the stale-finish check; headless tests replace it.</summary>
+    internal static readonly AsyncLocal<Action<TimeSpan, Action>?> DelayOverride = new();
+
+    private readonly MauiScrollView _scrollView;
+    private readonly bool _observesFinishes;
     private TaskCompletionSource<bool>? _request;
     private Point _target;
     private int _expectedFinishes;
+    private int _finishes;
     private bool _dispatching;
+    private ScrollToRequestedEventArgs? _parkedForReplay;
+    private ScrollToRequestedEventArgs? _parkedForGeometry;
+
+    internal ScrollBridge(MauiScrollView scrollView, bool observesFinishes)
+    {
+        _scrollView = scrollView;
+        _observesFinishes = observesFinishes;
+        scrollView.ScrollToRequested += (_, e) => OnRequested(e);
+        scrollView.HandlerChanged += (_, _) =>
+        {
+            if (scrollView.Handler is null) Cancel();
+        };
+    }
+
+    /// <summary>The bridge of any scroll view: Reactor's own, or one attached to a foreign scroll view.</summary>
+    public static ScrollBridge For(MauiScrollView scrollView) =>
+        scrollView is ReactorScrollView reactor ? reactor.Bridge
+            : Foreign.GetValue(scrollView, static sv => new ScrollBridge(sv, observesFinishes: false));
 
     /// <summary>
     /// Whether overlapping animated requests each produce their own finish. Set from the per-platform
-    /// characterization (spec 070 §2.15); where they don't, at most one finish is expected at a time.
+    /// characterization (spec 070 §2.15): all three platforms produce one per request.
     /// </summary>
     internal static bool FinishesAccumulate { get; set; } = true;
 
-    public Task<bool> Start(MauiScrollView scrollView, Point target, Func<Task> dispatch)
+    /// <summary>How many finishes are still expected from requests MAUI dispatched; for tests.</summary>
+    internal int ExpectedFinishes => _expectedFinishes;
+
+    public Task<bool> Start(Point target, Func<Task> dispatch)
     {
         Supersede();
-        var request = new TaskCompletionSource<bool>();
+        var request = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _request = request;
         _target = target;
-        _expectedFinishes = FinishesAccumulate ? _expectedFinishes + 1 : 1;
+        // The bridge only dispatches what is ready, so MAUI sends it to the handler at once. Counted
+        // first: UIKit ends an interrupted animation (an earlier request's finish) inside the dispatch.
+        var expectedBefore = _expectedFinishes;
+        Expect();
         _dispatching = true;
+        Task maui;
         try
         {
-            _ = dispatch();
+            maui = dispatch();
         }
         catch (Exception ex)
         {
             // Nothing is outstanding for a request that never went out.
-            _expectedFinishes = Math.Max(0, _expectedFinishes - 1);
+            _expectedFinishes = Math.Min(_expectedFinishes, expectedBefore);
             if (ReferenceEquals(_request, request)) _request = null;
             request.TrySetResult(false);
             System.Diagnostics.Trace.TraceError($"Reactor: a ScrollToAsync request failed: {ex}");
+            return request.Task;
         }
         finally
         {
             _dispatching = false;
         }
+        if (!_observesFinishes)
+        {
+            // MAUI completes the task of the newest request on the next finish, on the UI thread.
+            maui.ContinueWith(_ =>
+            {
+                if (!ReferenceEquals(_request, request)) return;
+                _request = null;
+                request.TrySetResult(Matches(_scrollView, target));
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
         return request.Task;
     }
 
-    /// <summary>Another request (not this bridge's own dispatch) supersedes the outstanding one.</summary>
-    public void OnRequested()
+    private void Expect() => _expectedFinishes = FinishesAccumulate ? _expectedFinishes + 1 : 1;
+
+    /// <summary>
+    /// A request raised <c>ScrollToRequested</c>. Mirrors when MAUI 11 dispatches it to the handler: at
+    /// once; when its element target has been laid out (parked); or, raised again, when a handler
+    /// attaches (parked before one existed). Only dispatched requests produce finishes.
+    /// </summary>
+    private void OnRequested(ScrollToRequestedEventArgs e)
     {
+        if (!_dispatching && ReferenceEquals(e, _parkedForReplay))
+        {
+            // The replay of a request parked before the handler attached: dispatched now.
+            _parkedForReplay = null;
+            Expect();
+            return;
+        }
+
+        // Any newer request, the bridge's own included, drops whatever MAUI had parked; a request
+        // dropped while parked for geometry never produces a finish the bridge sees.
+        _parkedForReplay = null;
+        if (_parkedForGeometry is not null)
+        {
+            _parkedForGeometry = null;
+            _expectedFinishes = Math.Max(0, _expectedFinishes - 1);
+        }
         if (_dispatching) return;
-        _expectedFinishes = FinishesAccumulate ? _expectedFinishes + 1 : 1;
+
         Supersede();
+
+        if (_scrollView.Handler is null) _parkedForReplay = e;
+        else
+        {
+            if (e.Mode == ScrollToMode.Element && !IsGeometryReady(e.Element)) _parkedForGeometry = e;
+            Expect();
+        }
     }
 
-    public void OnFinished(MauiScrollView scrollView)
+    // MAUI 11's ScrollView.IsElementTargetGeometryReady.
+    private bool IsGeometryReady(Microsoft.Maui.Controls.Element target) =>
+        _scrollView.Width >= 0 && _scrollView.Height >= 0
+        && (ReferenceEquals(target, _scrollView) || _scrollView.Content is { Width: >= 0, Height: >= 0 });
+
+    public void OnFinished()
     {
+        _finishes++;
+        _parkedForGeometry = null;
         if (_expectedFinishes > 0) _expectedFinishes--;
         if (_request is not { } request) return;
-        if (Matches(scrollView, _target))
+        if (Matches(_scrollView, _target))
         {
             _request = null;
             request.TrySetResult(true);
@@ -98,12 +182,33 @@ internal sealed class ScrollBridge
             _request = null;
             request.TrySetResult(false);
         }
+        else
+        {
+            // Most likely an earlier request's finish. If the bridge's own doesn't follow in time, the
+            // count was wrong (a request MAUI dropped): settle rather than wait forever.
+            var finishes = _finishes;
+            Delay(StaleFinishGrace, () =>
+            {
+                if (!ReferenceEquals(_request, request) || _finishes != finishes) return;
+                _expectedFinishes = 0;
+                _request = null;
+                request.TrySetResult(Matches(_scrollView, _target));
+            });
+        }
+    }
+
+    private void Delay(TimeSpan delay, Action action)
+    {
+        if (DelayOverride.Value is { } delayOverride) delayOverride(delay, action);
+        else _scrollView.Dispatcher.DispatchDelayed(delay, action);
     }
 
     /// <summary>The scroll view went away (unmounted, or its handler disconnected).</summary>
     public void Cancel()
     {
         _expectedFinishes = 0;
+        _parkedForReplay = null;
+        _parkedForGeometry = null;
         Supersede();
     }
 

@@ -167,43 +167,15 @@ internal sealed class EntryHandler : ViewHandler<EntryElement, MauiEntry>
         return view;
     }
 
-    protected override void Apply(HandlerContext<EntryElement> context, MauiEntry view, EntryElement? previous, EntryElement next)
-    {
-        var selection = SelectionTracker.IsUsed(next) ? SelectionTracker.For(view) : SelectionTracker.Find(view);
-        if (selection is null)
-        {
-            ApplyProperties(context, view, previous, next);
-            return;
-        }
-        if (previous is null || !SelectionTracker.IsUsed(previous)) selection.ObservePlatform();
-        // One echo scope for everything that can move the selection (spec 070 §2.8): input-type and
-        // MaxLength updates, the text, then the selection.
-        selection.BeginApply();
-        var wrote = false;
-        try
-        {
-            context.WriteSuppressed(view, () =>
+    protected override void Apply(HandlerContext<EntryElement> context, MauiEntry view, EntryElement? previous, EntryElement next) =>
+        SelectionTracker.Apply(context, view, previous, next,
+            applyRest: () => ApplyProperties(context, view, previous, next),
+            writeSelection: (cursor, length) =>
             {
-                // An input-type or MaxLength change can move the selection on its own (Android restores
-                // only the cursor; UIKit can select all), so it is observed like a text write.
-                wrote = ApplyProperties(context, view, previous, next) | SelectionTracker.InputChanged(previous, next);
-                if (next.CursorPosition != previous?.CursorPosition || next.SelectionLength != previous?.SelectionLength)
-                {
-                    if (next.CursorPosition is { } cursor) view.CursorPosition = cursor;
-                    if (next.SelectionLength is { } length) view.SelectionLength = length;
-                    if (next.CursorPosition is not null || next.SelectionLength is not null)
-                    {
-                        selection.Wrote(view.CursorPosition, view.SelectionLength, view.Text ?? "");
-                        wrote = true;
-                    }
-                }
-            });
-        }
-        finally
-        {
-            selection.EndApply(context, wrote);
-        }
-    }
+                if (cursor is { } c) view.CursorPosition = c;
+                if (length is { } l) view.SelectionLength = l;
+            },
+            readSelection: () => (view.CursorPosition, view.SelectionLength, view.Text ?? ""));
 
     /// <summary>Applies everything but the selection; returns whether it wrote the text.</summary>
     private static bool ApplyProperties(HandlerContext<EntryElement> context, MauiEntry view, EntryElement? previous, EntryElement next)

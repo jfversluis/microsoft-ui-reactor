@@ -55,15 +55,7 @@ public static class ScrollViewExtensions
             dispatch = () => scrollView.ScrollToAsync(point.X, point.Y, animated);
         }
 
-        if (scrollView is ReactorScrollView reactor) return reactor.Bridge.Start(reactor, point, dispatch);
-        return Unconfirmed(scrollView, point, dispatch);
-    }
-
-    // A scroll view Reactor didn't create raises no finish Reactor can see: MAUI's task, then the position check.
-    private static async Task<bool> Unconfirmed(ScrollView scrollView, Point point, Func<Task> dispatch)
-    {
-        await dispatch();
-        return ScrollBridge.Matches(scrollView, point);
+        return ScrollBridge.For(scrollView).Start(point, dispatch);
     }
 
     /// <summary>

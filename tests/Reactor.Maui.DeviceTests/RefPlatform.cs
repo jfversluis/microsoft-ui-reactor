@@ -85,6 +85,15 @@ public static class RefPlatform
 
     public static double ViewHeight(IView view) => Platform.Size(view).Height;
 
+    /// <summary>UIKit's adjusted top content inset; 0 where the platform has none.</summary>
+    public static double AdjustedTopInset(MauiScrollView scroll) => Native(scroll) switch
+    {
+#if IOS || MACCATALYST
+        UIKit.UIScrollView native => native.AdjustedContentInset.Top,
+#endif
+        _ => 0,
+    };
+
     public static double ViewportHeight(MauiScrollView scroll) => scroll.Height;
 
     /// <summary>Adds UIKit content insets, so the viewport differs from the frame. False where there is no such inset.</summary>

@@ -2,7 +2,8 @@
   <!--
     Global usings for Reactor component code (applied when ImplicitUsings is on, as in MAUI apps):
     - the Reactor namespaces, so element types, modifiers such as .Margin() and .FontSize(), the
-      hosts (ReactorWindow, ReactorPage), the app hooks and the direct renderer's setup are in scope
+      hosts (ReactorWindow, ReactorPage), the app hooks, element refs (Microsoft.UI.Reactor.Input)
+      and the direct renderer's setup are in scope
       wherever a file imports the factories with `using static Microsoft.UI.Reactor.Maui.Factories;`;
     - an Element alias: MAUI's implicit usings import Microsoft.Maui.Controls, which declares its
       own Element type, so a bare `Element` would be ambiguous. An alias outranks namespace imports.

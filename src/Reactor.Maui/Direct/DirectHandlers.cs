@@ -120,44 +120,17 @@ public static class DirectHandlers
             view.HandlerChanged += () => SelectionTracker.Find(view)?.ObservePlatform(context);
         }
 
-        protected override void Apply(HandlerContext<EntryElement> context, DirectEntry view, EntryElement? previous, EntryElement next)
-        {
-            var selection = SelectionTracker.IsUsed(next) ? SelectionTracker.For(view) : SelectionTracker.Find(view);
-            if (selection is null)
-            {
-                view.Apply(next);
-                if (view.Text != next.Text) context.WriteSuppressed(view, () => view.SetText(next.Text));
-                return;
-            }
-            if (previous is null || !SelectionTracker.IsUsed(previous)) selection.ObservePlatform();
-            // One echo scope for everything that can move the selection (spec 070 §2.8).
-            selection.BeginApply();
-            var wrote = false;
-            try
-            {
-                context.WriteSuppressed(view, () =>
+        protected override void Apply(HandlerContext<EntryElement> context, DirectEntry view, EntryElement? previous, EntryElement next) =>
+            SelectionTracker.Apply(context, view, previous, next,
+                applyRest: () =>
                 {
                     view.Apply(next);
-                    wrote = SelectionTracker.InputChanged(previous, next);
-                    if (view.Text != next.Text)
-                    {
-                        view.SetText(next.Text);
-                        wrote = true;
-                    }
-                    if ((next.CursorPosition != previous?.CursorPosition || next.SelectionLength != previous?.SelectionLength)
-                        && (next.CursorPosition is not null || next.SelectionLength is not null))
-                    {
-                        view.SetSelection(next.CursorPosition, next.SelectionLength);
-                        selection.Wrote(view.CursorPosition, view.SelectionLength, view.Text);
-                        wrote = true;
-                    }
-                });
-            }
-            finally
-            {
-                selection.EndApply(context, wrote);
-            }
-        }
+                    if (view.Text == next.Text) return false;
+                    context.WriteSuppressed(view, () => view.SetText(next.Text));
+                    return true;
+                },
+                writeSelection: view.SetSelection,
+                readSelection: () => (view.CursorPosition, view.SelectionLength, view.Text));
     }
 
     private sealed class CheckBoxHandler : DirectHandler<CheckBoxElement, DirectCheckBox>

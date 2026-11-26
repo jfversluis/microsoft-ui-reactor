@@ -24,8 +24,8 @@ public class ScrollBridgeTests
         handler.Commands.Where(c => c.Command == nameof(IScrollView.RequestScrollTo)).Select(c => c.Args).OfType<ScrollToRequest>().LastOrDefault();
 
     /// <summary>
-    /// A target in a direct Grid (second row, offset in the stack) in a direct VStack, all
-    /// inside the scroll view: every frame origin is nonzero.
+    /// A target in a direct Grid (second row, offset in the stack) in a direct VStack in the scroll
+    /// view's (offset) content: every frame origin is distinct and nonzero.
     /// </summary>
     private static (TestHost Host, MauiScrollView Scroll, StubViewHandler ScrollHandler, ElementRef<IView> Target) NestedDirect()
     {
@@ -37,17 +37,18 @@ public class ScrollBridgeTests
         var stack = (DirectStackLayout)content[0];
         var grid = (DirectGrid)stack[1];
         var scrollHandler = Place(scroll, new Rect(0, 0, 300, 400));
-        Place(content, new Rect(0, 0, 300, 2000));
-        Place(stack, new Rect(0, 0, 300, 2000));
+        // Every origin differs and is nonzero, so a skipped or doubled level shows.
+        Place(content, new Rect(2, 3, 300, 2000));
+        Place(stack, new Rect(4, 6, 296, 1990));
         Place(grid, new Rect(15, 100, 270, 600));
         Place(target.Current!, new Rect(0, 40, 270, 30));
         return (host, scroll, scrollHandler, target);
     }
 
     [Theory]
-    [InlineData(ScrollToPosition.Start, 15, 140)]
-    [InlineData(ScrollToPosition.Center, 15 - 150 + 135, 140 - 200 + 15)]
-    [InlineData(ScrollToPosition.End, 15 - 300 + 270, 140 - 400 + 30)]
+    [InlineData(ScrollToPosition.Start, 21, 149)]
+    [InlineData(ScrollToPosition.Center, 21 - 150 + 135, 149 - 200 + 15)]
+    [InlineData(ScrollToPosition.End, 21 - 300 + 270, 149 - 400 + 30)]
     public void ATargetInNestedDirectLayouts_IsScrolledToBySummingItsVisualParentsFrames(ScrollToPosition position, double x, double y)
     {
         var (_, scroll, handler, target) = NestedDirect();
@@ -72,14 +73,15 @@ public class ScrollBridgeTests
         // Its Controls parent is the anchor, which skips both direct layouts.
         Assert.Same(content, target.Current!.Parent);
         var handler = Place(scroll, new Rect(0, 0, 300, 400));
-        Place(content, new Rect(0, 0, 300, 2000));
-        Place(stack, new Rect(0, 0, 300, 2000));
+        // Every origin differs and is nonzero, so a skipped or doubled level shows.
+        Place(content, new Rect(2, 3, 300, 2000));
+        Place(stack, new Rect(4, 6, 296, 1990));
         Place(grid, new Rect(15, 100, 270, 600));
         Place(target.Current!, new Rect(0, 40, 270, 30));
 
         _ = scroll.ScrollToAsync(target, ScrollToPosition.Start, animated: false);
 
-        Assert.Equal((15.0, 140.0), (LastRequest(handler)!.HorizontalOffset, LastRequest(handler)!.VerticalOffset));
+        Assert.Equal((21.0, 149.0), (LastRequest(handler)!.HorizontalOffset, LastRequest(handler)!.VerticalOffset));
     }
 
     [Fact]
@@ -92,7 +94,7 @@ public class ScrollBridgeTests
 
         target.Current!.Arrange(new Rect(0, 500, 270, 30));
         _ = scroll.ScrollToAsync(target, ScrollToPosition.MakeVisible, animated: false);
-        Assert.Equal(600 - 400 + 30, LastRequest(handler)!.VerticalOffset);
+        Assert.Equal(609 - 400 + 30, LastRequest(handler)!.VerticalOffset);
     }
 
     [Fact]
@@ -182,6 +184,21 @@ public class ScrollBridgeTests
     }
 
     [Fact]
+    public void ATargetWhoseSubtreeWasDetachedFromTheScrollView_Throws()
+    {
+        var target = TypedElementRef.Create<IView>();
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(VStack(Label("top"), Label("target").Ref(target)));
+        var scroll = new MauiScrollView { Content = (View)host.RootView! };
+        Place(scroll, new Rect(0, 0, 300, 400));
+
+        // The content is replaced; the target's own tree is still mounted.
+        scroll.Content = new Label();
+
+        Assert.NotNull(target.Current);
+        Assert.Throws<InvalidOperationException>(() => { _ = scroll.ScrollToAsync(target, ScrollToPosition.Start, false); });
+    }
+
+    [Fact]
     public void AControlsChildMovedBetweenDirectLayouts_KeepsItsNewVisualParent()
     {
         var first = new DirectStackLayout(StackOrientation.Vertical);
@@ -213,6 +230,8 @@ public class ScrollBridgeProtocolTests
         var content = (VerticalStackLayout)scroll.Content!;
         content.Handler = new StubViewHandler();
         ((IView)content).Arrange(new Rect(0, 0, 300, 2000));
+        // Stale-finish checks wait for the test to run them (the headless dispatcher would run them at once).
+        ScrollBridge.DelayOverride.Value = static (_, _) => { };
         return (host, scroll, handler);
     }
 
@@ -225,7 +244,7 @@ public class ScrollBridgeProtocolTests
     private static ScrollBridge Bridge(MauiScrollView scroll) => ((ReactorScrollView)scroll).Bridge;
 
     private static Task<bool> Request(MauiScrollView scroll, double y) =>
-        Bridge(scroll).Start(scroll, new Point(0, y), () => scroll.ScrollToAsync(0, y, true));
+        Bridge(scroll).Start(new Point(0, y), () => scroll.ScrollToAsync(0, y, true));
 
     private static void Finish(MauiScrollView scroll, double y)
     {
@@ -276,6 +295,25 @@ public class ScrollBridgeProtocolTests
     }
 
     [Fact]
+    public async Task AnEarlierAnimationEndedInsideTheDispatch_DoesntSettleTheNewRequest()
+    {
+        var (_, scroll, handler) = Mount();
+        _ = Request(scroll, 300);
+        // UIKit ends the running animation, at its interrupted position, when the next one starts.
+        handler.OnCommand = command =>
+        {
+            if (command == nameof(IScrollView.RequestScrollTo)) Finish(scroll, 70);
+        };
+        var later = Request(scroll, 900);
+        handler.OnCommand = null;
+        Assert.False(later.IsCompleted, "the interrupted animation's finish isn't the later request's");
+        Assert.Equal(1, Bridge(scroll).ExpectedFinishes);
+
+        Finish(scroll, 900);
+        Assert.True(await Completed(later));
+    }
+
+    [Fact]
     public async Task AFinishElsewhere_WithNoEarlierFinishExpected_CompletesFalse()
     {
         var (_, scroll, _) = Mount();
@@ -317,7 +355,7 @@ public class ScrollBridgeProtocolTests
     public async Task ADispatchThatThrows_CompletesFalse_AndLeavesNothingOutstanding()
     {
         var (_, scroll, _) = Mount();
-        var failed = Bridge(scroll).Start(scroll, new Point(0, 300), () => throw new InvalidOperationException("no handler"));
+        var failed = Bridge(scroll).Start(new Point(0, 300), () => throw new InvalidOperationException("no handler"));
         Assert.True(failed.IsCompleted);
         Assert.False(await Completed(failed));
 
@@ -326,5 +364,201 @@ public class ScrollBridgeProtocolTests
         Finish(scroll, 10);
         Assert.True(next.IsCompleted);
         Assert.False(await Completed(next));
+    }
+
+    [Fact]
+    public async Task AContinuationThatStartsAnotherScroll_IsNotCompletedByTheFinishThatConfirmedTheFirst()
+    {
+        var (_, scroll, _) = Mount();
+        var first = Request(scroll, 300);
+        Task? second = null;
+        using var finished = new ManualResetEventSlim();
+        // An inline continuation (an await resumed on the UI thread) that scrolls again.
+        var started = first.ContinueWith(_ =>
+        {
+            finished.Wait(TimeSpan.FromSeconds(2));
+            second = scroll.ScrollToAsync(0, 500, true);
+        }, TaskContinuationOptions.ExecuteSynchronously);
+
+        Finish(scroll, 300);
+        finished.Set();
+        await started.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(await Completed(first));
+        Assert.NotNull(second);
+        Assert.False(second.IsCompleted, "the new scroll waits for its own finish");
+    }
+
+    [Fact]
+    public async Task ARequestParkedBeforeTheHandler_AndReplayed_ExpectsOneFinish()
+    {
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(VStack(ScrollView(VStack(Label("content")))));
+        var scroll = (MauiScrollView)((IList<IView>)host.RootView!)[0];
+        var content = (VerticalStackLayout)scroll.Content!;
+        content.Handler = new StubViewHandler();
+        ((IView)content).Arrange(new Rect(0, 0, 300, 2000));
+        ((IView)scroll).Arrange(new Rect(0, 0, 300, 400));
+
+        // The app scrolls before the handler exists: MAUI parks it and raises ScrollToRequested again
+        // when it replays it on the handler's arrival, but dispatches it once.
+        _ = scroll.ScrollToAsync(0, 100, false);
+        var handler = new StubViewHandler();
+        scroll.Handler = handler;
+        Assert.Single(handler.Commands, c => c.Command == nameof(IScrollView.RequestScrollTo));
+        Assert.Equal(1, Bridge(scroll).ExpectedFinishes);
+        Finish(scroll, 100);
+
+        var later = Request(scroll, 800);
+        Finish(scroll, 420);
+
+        Assert.False(await Completed(later), "a later request that ends elsewhere settles");
+    }
+
+    [Fact]
+    public async Task ARequestParkedForGeometry_AndDroppedByTheBridgesOwn_ExpectsNoFinish()
+    {
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(VStack(ScrollView(VStack(Label("content")))));
+        var scroll = (MauiScrollView)((IList<IView>)host.RootView!)[0];
+        scroll.Handler = new StubViewHandler();
+        ((IView)scroll).Arrange(new Rect(0, 0, 300, 400));
+        var content = (VerticalStackLayout)scroll.Content!;
+        content.Handler = new StubViewHandler();
+        ScrollBridge.DelayOverride.Value = static (_, _) => { };
+
+        // The app scrolls to an element before the content is laid out: MAUI parks the request.
+        _ = scroll.ScrollToAsync((Microsoft.Maui.Controls.Element)content[0], ScrollToPosition.Start, true);
+        Assert.Equal(1, Bridge(scroll).ExpectedFinishes);
+        ((IView)content).Arrange(new Rect(0, 0, 300, 2000));
+
+        // The bridge's own request drops it (MAUI finishes a dropped request without the handler).
+        var request = Request(scroll, 800);
+        Assert.Equal(1, Bridge(scroll).ExpectedFinishes);
+        Finish(scroll, 420);
+        Assert.False(await Completed(request), "a finish elsewhere, with no earlier finish expected, settles");
+    }
+
+    [Fact]
+    public async Task AFinishTheBridgeWaitedForInVain_SettlesAfterTheGracePeriod()
+    {
+        var (_, scroll, _) = Mount();
+        var delayed = new List<Action>();
+        ScrollBridge.DelayOverride.Value = (_, action) => delayed.Add(action);
+        try
+        {
+            _ = Request(scroll, 300);
+            var later = Request(scroll, 900);
+            // The first animation's finish arrives; the second's never does (MAUI dropped it).
+            Finish(scroll, 300);
+            Assert.False(later.IsCompleted);
+
+            Assert.Single(delayed)();
+
+            Assert.False(await Completed(later));
+        }
+        finally
+        {
+            ScrollBridge.DelayOverride.Value = null;
+        }
+    }
+
+    [Fact]
+    public async Task ANegativeTarget_IsConfirmedAtTheStart_AndHorizontalTargetsOnX()
+    {
+        var (_, scroll, _) = Mount();
+        var clamped = Request(scroll, -40);
+        Finish(scroll, 0);
+        Assert.True(await Completed(clamped));
+
+        ((IView)scroll.Content!).Arrange(new Rect(0, 0, 2000, 2000));
+        foreach (var orientation in new[] { ScrollOrientation.Horizontal, ScrollOrientation.Both })
+        {
+            scroll.Orientation = orientation;
+            var target = new Point(120, orientation == ScrollOrientation.Both ? 60 : 0);
+            var onX = Bridge(scroll).Start(target, () => scroll.ScrollToAsync(target.X, target.Y, true));
+            scroll.SetScrolledPosition(40, target.Y);
+            ((IScrollView)scroll).ScrollFinished();
+            Assert.False(await Completed(onX), $"{orientation}: X differs");
+
+            var again = Bridge(scroll).Start(target, () => scroll.ScrollToAsync(target.X, target.Y, true));
+            scroll.SetScrolledPosition(target.X, target.Y);
+            ((IScrollView)scroll).ScrollFinished();
+            Assert.True(await Completed(again), $"{orientation}: confirmed on X");
+        }
+    }
+}
+
+/// <summary>The bridge on a scroll view Reactor didn't create.</summary>
+public class ForeignScrollViewTests
+{
+    private static (MauiScrollView Scroll, StubViewHandler Handler) Foreign()
+    {
+        var scroll = new MauiScrollView { Content = new VerticalStackLayout { new Label() } };
+        var handler = new StubViewHandler();
+        scroll.Handler = handler;
+        ((IView)scroll).Arrange(new Rect(0, 0, 300, 400));
+        scroll.Content.Handler = new StubViewHandler();
+        ((IView)scroll.Content).Arrange(new Rect(0, 0, 300, 2000));
+        return (scroll, handler);
+    }
+
+    private static Task<bool> Request(MauiScrollView scroll, double y) =>
+        ScrollBridge.For(scroll).Start(new Point(0, y), () => scroll.ScrollToAsync(0, y, true));
+
+    private static async Task<bool> Completed(Task<bool> task)
+    {
+        Assert.True(task.IsCompleted, "the bridge's task completed");
+        return await task;
+    }
+
+    [Fact]
+    public async Task AFinishAtTheTarget_ConfirmsIt_AndOneElsewhereDoesnt()
+    {
+        var (scroll, _) = Foreign();
+        var task = Request(scroll, 300);
+        Assert.False(task.IsCompleted);
+        scroll.SetScrolledPosition(0, 300);
+        ((IScrollView)scroll).ScrollFinished();
+        Assert.True(await Completed(task));
+
+        var elsewhere = Request(scroll, 600);
+        scroll.SetScrolledPosition(0, 200);
+        ((IScrollView)scroll).ScrollFinished();
+        Assert.False(await Completed(elsewhere));
+    }
+
+    [Fact]
+    public async Task ALaterRequest_ADisconnect_AndAFailedDispatch_CompleteFalse()
+    {
+        var (scroll, _) = Foreign();
+        var first = Request(scroll, 300);
+        _ = scroll.ScrollToAsync(0, 100, true);
+        Assert.False(await Completed(first));
+
+        var second = Request(scroll, 300);
+        scroll.Handler = null;
+        Assert.False(await Completed(second));
+
+        var failed = ScrollBridge.For(scroll).Start(new Point(0, 1), () => throw new InvalidOperationException("boom"));
+        Assert.False(await Completed(failed));
+    }
+
+    [Fact]
+    public async Task TheExtension_ScrollsAForeignScrollView_ToAReactorTarget()
+    {
+        var target = TypedElementRef.Create<IView>();
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(VStack(Label("top"), Label("target").Ref(target)));
+        var scroll = new MauiScrollView { Content = (View)host.RootView! };
+        scroll.Handler = new StubViewHandler();
+        ((IView)scroll).Arrange(new Rect(0, 0, 300, 400));
+        scroll.Content.Handler = new StubViewHandler();
+        ((IView)scroll.Content).Arrange(new Rect(0, 0, 300, 2000));
+        ((VisualElement)target.Current!).Handler = new StubViewHandler();
+        target.Current!.Arrange(new Rect(0, 700, 300, 30));
+
+        var task = scroll.ScrollToAsync(target, ScrollToPosition.Start, true);
+        scroll.SetScrolledPosition(0, 700);
+        ((IScrollView)scroll).ScrollFinished();
+
+        Assert.True(await Completed(task));
     }
 }

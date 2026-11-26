@@ -25,11 +25,14 @@ internal sealed class StubViewHandler : IViewHandler
 
     public void SetMauiContext(IMauiContext mauiContext) => MauiContext = mauiContext;
     public void SetVirtualView(IElement view) => VirtualView = (IView)view;
-    public void UpdateValue(string property) { }
+    public Action<string>? OnUpdateValue { get; set; }
+    public void UpdateValue(string property) => OnUpdateValue?.Invoke(property);
+    public Action<string>? OnCommand { get; set; }
 
     public void Invoke(string command, object? args = null)
     {
         Commands.Add((command, args));
+        OnCommand?.Invoke(command);
         if (args is FocusRequest request) request.TrySetResult(FocusResult);
     }
 
@@ -458,9 +461,29 @@ public class ItemRefTests
     }
 
     [Fact]
-    public void TheListsUnmount_RetiresEveryCell()
+    public void ARemovedItemsCell_IsRetiredWhenTheListUnbindsIt()
     {
         var (host, view) = Mount(false, new("a"), new("b"));
+        var cell = Realize(view, 0);
+        host.Scheduler.Drain();
+        var a = Refs["a"];
+        Assert.NotNull(a.Current);
+
+        host.Render(CollectionView(new RefItem[] { new("b") }, i => i.Id, i => Component<RefRow, RefItem>(i)));
+        // What the platform does with a removed item's cell (iOS's TemplatedCell2.Unbind).
+        cell.BindingContext = null;
+        host.Scheduler.Drain();
+
+        Assert.Equal(["a"], Unmounted);
+        Assert.Null(a.Current);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TheListsUnmount_RetiresEveryCell(bool reuse)
+    {
+        var (host, view) = Mount(reuse, new("a"), new("b"));
         Realize(view, 0);
         Realize(view, 1);
         host.Scheduler.Drain();
@@ -568,6 +591,10 @@ public sealed class ReadmeSearch : Component
 
 public sealed class ReadmeWeb : Component
 {
+    static bool IsDocs(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps
+        && string.Equals(uri.IdnHost, "learn.microsoft.com", StringComparison.OrdinalIgnoreCase);
+
     public override Element Render()
     {
         var (requested, setRequested) = UseState("https://learn.microsoft.com/dotnet/maui");
@@ -577,7 +604,7 @@ public sealed class ReadmeWeb : Component
             Button("Back", () => web.Current?.GoBack()),
             (WebView(requested) with
             {
-                OnNavigating = e => e.Cancel = !e.Url.StartsWith("https://learn.microsoft.com/"),
+                OnNavigating = e => e.Cancel = !IsDocs(e.Url),
                 OnNavigated = e => { if (e.Result == WebNavigationResult.Success) setCurrent(e.Url); },
             }).Ref(web).Height(400));
     }
@@ -591,15 +618,30 @@ public class ReadmeRefSnippetTests
         var host = new TestHost(MauiHandlers.CreateRegistry()).Render(Component<ReadmeSearch>());
         var stack = (IList<IView>)host.RootView!;
         var entry = (MauiEntry)stack[0];
+        var entryHandler = new StubViewHandler();
+        entry.Handler = entryHandler;
         ((ITextInput)entry).Text = "abc";
         host.Scheduler.Drain();
         var buttons = (IList<IView>)stack[1];
+        // Lay the scroll view and its first label out, as a layout pass would.
+        var scroll = (ScrollView)stack[2];
+        var scrollHandler = new StubViewHandler();
+        scroll.Handler = scrollHandler;
+        ((IView)scroll).Arrange(new Rect(0, 0, 300, 240));
+        var content = (VerticalStackLayout)scroll.Content!;
+        content.Handler = new StubViewHandler();
+        ((IView)content).Arrange(new Rect(0, 0, 300, 600));
+        var first = (Label)content[0];
+        first.Handler = new StubViewHandler();
+        ((IView)first).Arrange(new Rect(0, 0, 300, 20));
 
         ((Button)buttons[0]).SendClicked();
         ((Button)buttons[1]).SendClicked();
         host.Scheduler.Drain();
 
         Assert.Equal("", entry.Text);
+        Assert.Contains(entryHandler.Commands, c => c.Command == nameof(IView.Focus));
+        Assert.Contains(scrollHandler.Commands, c => c.Command == nameof(IScrollView.RequestScrollTo));
     }
 
     [Fact]
@@ -609,6 +651,9 @@ public class ReadmeRefSnippetTests
         var web = (IWebView)((IList<IView>)host.RootView!)[1];
 
         Assert.True(web.Navigating(WebNavigationEvent.NewPage, "https://example.com/"));
+        Assert.True(web.Navigating(WebNavigationEvent.NewPage, "https://learn.microsoft.com.example.com/"));
+        Assert.True(web.Navigating(WebNavigationEvent.NewPage, "http://learn.microsoft.com/"));
+        Assert.False(web.Navigating(WebNavigationEvent.NewPage, "HTTPS://LEARN.MICROSOFT.COM/dotnet/"));
         Assert.False(web.Navigating(WebNavigationEvent.NewPage, "https://learn.microsoft.com/dotnet/"));
         web.Navigated(WebNavigationEvent.NewPage, "https://learn.microsoft.com/dotnet/", WebNavigationResult.Success);
         host.Scheduler.Drain();
@@ -619,35 +664,96 @@ public class ReadmeRefSnippetTests
 
 public class ElementFocusTests
 {
-    private sealed class FocusProbe : Component<List<Action>>
+    public sealed record FocusProps(List<(ElementRef<IView> Ref, Action Request)> Seen, bool Second);
+
+    private sealed class FocusProbe : Component<FocusProps>
     {
         public override Element Render()
         {
-            var (entry, requestFocus) = UseElementFocus();
-            Props.Add(requestFocus);
-            return Entry("x").Ref(entry);
+            var focus = UseElementFocus();
+            Props.Seen.Add(focus);
+            return VStack(Entry("a").Ref(Props.Second ? TypedElementRef.Create<IView>() : focus.Ref), Entry("b").Ref(Props.Second ? focus.Ref : TypedElementRef.Create<IView>()));
         }
     }
 
-    [Fact]
-    public void RequestFocus_FocusesADirectViewOnceItIsReady_AndKeepsItsIdentity()
+    private static (TestHost Host, List<(ElementRef<IView> Ref, Action Request)> Seen, DirectEntry First, DirectEntry Second) Mount()
     {
-        var requests = new List<Action>();
-        var host = new TestHost(DirectHandlers.CreateRegistry()).Render(Component<FocusProbe, List<Action>>(requests));
-        var entry = (DirectEntry)host.RootView!;
-        var handler = new StubViewHandler { PlatformView = null };
-        entry.Handler = handler;
+        var seen = new List<(ElementRef<IView>, Action)>();
+        var host = new TestHost(DirectHandlers.CreateRegistry()).Render(Component<FocusProbe, FocusProps>(new(seen, false)));
+        var stack = (IList<IView>)host.RootView!;
+        return (host, seen, (DirectEntry)stack[0], (DirectEntry)stack[1]);
+    }
 
-        // No platform view yet: nothing to focus (the headless dispatcher runs every poll at once).
-        requests[0]();
-        Assert.DoesNotContain(handler.Commands, c => c.Command == nameof(IView.Focus));
+    private static bool Focused(StubViewHandler handler) => handler.Commands.Any(c => c.Command == nameof(IView.Focus));
 
-        handler.PlatformView = new object();
-        requests[0]();
-        Assert.Contains(handler.Commands, c => c.Command == nameof(IView.Focus));
+    [Fact]
+    public void ARequestBeforeTheView_IsReady_FocusesItWhenItIs_AndKeepsItsIdentity()
+    {
+        var (host, seen, first, _) = Mount();
+        seen[0].Request();
+        var handler = new StubViewHandler();
+        first.Handler = handler;
+        Assert.False(Focused(handler), "the readiness check runs on the next turn");
+        host.Scheduler.Drain();
+        Assert.True(Focused(handler));
 
-        host.Render(Component<FocusProbe, List<Action>>(requests));
-        Assert.Same(requests[0], requests[^1]);
+        host.Render(Component<FocusProbe, FocusProps>(new(seen, false)));
+        Assert.Same(seen[0].Request, seen[^1].Request);
+    }
+
+    [Fact]
+    public void ANewerRequest_ReplacesAPendingOne()
+    {
+        var (host, seen, first, _) = Mount();
+        seen[0].Request();
+        seen[0].Request();
+        var handler = new StubViewHandler();
+        first.Handler = handler;
+        host.Scheduler.Drain();
+        Assert.Equal(1, handler.Commands.Count(c => c.Command == nameof(IView.Focus)));
+    }
+
+    [Fact]
+    public void ARequest_IsDroppedWhenTheElementUnmounts()
+    {
+        var (host, seen, first, _) = Mount();
+        seen[0].Request();
+        host.Render(Label("gone"));
+        var handler = new StubViewHandler();
+        first.Handler = handler;
+        host.Scheduler.Drain();
+        Assert.False(Focused(handler));
+    }
+
+    [Fact]
+    public void ARequest_IsDroppedWhenTheRefMovesToAnotherView()
+    {
+        var (host, seen, first, second) = Mount();
+        seen[0].Request();
+        host.Render(Component<FocusProbe, FocusProps>(new(seen, true)));
+        Assert.Same(second, seen[0].Ref.Current);
+        var handler = new StubViewHandler();
+        first.Handler = handler;
+        host.Scheduler.Drain();
+        Assert.False(Focused(handler));
+    }
+
+    [Fact]
+    public void ARequestFromAnotherThread_RunsOnTheRendersThread()
+    {
+        var (host, seen, first, _) = Mount();
+        var handler = new StubViewHandler();
+        first.Handler = handler;
+        host.Scheduler.Drain();
+
+        // A dedicated thread: a pool thread could be the one the test itself ran on.
+        var other = new Thread(() => seen[0].Request());
+        other.Start();
+        other.Join();
+        Assert.False(Focused(handler), "queued on the root's scheduler, not run on the other thread");
+
+        host.Scheduler.Drain();
+        Assert.True(Focused(handler));
     }
 }
 
@@ -703,15 +809,15 @@ public sealed class ReadmeFocus : Component
 public class ReadmeFocusSnippetTests
 {
     [Fact]
-    public void TheFocusSnippet_BindsItsRef_AndRequestsFocusFromItsFirstEffect()
+    public void TheFocusSnippet_RequestsFocusFromItsFirstEffect_OnceTheViewIsReady()
     {
         var host = new TestHost(DirectHandlers.CreateRegistry());
         host.Render(Component<ReadmeFocus>());
         var entry = (DirectEntry)host.RootView!;
         var handler = new StubViewHandler();
         entry.Handler = handler;
-        host.Render(Component<ReadmeFocus>());
         host.Scheduler.Drain();
-        Assert.IsType<DirectEntry>(host.RootView);
+
+        Assert.Contains(handler.Commands, c => c.Command == nameof(IView.Focus));
     }
 }

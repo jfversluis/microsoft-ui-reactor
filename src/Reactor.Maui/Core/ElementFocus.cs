@@ -6,16 +6,25 @@ namespace Microsoft.UI.Reactor.Core;
 
 /// <summary>
 /// The state behind <c>UseElementFocus()</c> (spec 070 §2.6.2): focuses the referenced view once it is
-/// ready, meaning its handler is connected and its platform view is in a window.
+/// ready, meaning its handler is connected and its platform view is in a window. A request is dropped
+/// when the ref stops naming the view it waited for (the element unmounted or another took the ref).
 /// </summary>
 internal sealed class ElementFocus
 {
-    // How long a direct view's readiness is polled for (it has no Loaded event): 2 s at 16 ms.
-    private const int MaxReadinessPolls = 120;
+    // iOS and Mac Catalyst have no public event for a view joining a window, so readiness is checked
+    // at growing intervals, up to this one, for as long as the request stands.
+    private static readonly TimeSpan MaxPollInterval = TimeSpan.FromSeconds(1);
 
+    private readonly int _uiThreadId = Environment.CurrentManagedThreadId;
+    private readonly Func<Action, bool>? _enqueue;
     private readonly IDispatcher? _dispatcher = Dispatcher.GetForCurrentThread();
+    private int _generation;
 
-    public ElementFocus() => Request = RequestFocus;
+    public ElementFocus(Func<Action, bool>? enqueue)
+    {
+        _enqueue = enqueue;
+        Request = RequestFocus;
+    }
 
     public ElementRef<IView> Ref { get; } = new();
 
@@ -23,12 +32,19 @@ internal sealed class ElementFocus
 
     private void RequestFocus()
     {
-        if (_dispatcher is { IsDispatchRequired: true } dispatcher) dispatcher.Dispatch(FocusWhenReady);
-        else FocusWhenReady();
+        if (Environment.CurrentManagedThreadId == _uiThreadId)
+        {
+            FocusWhenReady();
+            return;
+        }
+        // From another thread: on the root's render thread (the UI thread), as a state setter is.
+        if (_enqueue?.Invoke(FocusWhenReady) != true) _dispatcher?.Dispatch(FocusWhenReady);
     }
 
     private void FocusWhenReady()
     {
+        // A newer request replaces a pending one.
+        var generation = ++_generation;
         switch (Ref.Current)
         {
             case VisualElement visual when visual.IsLoaded:
@@ -38,13 +54,12 @@ internal sealed class ElementFocus
                 void OnLoaded(object? sender, EventArgs e)
                 {
                     visual.Loaded -= OnLoaded;
-                    // Dropped if the element unmounted (or another view took the ref) meanwhile.
-                    if (ReferenceEquals(Ref.Current, visual)) visual.Focus();
+                    if (Stands(visual, generation)) visual.Focus();
                 }
                 visual.Loaded += OnLoaded;
                 break;
             case DirectView direct:
-                Poll(direct, 0);
+                WhenReady(direct, generation, TimeSpan.FromMilliseconds(16));
                 break;
             case { } other:
                 other.Focus();
@@ -52,28 +67,46 @@ internal sealed class ElementFocus
         }
     }
 
-    private void Poll(DirectView view, int attempt)
+    private bool Stands(IView view, int generation) => generation == _generation && ReferenceEquals(Ref.Current, view);
+
+    private void WhenReady(DirectView view, int generation, TimeSpan poll)
     {
-        if (!ReferenceEquals(Ref.Current, view)) return;
-        if (IsInWindow(view))
+        if (!Stands(view, generation)) return;
+        switch (view.Handler?.PlatformView)
         {
-            view.Focus();
-            return;
+            case null:
+                // MAUI sets a Core view's handler before it creates the platform view, so the handler's
+                // arrival is followed by one more check on the next turn.
+                void OnHandlerChanged()
+                {
+                    view.HandlerChanged -= OnHandlerChanged;
+                    Post(() => WhenReady(view, generation, poll));
+                }
+                view.HandlerChanged += OnHandlerChanged;
+                return;
+#if ANDROID
+            case global::Android.Views.View { IsAttachedToWindow: false } native:
+                void OnAttached(object? sender, global::Android.Views.View.ViewAttachedToWindowEventArgs e)
+                {
+                    native.ViewAttachedToWindow -= OnAttached;
+                    WhenReady(view, generation, poll);
+                }
+                native.ViewAttachedToWindow += OnAttached;
+                return;
+#elif IOS || MACCATALYST
+            case global::UIKit.UIView { Window: null }:
+                var next = TimeSpan.FromTicks(Math.Min(poll.Ticks * 2, MaxPollInterval.Ticks));
+                _dispatcher?.DispatchDelayed(poll, () => WhenReady(view, generation, next));
+                return;
+#endif
+            default:
+                view.Focus();
+                return;
         }
-        if (attempt >= MaxReadinessPolls || _dispatcher is null) return;
-        _dispatcher.DispatchDelayed(TimeSpan.FromMilliseconds(16), () => Poll(view, attempt + 1));
     }
 
-    private static bool IsInWindow(DirectView view) => view.Handler?.PlatformView switch
+    private void Post(Action action)
     {
-#if ANDROID
-        global::Android.Views.View native => native.IsAttachedToWindow,
-#elif IOS || MACCATALYST
-        global::UIKit.UIView native => native.Window is not null,
-#elif WINDOWS
-        Microsoft.UI.Xaml.FrameworkElement native => native.XamlRoot is not null,
-#endif
-        null => false,
-        _ => true,
-    };
+        if (_enqueue?.Invoke(action) != true) _dispatcher?.Dispatch(action);
+    }
 }

@@ -59,17 +59,21 @@ public sealed record GraphicsViewElement(IDrawable Drawable) : ViewElement;
 public sealed record WebViewElement(string? Url, string? Html = null) : ViewElement
 {
     /// <summary>
-    /// Asked before a navigation; set <c>Cancel</c> to refuse it. Synchronous: the platform waits for
-    /// the answer, so <c>Cancel</c> set after an <c>await</c> does nothing. Not exactly once (Android
-    /// can ask twice), so give the same answer for the same URL. Navigations a changed <see cref="Url"/>
-    /// starts are asked too. A throwing callback cancels the navigation.
+    /// Asked for each top-level navigation; set <c>Cancel</c> to refuse it. Synchronous: the platform
+    /// waits for the answer, so <c>Cancel</c> set after an <c>await</c> does nothing. iOS, Mac Catalyst,
+    /// and Android for a link or a changed <see cref="Url"/>, ask before loading; Android asks
+    /// <see cref="Html"/>, a reload, back and forward only once loading has started, so refusing those
+    /// leaves whatever the platform shows. Not exactly once (Android can ask twice), so give the same
+    /// answer for the same URL. Subresources and frames aren't asked: this is a navigation policy, not a
+    /// security boundary. A throwing callback cancels the navigation.
     /// </summary>
     public Action<WebNavigatingEventArgs>? OnNavigating { get; init; }
 
     /// <summary>
     /// A navigation completed, with its <c>Result</c>: <c>Success</c>, <c>Cancel</c>, <c>Failure</c> or
     /// <c>Timeout</c>. Called after the platform callback, so <c>CanGoBack</c> and <c>CanGoForward</c> are
-    /// up to date.
+    /// up to date. A navigation refused before it loaded reports no completion; one Android refused late
+    /// completes with <c>Cancel</c>.
     /// </summary>
     public Action<WebNavigatedEventArgs>? OnNavigated { get; init; }
 }

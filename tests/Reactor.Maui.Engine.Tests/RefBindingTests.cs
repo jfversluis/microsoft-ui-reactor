@@ -111,7 +111,11 @@ public class RefBindingTests
     {
         var root = Root(out _, out var view);
         var cell = NewCell();
-        root.Render(ErrorBoundary(new BoxElement(Text("a", cell), new ExplodingElement("never")), _ => new TextElement("fallback")));
+        root.Render(ErrorBoundary(new BoxElement(Text("a", cell)), _ => new TextElement("fallback")));
+        Assert.NotNull(cell.Current);
+
+        // A sibling that fails to mount makes the boundary replace the whole subtree.
+        root.Render(ErrorBoundary(new BoxElement(Text("a", cell), new ExplodingElement("now")), _ => new TextElement("fallback")));
 
         Assert.Equal("fallback", view()!.Text);
         Assert.Null(cell.Current);

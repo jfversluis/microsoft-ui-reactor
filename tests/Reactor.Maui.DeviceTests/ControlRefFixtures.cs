@@ -31,11 +31,12 @@ public static partial class Fixtures
             new($"Entry_Selection_Characterization [{r.Name}]", c => SelectionCharacterization(c, r.Create(), r.Name)),
             new($"Entry_Selection_Sequences [{r.Name}]", c => SelectionSequences(c, r.Create(), r.Name)),
             new($"Entry_ReturnType_ReachesThePlatform [{r.Name}]", c => ReturnTypeReachesThePlatform(c, r.Create())),
+            new($"ScrollView_ScrollToAnElement_Superseded [{r.Name}]", c => ScrollToSuperseded(c, r.Create(), r.Name)),
         }),
         new("ScrollView_ScrollToAnElement_ThroughNestedDirectLayouts [direct]", ScrollToNestedDirect),
         new("ScrollView_ScrollToAnElement_EquivalentTrees_WithInsets", ScrollToEquivalentTrees),
         new("ScrollView_ScrollToAnElement_NotReady", ScrollToNotReady),
-        new("ScrollView_ScrollToAnElement_Superseded", ScrollToSuperseded),
+
         new("WebView_Navigations_AreAttemptedAndCompleted", WebViewNavigations),
         new("WebView_CommandsThroughARef", WebViewCommands),
         new("WebView_DeclaredUrlCancelled_LoadsNothing", WebViewDeclaredUrlCancelled),
@@ -105,12 +106,16 @@ public static partial class Fixtures
         }
     }
 
-    private sealed class RequestFocusApp : Component
+    private sealed class RequestFocusApp : Component<List<string>>
     {
         public override Element Render()
         {
             var (entry, requestFocus) = UseElementFocus();
-            UseEffect(requestFocus, Array.Empty<object>());
+            UseEffect(() =>
+            {
+                if (entry.Current is VisualElement visual) visual.Focused += (_, _) => Props.Add("focused");
+                requestFocus();
+            }, Array.Empty<object>());
             return VStack(Label("focus target below"), Entry("x").Ref(entry).AutomationId("request-entry"));
         }
     }
@@ -151,9 +156,13 @@ public static partial class Fixtures
         // Where the effect can't, UseElementFocus' RequestFocus waits until the view is ready.
         c.Unmount();
         await c.Settle(200);
-        c.Show(Component<RequestFocusApp>(), registry);
+        var focusEvents = new List<string>();
+        c.Show(Component<RequestFocusApp, List<string>>(focusEvents), registry);
         var requested = await Loaded<IEntry>(c, "request-entry");
         await c.WaitFor(() => RefPlatform.IsFocused(requested), "UseElementFocus' RequestFocus from the first effect");
+        await c.Settle();
+        // A Controls entry is focused once, through Loaded where the effect came too early.
+        if (renderer == "controls") Equal("focused", string.Join(",", focusEvents), "focus events");
     }
 
     // ── ScrollView ──────────────────────────────────────────────────────────
@@ -213,13 +222,13 @@ public static partial class Fixtures
         Equal(true, RefPlatform.ShowsVerticalIndicator(scroll), "Always shows the indicator");
     }
 
-    // A target in a direct Grid (second row, with a margin) in a direct VStack (with padding), far
-    // from both ends of a tall scroll view.
+    // A target in a direct Grid (second row, with a margin) in a direct VStack (with padding and a
+    // margin, so the content's origin isn't zero), far from both ends of a tall scroll view.
     private static ScrollViewElement NestedTree(ElementRef<IView> target, string id) =>
         (ScrollView(VStack(0,
             TallContent(20),
             Grid("120,*", "*", Label("grid header").Height(120), Entry("target").Ref(target).Height(44).Margin(12, 7).Grid(1, 0)).Margin(6),
-            TallContent(40)).Padding(10)) with { }).AutomationId(id).Height(320);
+            TallContent(40)).Padding(10).Margin(24, 16)) with { }).AutomationId(id).Height(320);
 
     private static async Task ScrollToNestedDirect(FixtureContext c)
     {
@@ -229,24 +238,34 @@ public static partial class Fixtures
         await c.WaitFor(() => target.Current is DirectView { IsArranged: true } && scroll.Height > 0, "the target to be laid out");
         Check(target.Current is DirectEntry, "the target stays a direct view");
 
-        foreach (var position in new[] { ScrollToPosition.Start, ScrollToPosition.Center, ScrollToPosition.End })
+        var top = RefPlatform.ContentY(scroll, target.Current!);
+        var height = RefPlatform.ViewHeight(target.Current!);
+        var viewport = RefPlatform.ViewportHeight(scroll);
+        Check(top > viewport, $"the target ({top:0.#}) starts below the first screen");
+        foreach (var (position, start) in new (ScrollToPosition, double)[]
         {
-            await scroll.ScrollToAsync(0, 0, false);
+            (ScrollToPosition.Start, 0), (ScrollToPosition.Center, 0), (ScrollToPosition.End, 0),
+            (ScrollToPosition.MakeVisible, 0), (ScrollToPosition.MakeVisible, top + 400), (ScrollToPosition.MakeVisible, top - 100),
+        })
+        {
+            await scroll.ScrollToAsync(0, start, false);
             await c.Settle(100);
+            var from = RefPlatform.ScrollOffset(scroll).Y;
             var confirmed = await scroll.ScrollToAsync(target, position, false);
             await c.Settle(150);
-            Check(confirmed, $"{position}: the bridge confirmed the scroll");
-            // The target's place in the content, measured on the platform.
-            var top = RefPlatform.ContentY(scroll, target.Current!);
-            var height = RefPlatform.ViewHeight(target.Current!);
-            var viewport = RefPlatform.ViewportHeight(scroll);
+            Check(confirmed, $"{position} from {start:0}: the bridge confirmed the scroll");
+            // Against the target's place in the content, measured on the platform.
             var expected = position switch
             {
                 ScrollToPosition.Start => top,
                 ScrollToPosition.Center => top - viewport / 2 + height / 2,
-                _ => top - viewport + height,
+                ScrollToPosition.End => top - viewport + height,
+                // MakeVisible: unchanged when the target is already in view, else the nearer edge.
+                _ when top >= from && top + height <= from + viewport => from,
+                _ when top > from => top - viewport + height,
+                _ => top,
             };
-            Close(expected, RefPlatform.ScrollOffset(scroll).Y, $"{position}: platform offset against the measured target");
+            Close(expected, RefPlatform.ScrollOffset(scroll).Y, $"{position} from {start:0}: platform offset against the measured target");
         }
 
         // Why the bridge exists: MAUI's own element overload walks the Controls parents, which skip the
@@ -275,7 +294,9 @@ public static partial class Fixtures
             "the two trees place their targets alike");
 
         var insets = RefPlatform.SetContentInsets(controlsScroll, 50, 30) && RefPlatform.SetContentInsets(directScroll, 50, 30);
-        Note($"nonzero content insets applied: {insets}");
+        var uikit = DeviceInfo.Platform == DevicePlatform.iOS || DeviceInfo.Platform == DevicePlatform.MacCatalyst;
+        if (uikit) Check(insets, "UIKit content insets applied");
+        else Note($"{DeviceInfo.Platform} has no content inset to add; adjusted top inset {RefPlatform.AdjustedTopInset(directScroll):0.#}");
         await c.Settle(150);
 
         foreach (var (position, start) in new (ScrollToPosition, double)[]
@@ -287,8 +308,13 @@ public static partial class Fixtures
             await controlsScroll.ScrollToAsync(0, start, false);
             await directScroll.ScrollToAsync(0, start, false);
             await c.Settle(100);
+            if (uikit)
+            {
+                Check(RefPlatform.AdjustedTopInset(controlsScroll) >= 50 && RefPlatform.AdjustedTopInset(directScroll) >= 50,
+                    $"{position} from {start}: the adjusted top insets are at least 50 ({RefPlatform.AdjustedTopInset(directScroll):0.#})");
+            }
             await controlsScroll.ScrollToAsync(controlsTarget.Current!, position, false);
-            await directScroll.ScrollToAsync(directTarget, position, false);
+            Check(await directScroll.ScrollToAsync(directTarget, position, false), $"{position} from {start}: the bridge confirmed the scroll");
             await c.Settle(150);
             Close(RefPlatform.NativeOffsetY(controlsScroll), RefPlatform.NativeOffsetY(directScroll),
                 $"{position} from {start}: the bridge's native offset against MAUI's own");
@@ -300,7 +326,7 @@ public static partial class Fixtures
         (ScrollView(VStack(0,
             TallContent(20).OnTap(() => { }),
             Grid("120,*", "*", Label("grid header").Height(120).OnTap(() => { }), Entry("target").Ref(target).Height(44).Margin(12, 7).Grid(1, 0)).Margin(6).OnTap(() => { }),
-            TallContent(40).OnTap(() => { })).Padding(10).OnTap(() => { })) with { }).AutomationId("controls-scroll").Height(320);
+            TallContent(40).OnTap(() => { })).Padding(10).Margin(24, 16).OnTap(() => { })) with { }).AutomationId("controls-scroll").Height(320);
 
     private sealed record InsertProps(ElementRef<MauiScrollView> Scroll, ElementRef<IView> Target, bool Inserted);
 
@@ -328,14 +354,12 @@ public static partial class Fixtures
         // then scrolls to it. Whether a layout pass already ran in the render's own turn is the platform's.
         c.Render(InsertTree(props with { Inserted = true }));
         var sameTurn = await scroll.ScrollToAsync(props.Target, ScrollToPosition.Start, false);
-        Note($"a target inserted in this turn on {DeviceInfo.Platform}: {(sameTurn ? "already laid out, scrolled" : "not laid out yet, false")}");
-        if (!sameTurn)
-        {
-            Close(0, RefPlatform.ScrollOffset(scroll).Y, "nothing scrolled while not laid out");
-            await c.WaitFor(() => props.Target.Current is DirectView { IsArranged: true }, "the inserted target to be laid out");
-            await c.Settle(100);
-            Equal(true, await scroll.ScrollToAsync(props.Target, ScrollToPosition.Start, false), "after the layout pass");
-        }
+        // Measured on all three platforms (§2.15): not laid out in the render's own turn.
+        Equal(false, sameTurn, "a target inserted in this turn");
+        Close(0, RefPlatform.ScrollOffset(scroll).Y, "nothing scrolled while not laid out");
+        await c.WaitFor(() => props.Target.Current is DirectView { IsArranged: true }, "the inserted target to be laid out");
+        await c.Settle(100);
+        Equal(true, await scroll.ScrollToAsync(props.Target, ScrollToPosition.Start, false), "after the layout pass");
         await c.Settle(100);
         Close(RefPlatform.ContentY(scroll, props.Target.Current!), RefPlatform.ScrollOffset(scroll).Y, "the offset");
 
@@ -354,22 +378,24 @@ public static partial class Fixtures
         Check(threw, "a target outside the scroll view throws");
     }
 
-    private static async Task ScrollToSuperseded(FixtureContext c)
+    private static async Task ScrollToSuperseded(FixtureContext c, ElementHandlerRegistry registry, string renderer)
     {
         var first = TypedElementRef.Create<IView>();
         var second = TypedElementRef.Create<IView>();
         c.Show(ScrollView(VStack(0, TallContent(30), Label("first").Ref(first).Height(40), TallContent(30), Label("second").Ref(second).Height(40), TallContent(30)))
-            .AutomationId("scroll").Height(300), MauiHandlers.CreateRegistry());
+            .AutomationId("scroll").Height(300), registry);
         var scroll = (ReactorScrollView)await Loaded<IScrollView>(c, "scroll");
-        await c.WaitFor(() => second.Current is VisualElement { Width: > 0 }, "the targets to be laid out");
+        await c.WaitFor(() => second.Current is { Frame.Height: > 0 } && second.Current.Handler is not null, "the targets to be laid out");
+        await c.Settle(100);
+        Check(renderer == "direct" ? second.Current is DirectLabel : second.Current is MauiLabel, $"the target is the {renderer} view");
 
-        // Characterization: how many finishes two overlapping animated MAUI requests produce.
+        // How many finishes two overlapping animated MAUI requests produce, against what the bridge expects.
         var before = scroll.FinishCount;
         _ = scroll.ScrollToAsync(0, 600, true);
         await Task.Delay(50);
         _ = scroll.ScrollToAsync(0, 1500, true);
         await c.Settle(2000);
-        Note($"overlapping animated requests on {DeviceInfo.Platform}: {scroll.FinishCount - before} finish(es); expected by the bridge: {(ScrollBridge.FinishesAccumulate ? 2 : 1)}");
+        Equal(ScrollBridge.FinishesAccumulate ? 2 : 1, scroll.FinishCount - before, $"finishes from two overlapping requests on {DeviceInfo.Platform}");
         await scroll.ScrollToAsync(0, 0, false);
         await c.Settle(200);
 
@@ -378,12 +404,14 @@ public static partial class Fixtures
         var b = scroll.ScrollToAsync(second, ScrollToPosition.Start, true);
         var clock = System.Diagnostics.Stopwatch.StartNew();
         await c.WaitFor(() => a.IsCompleted, "the superseded scroll to complete", 1000);
-        Equal(false, a.Result, "the superseded scroll's result");
-        var target = scroll.GetScrollPositionForElement((VisualElement)second.Current!, ScrollToPosition.Start);
+        Equal(false, await a, "the superseded scroll's result");
+        var finishesBefore = scroll.FinishCount;
         await c.WaitFor(() => b.IsCompleted, "the second scroll to complete", 3000);
-        Equal(true, b.Result, "the second scroll's result");
-        Close(target.Y, scroll.ScrollY, "the final offset is the second's");
-        Note($"superseded after {clock.ElapsedMilliseconds} ms");
+        Note($"[{renderer}] at b's completion: finishes {scroll.FinishCount - finishesBefore} after a's, expected left {scroll.Bridge.ExpectedFinishes}, scrollY {scroll.ScrollY:0.##}, target {RefPlatform.ContentY(scroll, second.Current!):0.##}, {clock.ElapsedMilliseconds} ms");
+        Equal(true, await b, "the second scroll's result");
+        await c.Settle(100);
+        Close(RefPlatform.ContentY(scroll, second.Current!), RefPlatform.ScrollOffset(scroll).Y, "the final offset is the second's");
+        Note($"[{renderer}] superseded after {clock.ElapsedMilliseconds} ms");
     }
 
     // ── RefreshView ─────────────────────────────────────────────────────────
@@ -400,7 +428,7 @@ public static partial class Fixtures
                 Props.Log.Add("refresh");
                 if (!Props.Accept) return;
                 setRefreshing(true);
-                _ = Task.Delay(400).ContinueWith(_ => MainThread.BeginInvokeOnMainThread(() => setRefreshing(false)));
+                _ = Task.Delay(800).ContinueWith(_ => MainThread.BeginInvokeOnMainThread(() => setRefreshing(false)));
             }).AutomationId("refresh");
         }
     }
@@ -417,7 +445,12 @@ public static partial class Fixtures
             if (how is null) throw new SkipException($"this platform's refresh view offers no pull-to-refresh to trigger ({DeviceInfo.Platform})");
             Note($"refresh triggered through {how}");
             await c.WaitFor(() => log.Count == 1, "the refresh to be reported");
-            if (accept) await c.WaitFor(() => RefPlatform.IsSpinning(refresh) == true, "the spinner to show while the app refreshes");
+            if (accept)
+            {
+                await c.WaitFor(() => RefPlatform.IsSpinning(refresh) == true, "the spinner to show while the app refreshes");
+                await c.Settle(200);
+                Equal(true, RefPlatform.IsSpinning(refresh), "still spinning while the app refreshes");
+            }
             await c.WaitFor(() => RefPlatform.IsSpinning(refresh) == false, accept ? "the spinner to stop when the app is done" : "a refused refresh to stop the spinner");
             await c.Settle();
             Equal("refresh", string.Join(",", log), $"accept={accept}: exactly one report");
@@ -500,16 +533,20 @@ public static partial class Fixtures
         Note($"after the declared load: CanGoBack in OnNavigated [{string.Join(", ", canGoBack)}], {RefPlatform.History(web.Current!)}");
         Check(canGoBack[^1], "CanGoBack read in OnNavigated after a declared navigation");
 
-        // Refused, each started another way. What the platform asks, when, and what it reports.
+        // Refused, each started another way. What the platform asks, when, and what it reports (§2.15):
+        // links and script navigations are asked before they load everywhere; Android asks a reload or
+        // back only in OnPageStarted, stops the started load and completes it with Cancel.
+        var android = DeviceInfo.Platform == DevicePlatform.Android;
         log.Refuse = url => true;
-        foreach (var (name, start, keepsPage) in new (string, Func<Task>, bool)[]
+        foreach (var (name, start, attempt, lateCompletion) in new (string, Func<Task>, string, string?)[]
         {
-            ("link", () => Js(web, "document.getElementById('back').click(); 'ok'"), true),
-            ("script", () => Js(web, "location.href = 'page1.html'; 'ok'"), true),
-            ("reload", () => { web.Current!.Reload(); return Task.CompletedTask; }, DeviceInfo.Platform != DevicePlatform.Android),
-            ("back", () => { web.Current!.GoBack(); return Task.CompletedTask; }, DeviceInfo.Platform != DevicePlatform.Android),
+            ("link", () => Js(web, "document.getElementById('back').click(); 'ok'"), "NewPage page1", null),
+            ("script", () => Js(web, "location.href = 'page1.html'; 'ok'"), "NewPage page1", null),
+            ("reload", () => { web.Current!.Reload(); return Task.CompletedTask; }, "Refresh page2", android ? "page2 Cancel" : null),
+            ("back", () => { web.Current!.GoBack(); return Task.CompletedTask; }, "Back page1", android ? "page1 Cancel" : null),
         })
         {
+            if (name == "back") Check(web.Current!.CanGoBack, "CanGoBack before the refused back");
             var (attempts, completions) = (log.Attempts.Count, log.Completions.Count);
             await Js(web, "window.reactorMarker = 'kept'; 'ok'");
             await start();
@@ -519,9 +556,11 @@ public static partial class Fixtures
             var marker = await Js(web, "window.reactorMarker || 'gone'");
             var title = await Js(web, "document.title");
             Note($"{name}: asked [{string.Join(", ", asked)}], completed [{string.Join(", ", done)}], page {title}, marker {marker}");
+            Check(asked.Contains(attempt), $"{name}: OnNavigating was asked about {attempt}");
             Check(!done.Any(d => d.EndsWith("Success", StringComparison.Ordinal)), $"{name}: a refused navigation never completes with Success");
-            Check(done.All(d => d.EndsWith("Cancel", StringComparison.Ordinal)), $"{name}: any completion reported carries Cancel");
-            if (keepsPage) Equal("page2 kept", $"{title} {marker}", $"{name}: the previous page stays (spec 070 §2.7)");
+            Equal(lateCompletion ?? "", string.Join(", ", done), $"{name}: the completions reported");
+            if (lateCompletion is null) Equal("page2 kept", $"{title} {marker}", $"{name}: refused before loading, the previous page stays");
+            else Equal("gone", marker, $"{name}: refused after the load started, the previous document is gone");
             if (title != "page2" && name != "back")
             {
                 // A late cancel left another page: start the next case from page 2 again.
@@ -532,6 +571,19 @@ public static partial class Fixtures
                 log.Refuse = _ => true;
             }
         }
+
+        // Positive control for the refused script navigation: the same navigation, allowed.
+        log.Refuse = _ => false;
+        var from = await Js(web, "document.title");
+        var to = from == "page1" ? "page2" : "page1";
+        var before = (log.Attempts.Count, log.Completions.Count);
+        await Js(web, $"location.href = '{to}.html'; 'ok'");
+        await WaitForJs(c, web, "document.title", to, $"the allowed script navigation to {to}", 10000);
+        await c.WaitFor(() => log.Completions.Skip(before.Item2).Contains($"{to} Success"), "the allowed navigation to complete", 5000);
+        // Asked about the page; the event kind is MAUI's: Android keeps the kind of the last command
+        // (here the refused GoBack's Back) for a script navigation that follows it.
+        Check(log.Attempts.Skip(before.Item1).Any(x => x.EndsWith($" {to}", StringComparison.Ordinal)),
+            $"the allowed script navigation was asked (asked [{string.Join(", ", log.Attempts.Skip(before.Item1))}], completed [{string.Join(", ", log.Completions.Skip(before.Item2))}])");
     }
 
     private static async Task WebViewCommands(FixtureContext c)
@@ -718,7 +770,10 @@ public static partial class Fixtures
                 Note($"{renderer} focused={focused} {name}: selection {after}, calls [{string.Join("; ", props.Log.Calls)}]");
                 // What each platform does is recorded (§2.15); the reports must follow what it shows.
                 if (after == (12, 2)) Equal("", string.Join("; ", reported), $"focused={focused} {name}: an unchanged selection reports nothing");
-                else Equal($"selection {after.Item1},{after.Item2}", reported.LastOrDefault(), $"focused={focused} {name}: the moved selection is reported as it is");
+                else Equal($"selection {after.Item1},{after.Item2}", string.Join("; ", reported), $"focused={focused} {name}: the moved selection is reported once, as it is");
+                // A text the platform changed (MaxLength truncating it) reaches OnTextChanged, selection tracking or not.
+                var shown = Platform.Text(entry);
+                if (shown != "abcdefghijklmnop") Check(props.Log.Calls.Contains($"text {shown}"), $"focused={focused} {name}: the platform's text {shown} is reported");
                 props.Log.Set!(("abcdefghijklmnop", 12, 3));
                 await Settled(c);
                 props.Log.Set!(("abcdefghijklmnop", 12, 2));
@@ -736,7 +791,10 @@ public static partial class Fixtures
             var final = RefPlatform.Selection(entry);
             var selections = props.Log.Calls.Where(x => x.StartsWith("selection", StringComparison.Ordinal)).ToList();
             Note($"{renderer} focused={focused} text shrinks before the write runs: final {final}, calls [{string.Join("; ", props.Log.Calls)}]");
-            if (selections.Count > 0) Equal($"selection {final.Item1},{final.Item2}", selections[^1], "the last report is the final selection");
+            // Recorded (§2.15): UIKit puts the caret at the new end, Android at the start; reported once.
+            var expectedFinal = DeviceInfo.Platform == DevicePlatform.Android ? (0, 0) : (3, 0);
+            Equal(expectedFinal, final, $"focused={focused} text shrinks: the platform selection");
+            Equal($"text abc; selection {expectedFinal.Item1},{expectedFinal.Item2}", string.Join("; ", props.Log.Calls), $"focused={focused} text shrinks: the sequence");
             c.Unmount();
             await c.Settle(100);
         }
@@ -765,10 +823,9 @@ public static partial class Fixtures
         RefPlatform.TypeAtCaret(entry, "X");
         await Settled(c);
         Note($"{renderer} typing: [{string.Join("; ", props.Log.Calls)}]");
-        Check(props.Log.Calls.FirstOrDefault() == "text 0123456789X", $"typing reports the text first ({string.Join("; ", props.Log.Calls)})");
-        var final = RefPlatform.Selection(entry);
-        var selections = props.Log.Calls.Where(x => x.StartsWith("selection", StringComparison.Ordinal)).ToList();
-        if (selections.Count > 0) Equal($"selection {final.Item1},{final.Item2}", selections[^1], "typing: the last report is the final selection");
+        // Recorded the same on every platform (§2.15).
+        Equal("text 0123456789X; selection 11,0", string.Join("; ", props.Log.Calls), "typing: the text, then the caret");
+        Equal((11, 0), RefPlatform.Selection(entry), "typing: the platform selection");
         props.Log.Calls.Clear();
         await Settled(c);
         Equal("", string.Join("; ", props.Log.Calls), "nothing more after settling");
@@ -786,9 +843,11 @@ public static partial class Fixtures
         await Settled(c);
         Note($"{renderer} refused typing: [{string.Join("; ", refusing.Log.Calls)}], final {RefPlatform.Selection(entry)}, text {Platform.Text(entry)}");
         Equal("0123456789", Platform.Text(entry), "the refused text is restored");
-        final = RefPlatform.Selection(entry);
-        selections = refusing.Log.Calls.Where(x => x.StartsWith("selection", StringComparison.Ordinal)).ToList();
-        if (selections.Count > 0) Equal($"selection {final.Item1},{final.Item2}", selections[^1], "refused typing: the last report is the final selection");
+        // Recorded (§2.15): UIKit reports the typed caret, then the restored one; Android restores the
+        // caret without a report. Either way the last report, if any, is the final selection.
+        Equal((10, 0), RefPlatform.Selection(entry), "refused typing: the platform selection");
+        Equal(DeviceInfo.Platform == DevicePlatform.Android ? "text 0123456789X" : "text 0123456789X; selection 11,0; selection 10,0",
+            string.Join("; ", refusing.Log.Calls), "refused typing: the sequence");
         refusing.Log.Calls.Clear();
         await Settled(c);
         Equal("", string.Join("; ", refusing.Log.Calls), "refused typing: nothing more after settling");
