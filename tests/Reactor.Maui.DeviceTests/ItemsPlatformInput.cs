@@ -237,8 +237,8 @@ public static partial class ItemsPlatform
 
     /// <summary>
     /// Taps a label at <paramref name="point"/>: Android dispatches the touch to the native view (MAUI's
-    /// gesture handling then hit-tests the spans); iOS and Mac Catalyst run MAUI's span hit test and
-    /// the recognizers it returns, as MAUI's label tap does.
+    /// gesture handling then hit-tests the spans); iOS and Mac Catalyst run MAUI's tap dispatch for each
+    /// recognizer installed on the label.
     /// </summary>
     public static async Task TapLabel(Microsoft.Maui.Controls.Label label, Point point)
     {
@@ -258,9 +258,26 @@ public static partial class ItemsPlatform
         using (var e = Android.Views.MotionEvent.Obtain(down, Android.OS.SystemClock.UptimeMillis(), Android.Views.MotionEventActions.Up, x, y, 0)!)
             root.DispatchTouchEvent(e);
 #else
-        foreach (var element in label.GetChildElements(point))
-            foreach (var recognizer in element.GestureRecognizers.OfType<TapGestureRecognizer>())
-                recognizer.SendTapped(label);
+        // MAUI's own tap dispatch, over every recognizer its gesture manager installed on the label (the
+        // label's own and the spans' child recognizers), as a UITapGestureRecognizer firing at the point
+        // would run it. A recognizer installed in the wrong place therefore runs too.
+        var manager = typeof(View).GetField("_gestureManager", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(label)
+            ?? throw new CheckFailedException("View._gestureManager not found");
+        var platformManager = manager.GetType().GetProperty("GesturePlatformManager", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?.GetValue(manager);
+        if (platformManager is null)
+        {
+            // No recognizers anywhere on the label: MAUI installed nothing that a tap could run.
+            FixtureContext.Check(!label.GestureRecognizers.Any() && label.FormattedText?.Spans.All(s => s.GestureRecognizers.Count == 0) != false,
+                "a label with recognizers has a gesture platform manager");
+            return;
+        }
+        var installed = platformManager.GetType().GetField("_gestureRecognizers", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(platformManager) as System.Collections.IDictionary
+            ?? throw new CheckFailedException("GesturePlatformManager._gestureRecognizers not found");
+        var process = platformManager.GetType().GetMethod("ProcessRecognizerHandlerTap", BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new CheckFailedException("GesturePlatformManager.ProcessRecognizerHandlerTap not found");
+        foreach (var recognizer in installed.Keys.Cast<IGestureRecognizer>().ToList())
+            if (recognizer is TapGestureRecognizer || recognizer.GetType().Name == "ChildGestureRecognizer")
+                process.Invoke(null, [new WeakReference(platformManager), new WeakReference(recognizer), new CoreGraphics.CGPoint(point.X, point.Y), 1, null]);
         await Task.CompletedTask;
 #endif
     }

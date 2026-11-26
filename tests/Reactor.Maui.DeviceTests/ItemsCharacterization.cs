@@ -130,7 +130,7 @@ public static partial class Fixtures
         : list.SelectedItem?.ToString() ?? "-";
 
     private static async Task<string> SelectionCase(FixtureContext c, string name, SelectionMode mode,
-        Func<MauiCollectionView, ObservableCollection<string>, WriteLog, Task> run)
+        Func<MauiCollectionView, ObservableCollection<string>, WriteLog, Task> run, string? expectedEvents = null)
     {
         var items = new ObservableCollection<string>(["a", "b", "c", "d", "e"]);
         var log = new WriteLog();
@@ -141,6 +141,8 @@ public static partial class Fixtures
         var row = $"{name}: events [{string.Join("; ", log.Events)}], virtual {Virtual(list)}, native {ItemsPlatform.NativeSelection(list)}";
         Note(row);
         Check(log.Late == 0, $"a SelectionChanged caused by a write arrived after the write returned: {row}");
+        // Positive witness: the writes did raise the events the gate is about, inside the writes.
+        if (expectedEvents is not null) Equal(expectedEvents, string.Join("; ", log.Events), $"the events ({name})");
         return row;
     }
 
@@ -161,38 +163,38 @@ public static partial class Fixtures
         {
             await ShowLoaded(c, list);
             log.Write(() => list.SelectedItem = "b");
-        });
+        }, expectedEvents: "in selection b");
         await SelectionCase(c, "loaded, a then b in one turn", SelectionMode.Single, async (list, items, log) =>
         {
             await ShowLoaded(c, list);
             log.Write(() => { list.SelectedItem = "a"; list.SelectedItem = "b"; });
-        });
+        }, expectedEvents: "in selection a; in selection b");
         await SelectionCase(c, "before load, a then b", SelectionMode.Single, (list, items, log) =>
         {
             c.ShowNative(list);
             Note($"before load: handler {(list.Handler is null ? "none" : "set")}, loaded {list.IsLoaded}");
             log.Write(() => { list.SelectedItem = "a"; list.SelectedItem = "b"; });
             return Task.CompletedTask;
-        });
+        }, expectedEvents: "in selection a; in selection b");
         await SelectionCase(c, "loaded, items change and selection in one write", SelectionMode.Single, async (list, items, log) =>
         {
             await ShowLoaded(c, list);
             log.Write(() => { items.Insert(0, "z"); list.SelectedItem = "c"; });
-        });
+        }, expectedEvents: "in selection c");
         await SelectionCase(c, "loaded, selected item removed with the selection cleared", SelectionMode.Single, async (list, items, log) =>
         {
             await ShowLoaded(c, list);
             log.Write(() => list.SelectedItem = "b");
             await c.Settle(200);
             log.Write(() => { items.Remove("b"); list.SelectedItem = null; });
-        });
+        }, expectedEvents: "in selection b; in selection ");
         await SelectionCase(c, "loaded, single to none with a selection", SelectionMode.Single, async (list, items, log) =>
         {
             await ShowLoaded(c, list);
             log.Write(() => list.SelectedItem = "b");
             await c.Settle(200);
             log.Write(() => list.SelectionMode = SelectionMode.None);
-        });
+        }, expectedEvents: "in selection b; in selection ");
         await SelectionCase(c, "loaded, multiple a+b then b, then none", SelectionMode.Multiple, async (list, items, log) =>
         {
             await ShowLoaded(c, list);
@@ -201,12 +203,12 @@ public static partial class Fixtures
             log.Write(() => list.SelectedItems = ["b"]);
             await c.Settle(200);
             log.Write(() => list.SelectionMode = SelectionMode.None);
-        });
+        }, expectedEvents: "in selection a+b; in selection b; in selection ");
         await SelectionCase(c, "loaded, items added then a and b in one turn", SelectionMode.Single, async (list, items, log) =>
         {
             await ShowLoaded(c, list);
             log.Write(() => { items.Add("x"); list.SelectedItem = "a"; list.SelectedItem = "b"; });
-        });
+        }, expectedEvents: "in selection a; in selection b");
         // Informational: what MAUI does on its own when the selected item is removed.
         await SelectionCase(c, "info: selected item removed, selection left", SelectionMode.Single, async (list, items, log) =>
         {
