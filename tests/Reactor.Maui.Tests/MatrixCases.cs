@@ -42,10 +42,10 @@ public static class MatrixCases
     [
         new(typeof(BorderElement), nameof(BorderElement.Content), typeof(VisualsTests), nameof(VisualsTests.Border_Content_IsSetReplacedAndCleared),
             "set, update in place (state kept), replace, clear (unmounted), direct child hosted",
-            "the slot's unmount skipped on clear, and a remount on update: red (spec 070 §4.13)"),
+            "content not cleared on null (M25) and a remount on every update (M26): red (spec 070 §4.13)"),
         new(typeof(ContentViewElement), nameof(ContentViewElement.Content), typeof(VisualsTests), nameof(VisualsTests.ContentView_Content_IsSetReplacedAndCleared),
             "set, update in place (state kept), replace, clear (unmounted), direct child hosted",
-            "the slot's unmount skipped on clear, and a remount on update: red (spec 070 §4.13)"),
+            "content not cleared on null (M23) and a remount on every update (M24): red (spec 070 §4.13)"),
     ];
 
     public static readonly IReadOnlyList<ExcludedClaim> Excluded = [];
