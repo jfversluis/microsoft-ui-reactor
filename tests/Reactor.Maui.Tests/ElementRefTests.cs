@@ -687,3 +687,31 @@ public class DirectSelectionBaselineTests
         }
     }
 }
+
+// The README's UseElementFocus snippet.
+public sealed class ReadmeFocus : Component
+{
+    public override Element Render()
+    {
+        var (name, setName) = UseState("");
+        var (field, requestFocus) = UseElementFocus();
+        UseEffect(requestFocus, Array.Empty<object>());
+        return Entry(name, setName).Ref(field);
+    }
+}
+
+public class ReadmeFocusSnippetTests
+{
+    [Fact]
+    public void TheFocusSnippet_BindsItsRef_AndRequestsFocusFromItsFirstEffect()
+    {
+        var host = new TestHost(DirectHandlers.CreateRegistry());
+        host.Render(Component<ReadmeFocus>());
+        var entry = (DirectEntry)host.RootView!;
+        var handler = new StubViewHandler();
+        entry.Handler = handler;
+        host.Render(Component<ReadmeFocus>());
+        host.Scheduler.Drain();
+        Assert.IsType<DirectEntry>(host.RootView);
+    }
+}

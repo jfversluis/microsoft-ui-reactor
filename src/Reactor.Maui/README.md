@@ -153,6 +153,7 @@ Hooks are called in `Render()`, unconditionally and in the same order every rend
 | `UseDialogs()` | Alerts, action sheets and prompts for the component's window (below). |
 | `UseSystemBackButton(onBack)` | Handle Android's back key (below). |
 | `UseWindowLifecycle(…)` | The window's `Activated`, `Deactivated`, `Stopped`, `Resumed` and `Destroying` (below). |
+| `UseElementRef<T>()`, `UseElementFocus()` | A ref to the view an element renders, for focusing, scrolling and other calls from code; a ref plus a `RequestFocus` that waits until the view can take focus (below). |
 
 State setters can be called from any thread; the update is applied on the UI thread, and several
 updates in a row render once.
@@ -169,6 +170,103 @@ Entry(code, value => setCode(value.ToUpperInvariant()), placeholder: "Code")
 controls, and each item's component state (text typed into its own entry, for example) moves with it.
 Once any sibling has a key, an unkeyed one is matched by its position: if it can move, key it too, or
 it remounts and loses its state.
+
+## Refs: calling the view from code
+
+`UseElementRef<T>()` returns a ref, the same one every render. Attach it with `.Ref(...)`, then call
+the MAUI view through `Current` in an event handler or an effect (the names are WinUI Reactor's):
+
+```csharp
+sealed class Search : Component
+{
+    public override Element Render()
+    {
+        var (query, setQuery) = UseState("");
+        var input = UseElementRef<Entry>();
+        var results = UseElementRef<ScrollView>();
+        var first = UseElementRef<IView>();
+
+        return VStack(8,
+            Entry(query, setQuery, placeholder: "Search").Ref(input),
+            HStack(8,
+                Button("Clear", () => { setQuery(""); input.Current?.Focus(); }),
+                Button("Top", async () =>
+                {
+                    if (results.Current is { } scroll) await scroll.ScrollToAsync(first, ScrollToPosition.Start, animated: true);
+                })),
+            ScrollView(VStack(Label("Results").Ref(first), Label($"Matches for '{query}'"))).Ref(results).Height(240));
+    }
+}
+```
+
+- **Lifetime.** `Current` is set when the element mounts, before its effects run, and is `null` once
+  it unmounts (children unmount first, so it is already `null` in a parent's cleanup). A ref names one
+  element: attached to several, the last one mounted wins. A list cell's tree, and its refs, go away
+  when the list clears the cell's item.
+- **The type.** `ElementRef<Entry>` is always a Controls `Entry`: with the direct renderer, an element
+  whose ref asks for a type its direct view isn't renders as a Controls view. `ElementRef<IView>` (or
+  `IEntry`) keeps the direct view, which can still be focused. A ref of the wrong type for its element
+  is an error that names both types. A component can't take `.Ref` itself; pass the ref as a prop to
+  the view it means. To make a ref outside a render (a test, a field), use `TypedElementRef.Create<T>()`.
+- **A ref holds its view.** One kept outside its tree keeps the view alive until the tree unmounts;
+  call `ReactorPage.Unmount()` for a page you discard.
+- **The UI thread.** Read `Current` and call the view on the UI thread.
+- **Focus when a view appears.** Android can't focus a view in the first effect of a newly shown
+  tree. `UseElementFocus()` returns a ref and a `RequestFocus` that focuses as soon as the view is on
+  screen, from any thread:
+
+  ```csharp
+  var (field, requestFocus) = UseElementFocus();
+  UseEffect(requestFocus, Array.Empty<object>());
+  return Entry(name, setName).Ref(field);
+  ```
+- **Hot reload** keeps a ref while the component's hooks keep their shape; an edit that changes the
+  ref's type starts the component's hooks over.
+- **Scrolling to an element.** `scroll.ScrollToAsync(ref, position, animated)` works for any view the
+  ref names, inside Controls or direct layouts (MAUI's own `ScrollToAsync(Element, …)` is right only
+  when every layout between the target and the scroll view is a Controls layout). It returns `true`
+  once the scroll finished at the target, and `false` when nothing was requested (the ref is empty, a
+  view between the target and the scroll view isn't laid out yet, or the orientation is `Neither`) or
+  the scroll wasn't confirmed there (a later request superseded it, the scroll view went away, or the
+  scroll ended elsewhere); `false` doesn't mean it didn't move. Call it after layout, from an event or
+  a view's `Loaded`. MAUI's own overloads can leave a superseded `await` pending; this one always
+  completes. The `ScrollView` element renders a `ScrollView` subclass, so an implicit style for it
+  needs `ApplyToDerivedTypes`, as for `CollectionView`.
+
+### Web views
+
+`OnNavigating` is asked before a navigation; set `Cancel` to refuse it, before the callback returns
+(the platform waits for the answer). It isn't exactly once (Android can ask twice), so answer the same
+way for the same URL. A throwing callback refuses the navigation and reaches the error boundaries.
+`OnNavigated` reports each completion with its `Result` (`Success`, `Cancel`, `Failure`, `Timeout`),
+after the platform callback, so `CanGoBack` is current. A refused navigation is reported as
+cancelled; iOS and Mac Catalyst ask before loading, so the page stays; Android asks a link and a
+declared `Url` before loading too, but `Html`, `Reload`, `GoBack` and `GoForward` only once loading
+has started, so what stays on screen then is the platform's.
+
+`Url` is the page you request, not the page shown: Reactor loads it when it changes. Keep the
+current page in separate state; rendering `OnNavigated`'s URL back into `Url` loads it again.
+
+```csharp
+var (requested, setRequested) = UseState("https://learn.microsoft.com/dotnet/maui");
+var (current, setCurrent) = UseState<string?>(null);   // what the view shows; never fed back into Url
+var web = UseElementRef<WebView>();
+return VStack(
+    Button("Back", () => web.Current?.GoBack()),
+    (WebView(requested) with
+    {
+        OnNavigating = e => e.Cancel = !e.Url.StartsWith("https://learn.microsoft.com/"),
+        OnNavigated = e => { if (e.Result == WebNavigationResult.Success) setCurrent(e.Url); },
+    }).Ref(web).Height(400));
+```
+
+### The caret and selection
+
+`Entry`'s `CursorPosition` and `SelectionLength` move the caret and the selection when their values
+change, as WinUI's `SelectionStart` does; the user moves them freely afterwards and nothing is undone.
+`OnSelectionChanged(selectedText, cursor, length)` reports the platform's selection once per change,
+after the platform callback; a selection you declared isn't reported, a caret a text change (or a
+keyboard, password or `MaxLength` change) moved is.
 
 ## Navigation
 

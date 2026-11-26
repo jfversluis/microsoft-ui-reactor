@@ -316,8 +316,8 @@ component's first effect, and a separate page, mounted fresh, whose entry is foc
 view, so one measurement can't help the other. §2.15 records the effect result per platform, and the
 fixture asserts that recorded result, so a platform change is noticed.
 
-- **If the effect fails on any platform**, MAUI gets WinUI's `UseElementFocus()` with its name and
-  shape, `(ElementRef<IView> Ref, Action RequestFocus)`. `RequestFocus` focuses at once when the view
+- **If the effect fails on any platform** (it does on Android, §2.15), MAUI gets WinUI's
+  `UseElementFocus()` with its name and shape, `(ElementRef<IView> Ref, Action RequestFocus)`. `RequestFocus` focuses at once when the view
   is ready, and otherwise when it becomes ready. Ready means: the view's handler is connected and its
   platform view is in a window. A Controls view signals it with `Loaded`. A `DirectView` has no
   `Loaded`, so it gets an internal readiness notification raised from its handler being set and its
@@ -418,14 +418,16 @@ record of expected writes, because any such record can swallow a genuine move (a
 write that moves the caret to 20 before the flush, then a user's move back to 8). When a change is
 ambiguous, Reactor reports it rather than risk swallowing input.
 
-- **The baseline** is initialised at mount, after the mount's writes, from the platform. A
+- **The baseline** is initialised from the platform once its view exists (for a direct entry, posted:
+  MAUI sets its handler before creating the platform view). A
   programmatic selection write sets it to the write's effective value: the declared cursor and
   length clamped to the text's length at that moment. After every flush it becomes the selection the
   flush observed, reported or not.
 - **Notifications start a burst.** A selection notification outside an apply posts one flush (§2.9)
   if none is pending. Notifications inside an apply's echo scope don't post; instead, an apply that
   wrote the text or the selection, or during which any selection notification arrived (a
-  property-only apply such as a `MaxLength` or keyboard change counts), posts the flush when it ends, after any write the platform deferred
+  property-only apply such as a `MaxLength` or keyboard change counts; as built, any keyboard,
+  password or `MaxLength` change does too, §2.15), posts the flush when it ends, after any write the platform deferred
   during the apply (Android's focused `SetSelection` is posted to the same looper first), so the
   flush observes the settled result. The characterization confirms that order per platform.
 - **The flush reads the actual platform selection**: Android `EditText.SelectionStart` and
@@ -609,8 +611,115 @@ only the final state.
 
 ### 2.15 As built (4c-1)
 
-To be written when 4c-1 lands, including the selection characterization table, the focus-on-mount
-result per platform and the mutation runs.
+**What was built** (commits `4099ed54`, `260b4d84`, `18404ce4`, `fdf743f3`):
+
+- **Refs.** `ElementRef<T> where T : class, IView`, `TypedElementRef.Create<T>()`, `UseElementRef<T>()`
+  (on `RenderContext` and `Component`) and `.Ref(ElementRef<T>?)` on every `ViewElement`, in
+  `Microsoft.UI.Reactor.Input`, which the package's global usings now import. The engine binds a host
+  node's ref after its mount or update (`ReactorRoot.BindRef`) and releases the cell the node recorded
+  (`Node.BoundRef`) in `Unmount(node)`, which every removal and failure path goes through; the cell
+  (`ElementRefCell`) clears only for its owner. A wrong-typed ref throws, naming both types, before
+  binding. `HybridHandler` uses the direct view only when the ref's type accepts it.
+  `DirectView.Focus()`/`Unfocus()` go through the handler's commands. `ReactorCell` unmounts its tree
+  when its binding context stops being an item.
+- **Focus on mount** (§2.6.2): the effect fails on Android, so **`UseElementFocus()`** was added with
+  WinUI's name and shape, `(ElementRef<IView> Ref, Action RequestFocus)` (`Core/ElementFocus.cs`).
+  `RequestFocus` marshals to the dispatcher captured at render, focuses a loaded Controls view at once
+  or on its `Loaded`, and polls a direct view (16 ms, up to 2 s) until its platform view is in a
+  window (Android `IsAttachedToWindow`, UIKit `Window`), dropping the request if the ref names
+  another view or none.
+- **WebView.** `OnNavigating(WebNavigatingEventArgs)` (a throw cancels and goes to the boundary);
+  `OnNavigated(WebNavigatedEventArgs)`, posted. The source still loads only when the declaration
+  changes.
+- **Posted reports** go through `HandlerContext.PostReport` (detach first, `Live` per callback, errors
+  to `ReportHandlerError`, optional restore in `finally`).
+- **Entry selection** (`Handlers/EntrySelection.cs`): `SelectionTracker` per view, created only when
+  the element uses the selection; `PlatformSelection.Read` reads `EditText`/`UITextField`/`TextBox`.
+  Both handlers wrap the whole apply in one echo scope and post the observation when it ends.
+- **Scroll bridge** (`ScrollViewExtensions`, `ScrollBridge`): `ReactorScrollView` re-implements
+  `IScrollView.ScrollFinished`; `DirectLayout` records Controls children's visual parent. The computed
+  path arranges a handler-less `BoxView` stand-in at the target's rectangle and calls MAUI's
+  `GetScrollPositionForElement` on it.
+
+**Deviations from §2, and why:**
+
+1. **`UseElementFocus()` exists** — the conditional in §2.6.2 triggered (Android, both registries).
+2. **Input-type and `MaxLength` changes are observed too.** The characterization showed platforms move
+   the selection themselves when the keyboard, password mode or `MaxLength` changes, and UIKit's
+   select-all on a password toggle arrives without a notification MAUI forwards, so a baseline fed
+   only by notifications went stale. Such an apply now posts the observation (`InputChanged`), and the
+   change is reported as the resulting selection.
+3. **A direct entry's baseline is observed once its platform view exists.** MAUI sets a Core view's
+   `Handler` before it creates the platform view (`ToHandler`), so the observation on `HandlerChanged`
+   found nothing; it is posted once (found on Android, where the first user selection went
+   unreported).
+4. **The not-ready fixture** probes "no handler" with an off-window root, because a fresh `Show` on
+   Mac Catalyst is laid out in the same turn. A target inserted by a render was not laid out in that
+   turn on any of the three platforms (the bridge returned `false`, then scrolled after layout).
+5. **WebView history fixtures navigate through declared sources.** Android's WebView marks entries
+   added by a script `click()` (no user gesture) as skippable, so `CanGoBack` stays `false` after one;
+   the declared `Url` load keeps page 1 as a back entry.
+6. **The posted helper's own unmount check is redundant with `Live`** (an equivalent mutant: removing
+   it alone changes nothing; removing it and invoking through `Current` turns the test red). Kept as
+   defense in depth.
+
+**Characterization (device, both registries unless noted):**
+
+| | Mac Catalyst | iOS | Android |
+|---|---|---|---|
+| Focus from the first effect of a new tree | works | works | **fails** (Controls and direct); `Loaded` and `UseElementFocus` work |
+| A selection write's platform effect | in the render | in the render | in the render when unfocused; **after it** when focused (MAUI posts `SetSelection`) |
+| Callbacks after a programmatic selection write (cursor, length, both, past the end, two in a batch, with a text write, consecutive renders) | 0 | 0 | 0 |
+| Text replaced right after a write | caret at the new end (3, 0), reported once | same | caret (0, 0), reported once |
+| Typing a character | text, then `selection 11,0` | same | same |
+| Refused typing | text, `selection 11,0`, `selection 10,0` | same | text only (the caret ends where it was) |
+| Keyboard change, selection (12, 2) | kept, nothing reported | kept | Controls (12, 0), direct (16, 0), reported once |
+| Password toggle | unfocused: select-all (0, 16); focused: (16, 0); reported once | same | Controls (12, 0), direct (16, 0), reported once |
+| `MaxLength` 5 truncating | (5, 0), reported once | same | same |
+| Finishes from two overlapping animated `ScrollToAsync` | 2 | 2 | 2 (so `FinishesAccumulate = true` everywhere) |
+| A target inserted in this turn | not laid out | not laid out | not laid out |
+| Cancelled link, script navigation | asked before load, no completion, page kept | same | same |
+| Cancelled `Reload`, `GoBack` | asked before load, no completion, page kept | same | asked in `OnPageStarted`; completion `Cancel`; page state lost (back landed on page 1) |
+| Cancelled declared `Url` | no load | no load | no load (preflight in `LoadUrl`) |
+
+**Tests.** Headless `Reactor.Maui.Tests`: 301 (213 before 4c-1), in `ElementRefTests.cs`,
+`ControlRefTests.cs`, `ScrollBridgeTests.cs`, including the README's snippets. Engine
+`Reactor.Maui.Engine.Tests`: 80 (73 before), `RefBindingTests.cs`. Device: 25 new fixtures in
+`ControlRefFixtures.cs` (`RefPlatform.cs` reads the platform; `Resources/Raw/page1.html`, `page2.html`).
+Full device suites: Mac Catalyst 111 passed, 7 skipped (no back key, no in-process backgrounding);
+iOS simulator 111 passed, 7 skipped; Android emulator 114 passed, 4 skipped; none failed.
+
+**Mutation checks** (each broke the code, ran the named suite, restored): all red — owner check,
+release from the element instead of `BoundRef`, no release on unmount, bind after effects, no hybrid
+condition, no type check, no cell retirement, `DirectView.Focus` returning `false`, walking `Parent`,
+delegating when only the layouts are Controls, letting `Neither` through, readiness of the scroll view
+only, no ancestry check, an unconditional weak-table removal, completing on any finish, no
+expected-finish count, no cleanup on a failed dispatch, not tracking the request, a throwing
+`OnNavigating` allowing, `OnNavigating` through `Current`, its exception escaping, a synchronous
+`OnNavigated`, a posted report's exception escaping, a posted report through `Current` without the
+unmount check, selection writes compared with the view, no baseline on a write, a synchronous flush
+per notification, reading the virtual view, posting from inside the apply, clearing the pending flag
+after dispatch, no observation after an input-type change, no posted direct baseline, focusing a
+direct view before it is ready, `IsRefreshing` outside the echo scope, no restore after a refresh, and
+loading the web source on every render. One equivalent mutant (deviation 6). A hanging mutant
+(`Neither` let through) first read green when its hung test host was killed; the bridge's headless
+awaits now time out, and it reads red.
+
+**Benchmark** (Mac Catalyst, `tests/Reactor.Maui.Benchmark`, one interleaved pair against `cc5fe28e`):
+total time within ±2% in every scenario except `UpdateOne` (−35%, a 60 ms scenario, noise);
+allocations +0.0–0.2%.
+
+**Open issues.**
+
+- On Android an input-type change leaves the Controls entry's cursor and moves the direct entry's to
+  the end (MAUI's mapping order differs for a Core view). Reported correctly either way.
+- Android can't keep the previous page when it cancels a reload or a back navigation (§2.7's table);
+  MAUI's own overloads can leave a superseded `ScrollToAsync` pending; both are MAUI behaviour to
+  file upstream.
+- The iOS simulator shut down twice between runs (environment); each rerun on a booted simulator was
+  green.
+- Not in 4c-1, as designed: `.Ref` on pages; cells MAUI drops without unbinding stay mounted until
+  the list unmounts; a discarded `ReactorPage` needs `Unmount()`; Windows (4g).
 
 ## 3. 4c-2: collections and items
 

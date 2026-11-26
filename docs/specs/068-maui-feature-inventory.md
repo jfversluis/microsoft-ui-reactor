@@ -42,19 +42,19 @@ their sources. It sets the order in §4.
 | Editor | ✅ | descriptor (3e) |
 | BoxView, CheckBox, SearchBar, Switch | 🧪 | descriptors (3e). Mount and echo are tested; updating and clearing their other properties (colors, placeholder, corner radius) is not |
 | Button, Slider, Stepper | ✅ | |
-| Entry | 🟡 | no `CursorPosition` / `SelectionLength`, which the direct `Entry` already supports (4c); its return type is untested (4c) |
+| Entry | ✅ | spec 070 §2.8 (4c-1): `CursorPosition` and `SelectionLength` with WinUI's semantics (written when the declaration changes, never restored) and WinUI's `OnSelectionChanged(selectedText, cursor, length)`, reported once per change from the platform's selection, on both registries; return type set, updated and cleared. Selection isn't controlled: a gate decision for WinUI parity (no port needs a controlled caret). Evidence: headless `EntrySelectionTests`, device `Entry_Selection_*` (with the per-platform characterization) and `Entry_ReturnType_*` |
 | RadioButton | 🟡 | text content only. Templated RadioButtons with view content (WeatherTwentyOne, PointOfSale) in 4c |
 | ActivityIndicator, ProgressBar | 🧪 | descriptors; headless tests only, no device fixture |
 | DatePicker, TimePicker | 🧪 | device fixtures only, no headless tests |
 | Label | 🟡 | no `FormattedText` spans (4c; PointOfSale uses 24) |
 | Picker | 🟡 | no item display binding (4c) |
 | Image, ImageButton | 🧪 | font and stream sources compare by reference, so a new instance per render reloads the image (4c: value equality) |
-| WebView | 🧪 | `Url`, `Html`, `OnNavigated` only. Missing: cancelling `Navigating`; reload, back and JavaScript evaluation, through refs (4c) |
+| WebView | ✅ | spec 070 §2.7 (4c-1): `OnNavigating` (cancel; not exactly once on Android), `OnNavigated` with MAUI's `WebNavigatedEventArgs` and its result, posted so `CanGoBack` is current; `Reload`, `GoBack`, `GoForward`, `EvaluateJavaScriptAsync` through a ref; `Url` is the requested source, loaded when it changes. Evidence: headless `WebViewTests`, device `WebView_*` with bundled pages on all three platforms |
 | GraphicsView, Border | 🧪 | |
 | CollectionView | 🟡 | keyed items, item templates, cell recycling, context and selection are tested. Header, footer, empty view, remaining-items threshold, grid and horizontal layouts, `ItemSpacing` and `ItemSizingStrategy` exist but are untested (4c; layouts and spacing are used by 3 ports). Grouping is missing (4c; no port). Item rendering must be able to show the selection state, which replaces the `Selected` visual state (4c) |
 | CarouselView | 🧪 | position, `Loop`, `PeekAreaInsets` and `ItemSpacing` exist, all untested; its position echo isn't characterized (spec 067 §14) |
 | SwipeView | 🟡 | left and right items of text and icon only. Missing: top and bottom items, custom item views, `SwipeMode`, `Threshold`, opening and closing from code (4c) |
-| ScrollView, RefreshView | 🧪 | ScrollView has headless tests only, RefreshView none. Scrolling from code waits for refs (4c): `scrollRef.Current?.ScrollToAsync(...)` |
+| ScrollView, RefreshView | ✅ | spec 070 §2.6 (4c-1): scrolling from code through a ref, and `ScrollToAsync(ElementRef<T>, …)` to an element in Controls or direct layouts (MAUI's own position math, a confirmed-completion task); orientation and scroll bars; RefreshView's user refresh reported once and a refusal restored. Evidence: headless `ScrollBridgeTests`, `ScrollAndRefreshTests`, device `ScrollView_*` (equivalent trees with UIKit insets) and `RefreshView_*` (a real pull on Android, the refresh control on iOS and Mac Catalyst) |
 | IndicatorView | ⬜ 4c | paired with CarouselView; no port |
 | ContentView | ⬜ 4c | as a plain single-child container |
 | Shapes (Ellipse, Line, Path, Polygon, Polyline, Rectangle, RoundRectangle) | ⬜ 4c | WeatherTwentyOne uses `Ellipse` |
@@ -111,7 +111,7 @@ their sources. It sets the order in §4.
 |---|---|---|
 | Tap | ✅ | `OnTap` |
 | Swipe, pan | 🧪 | modifiers, untested |
-| Focus and keyboard (`Completed`, return type, keyboard type, focusing from code) | 🟡 | keyboard type and return type exist. Focusing from code waits for refs (4c): WinUI's `UseElementRef<T>()` plus `.Ref(...)`, then `ref.Current?.Focus()` |
+| Focus and keyboard (`Completed`, return type, keyboard type, focusing from code) | ✅ | spec 070 §2.6 (4c-1): `ref.Current?.Focus()` on both registries (direct views focus through their handler), and WinUI's `UseElementFocus()`, because Android can't focus from a new tree's first effect. Evidence: headless `ElementRefTests`, `ElementFocusTests`, device `Ref_Focus*` |
 | Keyboard navigation (`TabIndex`, `IsTabStop`) | ⬜ 4e | |
 | Pinch, pointer (hover, press, move) | ⬜ 4e | WinUI: `OnPinch`, `OnPointerPressed/Moved/Entered/Exited` |
 | Drag and drop | ⬜ 4e | WinUI: `OnDragStart`, `OnDragEnter`, `OnDragOver`, `OnDrop` |
@@ -126,7 +126,7 @@ their sources. It sets the order in §4.
 | Accessibility (semantic description, hint, heading level; AutomationId) | 🧪 | modifiers; AutomationId is exercised by every device fixture, the semantic properties by none. Checked through UIA and Appium in phase 5 |
 | `AutomationProperties` (`IsInAccessibleTree`, `ExcludedWithChildren`) | ⬜ 4d | |
 | Window size and theme hooks | ✅ | `UseWindowSize`, `UseAppTheme` |
-| Element refs | ⬜ 4c | WinUI's `UseElementRef<T>()` and `.Ref(...)`, with `VisualElement` as the MAUI constraint. 4c decides whether `ElementRef<T>` moves to the shared core. Focus, scrolling, WebView commands and explicit animations use it |
+| Element refs | ✅ | spec 070 §2.2–2.5 (4c-1): WinUI's `UseElementRef<T>()`, `.Ref(...)` and `TypedElementRef.Create<T>()` in `Microsoft.UI.Reactor.Input`, with `T : IView` (a Controls-typed ref makes that element a Controls view); nothing moved to the core. Bound by the engine and released on every unmount and failure path; list cells release theirs when retired. Evidence: headless `ElementRefTests`, engine `RefBindingTests`, device `CollectionView_RefsInItemComponents_*` and the focus, scroll and WebView fixtures |
 | Behaviors (attached once per native view) | ⬜ 4f | the ports use CommunityToolkit's `IconTintColorBehavior`, `StatusBarBehavior`, `TextValidationBehavior` and `EventToCommandBehavior`. `.Set` runs after every update, so it would add a behavior each render; this needs a mount-only hook or a `.Behavior(...)` modifier |
 | Dependency injection (`UseService<T>`) | ⬜ 4f | reads the app's `IServiceProvider` (MAUI's `MauiContext.Services`). It complements `Context<T>` / `UseContext`, Reactor's tree-scoped injection, rather than replacing it. 4f decides whether WinUI gets the same hook, so shared components can call one API |
 | Reactor inside XAML (`ReactorView`) and XAML inside Reactor (`Native<TView>`) | ⬜ 4f | `ReactorPage` exists for page-level hosting. WinUI's host is `ReactorHostControl`; `ReactorView` follows MAUI's `*View` naming for the same role. WinUI has no general native-view element (only `InlineUI` inside RichTextBlock), so 4f decides whether `Native<T>` is a shared-core shape that WinUI also gets |
