@@ -26,7 +26,7 @@ public static class MauiHandlers
         .Register(new PickerHandler())
         .Register(new DatePickerHandler())
         .Register(new TimePickerHandler())
-        .Register(ControlDescriptors.RadioButton())
+        .Register(new RadioButtonHandler())
         .Register(new VStackHandler())
         .Register(new HStackHandler())
         .Register(new GridHandler())

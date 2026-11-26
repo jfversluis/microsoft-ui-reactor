@@ -80,7 +80,7 @@ public class LabelInlineTests
         Assert.Null(label.FormattedText);
 
         host.Render(Label(Run("rich")));
-        Assert.Equal("rich", label.FormattedText.Spans[0].Text);
+        Assert.Equal("rich", label.FormattedText!.Spans[0].Text);
 
         host.Render(Label("plain again"));
         Assert.Null(label.FormattedText);

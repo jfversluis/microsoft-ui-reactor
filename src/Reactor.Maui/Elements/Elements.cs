@@ -243,10 +243,27 @@ public sealed record TimePickerElement(TimeSpan Time, Action<TimeSpan>? OnTimeSe
     public string? Format { get; init; }
 }
 
-/// <summary>A controlled radio button. Buttons with the same <see cref="GroupName"/> are mutually exclusive.</summary>
+/// <summary>
+/// A controlled radio button. Buttons with the same <see cref="GroupName"/> on one page are mutually
+/// exclusive; unnamed buttons are grouped by the layout that holds them. Checking one reports its
+/// peers' unchecks too. Reactor groups them, on both renderers.
+/// </summary>
 public sealed record RadioButtonElement(string Content, bool IsChecked, Action<bool>? OnCheckedChanged = null) : TextViewElement
 {
     public string? GroupName { get; init; }
+
+    /// <summary>
+    /// Declarative content (WinUI's name), taking precedence over the text <c>Content</c>, which then
+    /// becomes the accessible name. Render the checked look from the declared <c>IsChecked</c>. Without
+    /// a text, set <c>.Semantics(description: …)</c>.
+    /// </summary>
+    public Element? ContentElement { get; init; }
+
+    /// <summary>
+    /// Whether a radio button with <see cref="ContentElement"/> shows MAUI's indicator next to it
+    /// (the default). <c>false</c> makes the content the whole button, as a card. Changing it remounts.
+    /// </summary>
+    public bool IsIndicatorVisible { get; init; } = true;
 }
 
 // ── Layout ──────────────────────────────────────────────────────────────────

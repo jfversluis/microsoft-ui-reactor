@@ -120,6 +120,13 @@ public static class Factories
     public static RadioButtonElement RadioButton(string content, bool isChecked, Action<bool>? onCheckedChanged = null, string? groupName = null) =>
         new(content, isChecked, onCheckedChanged) { GroupName = groupName };
 
+    /// <summary>A radio button with declarative content (WinUI's shape); set its accessible name with <c>.Semantics(description: …)</c>.</summary>
+    public static RadioButtonElement RadioButton(Element content, bool isChecked, Action<bool>? onCheckedChanged = null, string? groupName = null)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        return new("", isChecked, onCheckedChanged) { GroupName = groupName, ContentElement = content };
+    }
+
     // ── Layout ──────────────────────────────────────────────────────────────
 
     public static VStackElement VStack(params Element?[] children) => new(children);
