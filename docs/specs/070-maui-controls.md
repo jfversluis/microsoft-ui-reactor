@@ -2417,34 +2417,50 @@ behind every icon.
 
 #### 4.14.1 Characterization (device, `AuditCharacterization.cs`)
 
-Five fixtures, plain MAUI unless named, on Mac Catalyst 26.7 (idiom `Desktop`), the iOS 27 simulator
-(phone) and the Android 17 emulator (phone). "In-write" means raised before the property setter
-returned.
+Fixtures on plain MAUI unless named, on Mac Catalyst 26.7 (idiom `Desktop`), an iPad simulator
+("Reactor iPad", iPad Pro 13-inch (M4), iOS 27.2, idiom `Tablet`), the iPhone simulator (iOS 27.0) and
+the Android 17 emulator (phone). "In-write" means raised before the property setter returned.
 
-| | Mac Catalyst | iOS (phone) | Android (phone) |
+| | Mac Catalyst | iPad | iPhone, Android phone |
 |---|---|---|---|
-| Split mode per behavior | split for `Split` and `SplitOnPortrait` (`ShouldShowSplitMode` true, `CanChangeIsPresented` false, `FlyoutBehavior.Locked`); not for `Default`, `SplitOnLandscape`, `Popover`: `DeviceDisplay` reports **portrait** even for a wide window, so a default flyout never splits | never (phone) | never (phone) |
-| `IsPresented` at appear | split: `true`, already set when the behavior was assigned (MAUI's behavior-changed callback), so no `IsPresentedChanged` after the page appears; not split: `false` | `false` | `false` |
-| Write `false` while split | throws `InvalidOperationException` ("Can't change IsPresented when setting Split"); a second `false` then returns normally but the value stays `true` (the setter is stuck, as in 4c-2) | n/a | n/a |
-| Write `true` while split | no change, no event | n/a | n/a |
-| Writes while not split | `false`/`true`/`false` take effect; each `IsPresentedChanged` in-write; the flyout's frame moves on and off screen | same, in-write | same, in-write; the flyout panel at x 0 when open, −347 when closed |
-| Platform toggle (`Popover`) | the detail bar's toggle action: `IsPresentedChanged` synchronously inside the action, `true` then `false` | same | `DrawerLayout.OpenDrawer` / `CloseDrawer`: synchronously inside the call, `true` then `false` |
-| Window resized to 500×800 and back | no behavior changes split status; no events | n/a (can't resize) | n/a |
-| **Reactor `Flyout` today**, behavior unset | fine | fine | fine |
-| **Reactor `Flyout` today**, `Split` or `SplitOnPortrait` | **broken**: mount reports `true` to the app as input (raised by the behavior write in `Mount`, outside `Syncing`), the restore writes the declared `false`, MAUI throws, unhandled; the window's page never loads | fine (never split) | fine (never split) |
-| **Toolbar**: retain items A, B; rebuild to C, D; invoke the retained A, B (`IMenuItemController.Activate`, what the platform tap calls) | **ran C and D**; after a rebuild to E alone, old A ran E and old B nothing; the current item ran E | same | same |
+| Split mode per behavior | `Split`, `SplitOnPortrait`: split (`ShouldShowSplitMode` true, `CanChangeIsPresented` false, `FlyoutBehavior.Locked`). `Default`, `SplitOnLandscape`, `Popover`: never | the same, **in both orientations** | never |
+| Why landscape never splits | MAUI's Mac Catalyst display orientation is portrait for any window shape (a 2916×910 window included) | MAUI's iOS `DeviceDisplay` reads `UIApplication.StatusBarOrientation`, which is `Unknown` in this scene-based app in either orientation, so MAUI reports portrait: rotated to landscape (window 1376×1032, the scene `LandscapeRight`), `SplitOnLandscape` doesn't split and `SplitOnPortrait` stays split. Setting the device orientation through `UIDevice` changes nothing either | — |
+| `IsPresented` at appear | split: `true`, set inside the behavior's assignment (MAUI's behavior-changed callback), so no event after the page appears; otherwise `false` | the same | `false` |
+| Rotation (iPad; portrait → landscape → portrait, twice, each behavior) | — | split status never changes; no `IsPresentedChanged`; `IsPresented` unchanged; the flyout stays where it was | — |
+| Window resized (500×800 and back) | split status never changes; no events | — | — |
+| Write `false` while split | throws `InvalidOperationException` ("Can't change IsPresented when setting Split"); the setter is then stuck: later writes return normally and change nothing (as in 4c-2) | the same | — |
+| Write `true` while split | no change, no event | the same | — |
+| Writes while not split | each takes effect, its `IsPresentedChanged` in-write | the same | the same |
+| Platform toggle (`Popover`) | the detail bar's toggle action: `IsPresentedChanged` synchronously inside the action | the same | iPhone the same; Android `OpenDrawer`/`CloseDrawer`: inside the call |
+| Leaving split by a behavior change (`Split` → `Popover`) | MAUI sets `IsPresented = false` itself, its event in-write; the flyout hides; later writes work (`CanChangeIsPresented` stays false but only gates the legacy shim) | the same | n/a (never split; no events) |
+| Entering split by a behavior change (`Popover` → `Split`) | `IsPresented = true`, event in-write | the same | — |
+| After the throw, `Split` → `Popover` | `IsPresented` stays `true` while the flyout hides, and writing `false` changes nothing: **the property and the platform disagree for the page's lifetime** | the same | — |
+| **Reactor `Flyout` today**, `Split` or `SplitOnPortrait` | **broken**: mount reports `true` to the app as input (raised by the behavior write in `Mount`, outside `Syncing`), the restore writes the declared `false`, MAUI throws (unhandled), and the page never loads | the same | fine (never split) |
+| **Reactor `Flyout` today**, `SplitOnLandscape`, `Default`, rotated with `false` declared | — | fine: no reports, no errors (never split) | — |
+| **Toolbar**: retain MAUI items A, B; rebuild to C, D; invoke the retained A, B (`IMenuItemController.Activate`) | **ran C and D**; after a rebuild to E alone, old A ran E, old B nothing | the same | the same |
+| Toolbar on the platform | the navigation controller's top item (`NavigationHandlerParentingViewController`), `RightBarButtonItems` in reverse order ([B, A]); the page's own controller has none | the same | iPhone the same; Android the `MaterialToolbar`'s menu, in order |
+| Invoking a platform item | the current item's action runs its current callback once | the same | the same |
+| A retained platform item after a rebuild | MAUI disposed it (the bar button's handle is gone): it can't be invoked, so the stale path is the MAUI `ToolbarItem` an app or MAUI keeps (`Activate`), not the platform's | the same | the same (Android disposes the menu item) |
 
-Instrument notes: the iOS phone flyout's own view stays at x 0 whether presented or not (the detail
-slides over it), so "shown" on iOS must read the detail's frame; and the probe for platform bar items
-found none on iOS or Mac Catalyst (it read the page controller's `NavigationItem`; the items are on
-the navigation controller's top item, and Mac Catalyst may place them in the title bar). Both probes
-are fixed, with a positive control, before `FlyoutPage_IsPresented` and `ToolbarItems_Platform` rely on
-them. No iPad or Android tablet is available, so the only reachable split is Mac Catalyst's
-`Split`/`SplitOnPortrait`, and the only reachable transition into or out of split mode is a layout
-behavior change.
+**Probes, with positive controls.** `FlyoutShown` now hit-tests the window at the flyout content's
+center on iOS and Mac Catalyst (on an iPhone the flyout's view stays at x 0 and the detail slides over
+it, so a frame says nothing); the behaviors fixture asserts that the probe tells open from closed
+wherever the flyout can be toggled, and sees a split flyout as shown. `PlatformToolbar` reads the
+navigation controller's top item (iOS, Mac Catalyst) or the toolbar's menu (Android) and asserts it
+finds the declared titles.
 
-Both hard gates of §4.11 hold: every `IsPresentedChanged` a write causes is raised inside it, and a
-split flyout has no platform toggle (MAUI hides the toolbar button, `ShouldShowToolbarButton`).
+**Setup notes.** iPadOS 27 refuses programmatic rotation in windowed mode ("The current windowing mode
+does not allow for programmatic changes to interface orientation"), so the device-test app's iOS
+`Info.plist` declares `UIRequiresFullScreen` (an iPad-only key); rotation uses
+`UIWindowScene.RequestGeometryUpdate`. Android computes the orientation from the window's
+configuration, so **an Android tablet is the one device where rotation changes split mode**; a tablet
+emulator (`pixel_tablet`, API 37) was created but couldn't boot from this environment (QEMU's
+`mprotect` was denied, so the hypervisor never started), so that transition is uncharacterized and the
+AVD was deleted (§4.14.7).
+
+Both hard gates of §4.11 hold: every `IsPresentedChanged` a write causes, the behavior's included, is
+raised inside it; and a split flyout has no platform toggle (MAUI hides the toolbar button,
+`ShouldShowToolbarButton`).
 
 #### 4.14.2 Scope and a proposed split (4c-3b, 4c-3c)
 
@@ -2458,13 +2474,13 @@ The pending list holds 348 properties of 47 types. By mechanism:
 | C. Controlled values | `Text` (Editor, Entry, SearchBar), `IsChecked` (CheckBox, RadioButton), `IsToggled`, `Value` (Slider, Stepper), `SelectedIndex`, `Date`, `Time`, `CursorPosition`, `SelectionLength`, `IsRefreshing`, `IsPresented` | 15 | covered-by the echo tests (spec 067 §14), each claim listing its facets and its mutation evidence; a facet missing (Date and Time have no headless test) is written first |
 | E. Events | `OnClick`, `OnTextChanged`, `OnCompleted`, `OnToggled`, `OnValueChanged`, `OnDragCompleted`, `OnCheckedChanged`, `OnSearch`, `OnDateSelected`, `OnTimeSelected`, `OnSelectedIndexChanged`, Entry's `OnSelectionChanged`, `OnScrolled`, `OnRefresh`, `OnNavigating`, `OnNavigated`, `OnIsPresentedChanged`, toolbar `OnClick` | 23 | matrix event cases (callback 1, callback 2, unmount; earlier calls the positive control); a controlled value's change event is claimed with its echo test where that already proves report-once and nothing-after-unmount |
 | S. Structure | `Children`, `Content`, `ContentElement`, `Inlines`, `Items` (Picker), `Flyout`, `Detail`, `Drawable` (14), and `PageElement.ToolbarItems` (claimed by §4.14.4's tests) | 15 | covered-by the reconcile tests (set, replace keeping state, clear running cleanup), each listing its facets and mutation; a missing facet written first |
-| R. Rich text runs | `RichTextRun` (10), `RichTextHyperlink` (11) | 21 | a value-record variant of the matrix: the owner label is the native, the reader reads the span at the run's index; the "same native instance" step applies to the label, and whether the span is updated in place or rebuilt is recorded (not asserted to be either) |
+| R. Rich text runs | `RichTextRun` (10), `RichTextHyperlink` (11) | 21 | a value-record variant of the matrix: the owner label is the native, the reader reads the span at the run's index; the "same native instance" step applies to the label; in-place span updates are claimed from 4c-2's tests (accepted) |
 | X. Pages, navigation, Shell, dialogs, collections, swipe | Page (18 of 19), NavigationStack, Tabs, Shell and its six item types, ShellBackButton, Alert, ActionSheet, Prompt, CollectionView, ItemGroup, SwipeView, SwipeItemData | 137 | **4c-3c** (below) |
 | K. CarouselView | 8 | 8 | **4c-4**, which redesigns the element (§5); a matrix now would pin a design about to change |
 
 Groups T to R are 203 properties of 31 types (all the 🧪 rows' and the ✅ control and layout rows').
 
-**Proposed: 4c-3b takes T to R, the flyout's split mode and the toolbar identity fix; 4c-3c takes X.**
+**4c-3b takes T to R, the flyout's split mode and the toolbar identity fix; 4c-3c takes X** (accepted).
 Why:
 
 - **Size.** 4c-3a's census added 89 cases and needed four review rounds on top of the new API. T to R
@@ -2492,26 +2508,31 @@ its hash don't change.
    `true` while split is harmless but skipped too, so the rule is one condition.
 2. **The layout behavior is written first and inside `Syncing`**, in `Mount` (616) and `Update` (622):
    assigning `Split` makes MAUI set `IsPresented = true` inside that write (measured), which today is
-   reported as input. Ordering it before the `IsPresented` decision makes a render that changes the
-   behavior from `Split` to `Popover` with `IsPresented: false` leave split and then close the flyout in
-   the same render (the reachable transition on Mac Catalyst).
+   reported as input; leaving split by a behavior change makes MAUI set `false` inside the write
+   (measured). Ordering it before the `IsPresented` decision makes a render that changes the behavior
+   from `Split` to `Popover` leave split and then apply its declaration in the same render (MAUI's
+   `false` stands, unreported, or the declared `true` is written), the transition every non-phone
+   device can reach.
 3. **No report while split.** An `IsPresentedChanged` raised while `IsSplit` is true is MAUI's
    enforcement, not input (the user can't toggle a split flyout, measured: no toolbar button), so it
    is neither reported nor followed by `RestoreAfterEvent`. This reads state at notification time; it
    doesn't guess which write caused it.
-4. **Leaving split without a render** (a tablet rotating, a window resized where that changes the
-   orientation): MAUI leaves `IsPresented` as it was (true), so a declaration of `false` would be stale.
-   `ReactorFlyoutPage.OnSizeAllocated` compares `IsSplit` with its previous value and, on split → not
-   split, asks the handler to reapply the live declaration (a `WriteSuppressed` write, unreported).
-   Entering split by size needs nothing: MAUI doesn't touch `IsPresented` then, and rule 1 keeps the
-   next render from writing `false`. **Not reachable on any device available** (§4.14.1), so it is
-   tested headlessly only, through the seam below, and recorded as uncharacterized.
+4. **Leaving split without a render.** Measured (§4.14.1): with MAUI 11 it **can't happen on iOS, iPadOS
+   or Mac Catalyst**, whose split status depends only on the behavior (MAUI reads a portrait display
+   orientation on all three), so rotation and window resizing never change it. It can happen on an
+   Android tablet, whose orientation comes from the window's configuration; that is uncharacterized
+   (§4.14.7, question 1). Proposed: `ReactorFlyoutPage.OnSizeAllocated` compares `IsSplit` with its
+   previous value and, on split → not split, asks the handler to reapply the live declaration (a
+   `WriteSuppressed` write, unreported); entering split by size needs nothing (rule 1 keeps the next
+   render from writing `false`). It is platform-neutral and costs one comparison per allocation; its
+   headless test uses the seam below, and its device evidence is an Android tablet run.
 5. **Never trigger MAUI's throw**: it leaves the setter stuck for the page's lifetime. A `false`
    written through a ref while split still throws; the README says so.
 
 Documented in the README: in split mode the flyout is always shown, `IsPresented` and
-`OnIsPresentedChanged` do nothing, and which behaviors split where (Mac Catalyst: `Split` and
-`SplitOnPortrait`; tablets: per orientation; phones: never).
+`OnIsPresentedChanged` do nothing, and which behaviors split where with MAUI 11 (iPad and Mac Catalyst:
+`Split` and `SplitOnPortrait`, in any orientation, never the others; Android tablets: per orientation;
+phones: never).
 
 **Headless seam.** MAUI's `ShouldShowSplitMode` reads `DeviceInfo.Idiom` and the window's
 orientation. The tests either install a desktop `IDeviceInfo` (if MAUI exposes a way to, checked first)
@@ -2526,7 +2547,7 @@ seam, MAUI's own throw may not fire headlessly, so the "never writes" oracle is 
 | Behavior change in one render | `Split` → `Popover` with `false`: the flyout closes in that render, nothing reported; `Popover` → `Split`: opens, nothing reported | behavior written after the `IsPresented` decision |
 | Leaving split by size | the seam flips to not split and a size allocation follows: the declared `false` is written once, unreported; no write without the flip (positive control: the flip) | no reapply; reapply on every allocation |
 | Phone path (positive control) | not split: input reported once, refused restored, a declared change written unreported, nothing after unmount (the existing echo tests, rerun) | — |
-| `FlyoutPage_IsPresented` (device, both registries) | phones: opened through the platform (Android `OpenDrawer`, iOS the toggle action) and accepted, it stays open; refused, it closes (Android the drawer's state; iOS the detail's frame); a declared change opens it and reports nothing; nothing after unmount. Mac Catalyst: `Split` and `SplitOnPortrait` mount with `false` declared, no exception, nothing reported, the page loads and the flyout is on screen; a render declaring `true` then `false`, no exception; `Split` → `Popover` with `false` closes it, nothing reported | the headless mutations, on device (rule 2's and rule 1's) |
+| `FlyoutPage_IsPresented` (device, both registries) | phones: opened through the platform (Android `OpenDrawer`, iOS the toggle action) and accepted, it stays open; refused, it closes (Android the drawer's state; iOS the detail's frame); a declared change opens it and reports nothing; nothing after unmount. Mac Catalyst and the iPad (`222A93E8-ACFB-4F63-BB9F-9553F0E6A3EB`, a device-fixture target for the flyout fixtures from now on): `Split` and `SplitOnPortrait` mount with `false` declared, no exception, nothing reported, the page loads and the flyout is on screen; a render declaring `true` then `false`, no exception; `Split` → `Popover` with `false` closes it and with `true` keeps it open, nothing reported; on the iPad, the same in landscape, and a `SplitOnLandscape` flyout rotated both ways reports nothing and throws nothing | the headless mutations, on device (rule 2's and rule 1's) |
 
 #### 4.14.4 The toolbar's identity check
 
@@ -2541,7 +2562,7 @@ read the current callback.
 | Retired item (headless, both registries) | retain A, B; rebuild to C, D; activate the retained A, B: nothing runs; activate the new C: C runs once (positive control); rebuild to E: old A nothing, new E once | read only the index |
 | Callback-only render | the native items are the same instances, and activating one runs the new callback, not the old | rebuild on every render; capture the first callback |
 | Structure change | a changed text, icon, order or priority rebuilds; the declared order and each `Order` and `Priority` on the native items | compare one field fewer |
-| `ToolbarItems_Platform` (device) | the platform shows the items in order (iOS the top item's `RightBarButtonItems`, Mac Catalyst wherever the probe's positive control finds them, Android the toolbar's `Menu`); a callback-only render keeps the platform item; a removed item leaves the platform; invoking the platform item (its target action; Android `PerformIdentifierAction`) runs the current callback once; a retired native item invokes nothing | read only the index |
+| `ToolbarItems_Platform` (device) | the platform shows the items (iOS, iPad and Mac Catalyst the navigation controller's top item, whose `RightBarButtonItems` are in reverse order; Android the toolbar's `Menu`, in order), found by the probe's positive control; a callback-only render keeps the platform item; a removed item leaves the platform; invoking the platform item (its target action; Android `PerformIdentifierAction`) runs the current callback once; a retired MAUI item, kept and activated, invokes nothing (MAUI disposes the retired platform items, so they can't be invoked) | read only the index |
 
 #### 4.14.5 The 🧪 rows' device fixtures
 
@@ -2550,7 +2571,7 @@ platform, or rendering a property read can't show). Fixtures, each on both regis
 element is Controls on both: `ActivityIndicator_Platform` and `ProgressBar_Platform` (the direct views'
 remaps), `DirectToggleColors` (CheckBox and Switch direct color remaps; the platform properties read
 are characterized first, with a positive control per platform), `GraphicsView_Redraw`,
-`FlexLayout_Geometry`, `AbsoluteLayout_Geometry`, `FlyoutPage_IsPresented`, `ToolbarItems_Platform`.
+`FlexLayout_Geometry`, `AbsoluteLayout_Geometry`, `FlyoutPage_IsPresented`, `ToolbarItems_Platform`. The flyout fixtures also run on the iPad simulator (`run.sh ios 222A93E8-ACFB-4F63-BB9F-9553F0E6A3EB`), the only iOS device that splits.
 BoxView, SearchBar, DatePicker and TimePicker need none beyond their existing echo fixtures (the date
 and range in one render is added to the date picker's).
 
@@ -2568,20 +2589,33 @@ and range in one render is added to the date picker's).
 
 No pending claim of a T-to-R type may remain at 4c-3b's gate, so a find can't be deferred silently.
 
-#### 4.14.7 Open questions
+#### 4.14.7 Decisions and open questions
 
-1. **The split** into 4c-3b (T to R, 203 properties) and 4c-3c (X, 137), and CarouselView's 8 moved to
-   4c-4 with a phase label in the pending list.
-2. **Rule 4 (leaving split by size)** can't be characterized on the devices available. Build it with
-   headless coverage only, or leave it out and document that a rotated tablet keeps the flyout open until
-   the next render that changes `IsPresented`?
-3. **Split state isn't exposed.** An app can't learn that its flyout is split (a hook or a callback
-   would be new API). Proposed: not in 4c-3b; no port needs it.
-4. **Rich text runs** (group R): is "the label is the native, the span read by index" acceptable
-   evidence for value records, or should spans be required to update in place?
-5. **Fonts on the direct registry**: the direct views remap fonts through Reactor's code; group T
-   covers them headlessly through the stub handler. Proposed: no device fixture for fonts (4d's font
-   work brings its own), an exception to §4.8's criterion recorded in the claims.
+**Answered (design review of `8802e786`):**
+
+- **The split** into 4c-3b (T to R, 203 properties, the flyout and toolbar fixes), 4c-3c (X, 137) and
+  4c-4 (CarouselView's 8), with phase labels in the pending list: accepted.
+- **Split exit measured** rather than assumed: an iPad simulator was added (§4.14.1); it showed that on
+  iOS, iPadOS and Mac Catalyst only a behavior change enters or leaves split mode.
+- **Split state stays hidden**: no new API.
+- **Rich text runs**: the span read by index on the owner label is enough evidence, with mutation
+  evidence; in-place span updates are claimed from 4c-2's tests.
+- **Fonts on the direct registry**: headless only; device font coverage comes with 4d.
+
+**Open:**
+
+1. **Rule 4 on Android tablets.** It is the only device class where rotation changes split mode, and no
+   tablet emulator could be booted from this environment (§4.14.1). Options: (a) build rule 4 with its
+   headless test and run the flyout fixtures on an Android tablet booted outside this environment (for
+   example by the maintainer, given its serial) before the gate; (b) build it headless-only and record
+   it as uncharacterized; (c) leave it out and document that a rotated Android tablet keeps its flyout
+   as MAUI left it until a render changes `IsPresented`. Proposed: (a), falling back to (b).
+2. **Upstream (MAUI), to file with the 4c-2 issues**: on iOS and iPadOS, `DeviceDisplay`'s orientation
+   comes from `UIApplication.StatusBarOrientation`, `Unknown` in a scene-based app, so `SplitOnLandscape`
+   and `Default` never split on an iPad and `SplitOnPortrait` stays split in landscape; on Mac Catalyst
+   the display orientation is portrait whatever the window's shape; and a throwing
+   `OnIsPresentedPropertyChanging` leaves the setter stuck, after which the property and the platform
+   disagree (§4.14.1).
 
 ## 5. 4c-4: CarouselView and IndicatorView
 
