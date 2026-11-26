@@ -127,12 +127,21 @@ public static partial class Fixtures
             var (step, setStep) = UseState(0);
             SetStep = setStep;
             var rotate = UseMemo(() => new Shapes.RotateTransform(90, 50, 50));
+            var rotating = UseMemo(() =>
+            {
+                var style = new Style(typeof(Microsoft.Maui.Controls.Shapes.Path));
+                style.Setters.Add(new Setter { Property = Microsoft.Maui.Controls.Shapes.Path.RenderTransformProperty, Value = new Shapes.RotateTransform(90, 50, 50) });
+                return style;
+            });
+            var styled = Path2D("M 0,0 L 100,0 L 0,100 Z").Fill(Colors.Black).Size(100, 100).HorizontalOptions(LayoutOptions.Start).AutomationId("styled");
             return Stage(
                 Ellipse().Fill(step == 0 ? Colors.Blue : Colors.Green).Size(80, 60).HorizontalOptions(LayoutOptions.Start).AutomationId("ellipse"),
                 (step == 1 ? Rectangle().StrokeDashArray(1, 1) : Rectangle())
                     .Stroke(Colors.Red, 8).Size(160, 40).HorizontalOptions(LayoutOptions.Start).AutomationId("dashed"),
                 Path2D("M 0,0 L 100,0 L 0,100 Z").Fill(Colors.Black).Size(100, 100).HorizontalOptions(LayoutOptions.Start)
-                    .AutomationId("rotated") with { RenderTransform = step == 1 ? rotate : null });
+                    .AutomationId("rotated") with { RenderTransform = step == 1 ? rotate : null },
+                // The transform comes from a style; both declarations have none of their own.
+                step == 1 ? styled.Style(rotating) : styled);
         }
     }
 
@@ -160,6 +169,7 @@ public static partial class Fixtures
 
         var solid = TopEdge(Snapshot.Capture(await Sized(c, "dashed")));
         var original = Pattern(Snapshot.Capture(await Sized(c, "rotated")));
+        var styledOriginal = Pattern(Snapshot.Capture(await Sized(c, "styled")));
         Check(solid.Other == 0, $"a solid stroke covers the edge: {solid}");
 
         UpdatingShapes.SetStep!(1);
@@ -168,6 +178,8 @@ public static partial class Fixtures
         await c.Settle(250);
         var dashed = TopEdge(Snapshot.Capture(c.ById<IView>("dashed")));
         var rotated = Pattern(Snapshot.Capture(c.ById<IView>("rotated")));
+        var styledRotated = Pattern(Snapshot.Capture(c.ById<IView>("styled")));
+        Check(styledRotated != styledOriginal, $"the style's rotation is drawn: {styledOriginal} -> {styledRotated}");
         Check(dashed.Stroke > 0 && dashed.Other > 0, $"a dashed stroke alternates along the edge: {dashed}");
         Check(rotated != original, $"the rotation is drawn: {original} -> {rotated}");
 
@@ -175,6 +187,9 @@ public static partial class Fixtures
         await c.Settle(400);
         var cleared = TopEdge(Snapshot.Capture(c.ById<IView>("dashed")));
         var restored = Pattern(Snapshot.Capture(c.ById<IView>("rotated")));
+        var styledRestored = Pattern(Snapshot.Capture(c.ById<IView>("styled")));
+        Console.WriteLine($"# update in place: styled path {styledOriginal} -> {styledRotated} -> {styledRestored}");
+        Equal(styledOriginal, styledRestored, "removing the style that provided the transform draws the path untransformed");
         Console.WriteLine($"# update in place: dash solid {solid}, dashed {dashed}, cleared {cleared}; path {original} -> {rotated} -> {restored}");
         Check(cleared.Other == 0, $"clearing the dash array makes the stroke solid again: {cleared}");
         Equal(original, restored, "clearing the transform draws the path untransformed (MAUI would keep the rotation)");
