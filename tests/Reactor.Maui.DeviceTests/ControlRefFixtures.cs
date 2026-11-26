@@ -32,6 +32,7 @@ public static partial class Fixtures
             new($"Entry_Selection_Sequences [{r.Name}]", c => SelectionSequences(c, r.Create(), r.Name)),
             new($"Entry_ReturnType_ReachesThePlatform [{r.Name}]", c => ReturnTypeReachesThePlatform(c, r.Create())),
             new($"ScrollView_ScrollToAnElement_Superseded [{r.Name}]", c => ScrollToSuperseded(c, r.Create(), r.Name)),
+            new($"ScrollView_ScrollToAnElement_Interrupted [{r.Name}]", c => ScrollToInterrupted(c, r.Create(), r.Name)),
         }),
         new("ScrollView_ScrollToAnElement_ThroughNestedDirectLayouts [direct]", ScrollToNestedDirect),
         new("ScrollView_ScrollToAnElement_EquivalentTrees_WithInsets", ScrollToEquivalentTrees),
@@ -414,6 +415,44 @@ public static partial class Fixtures
         Note($"[{renderer}] superseded after {clock.ElapsedMilliseconds} ms");
     }
 
+    private static async Task ScrollToInterrupted(FixtureContext c, ElementHandlerRegistry registry, string renderer)
+    {
+        var far = TypedElementRef.Create<IView>();
+        c.Show(ScrollView(VStack(0, TallContent(40), Label("far").Ref(far).Height(40), TallContent(40)))
+            .AutomationId("scroll").Height(300), registry);
+        var scroll = (ReactorScrollView)await Loaded<IScrollView>(c, "scroll");
+        await c.WaitFor(() => far.Current is { Frame.Height: > 0 } && far.Current.Handler is not null, "the target to be laid out");
+        await c.Settle(100);
+        var bound = ScrollBridge.SettleBound;
+
+        // How long the platform animates a long scroll: the bound must lie above it.
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var whole = scroll.ScrollToAsync(far, ScrollToPosition.Start, true);
+        await c.WaitFor(() => whole.IsCompleted, "the animated scroll to complete", (int)bound.TotalMilliseconds + 2000);
+        var duration = clock.ElapsedMilliseconds;
+        Note($"[{renderer}] an animated scroll of {RefPlatform.ContentY(scroll, far.Current!):0} DIPs took {duration} ms; the bound is {bound.TotalMilliseconds:0} ms");
+        Equal(true, await whole, "the uninterrupted scroll is confirmed at its own finish");
+        Check(duration < bound.TotalMilliseconds, $"the animation ({duration} ms) ends within the bound ({bound.TotalMilliseconds:0} ms)");
+        await scroll.ScrollToAsync(0, 0, false);
+        await c.Settle(200);
+
+        // Interrupted the way a user's touch does: the task completes, by the scroll's own finish or
+        // by the bound, and it is true only if the scroll view is at the target then.
+        var finishes = scroll.FinishCount;
+        clock.Restart();
+        var interrupted = scroll.ScrollToAsync(far, ScrollToPosition.Start, true);
+        await Task.Delay(100);
+        var how = await RefPlatform.InterruptScroll(scroll);
+        await c.WaitFor(() => interrupted.IsCompleted, "the interrupted scroll to complete", (int)bound.TotalMilliseconds + 2000);
+        var elapsed = clock.ElapsedMilliseconds;
+        var result = await interrupted;
+        var at = RefPlatform.ScrollOffset(scroll).Y;
+        var target = RefPlatform.ContentY(scroll, far.Current!);
+        Note($"[{renderer}] interrupted through {how}: {scroll.FinishCount - finishes} finish(es), {(result ? "true" : "false")} after {elapsed} ms at {at:0} (target {target:0})");
+        Equal(Math.Abs(at - target) <= 1, result, "the result says whether the scroll view is at the target");
+        await c.Settle(300);
+    }
+
     // ── RefreshView ─────────────────────────────────────────────────────────
 
     private sealed record RefreshProps(bool Accept, List<string> Log);
@@ -497,9 +536,11 @@ public static partial class Fixtures
 
     private static async Task<MauiWebView> ShowPage1(FixtureContext c, WebLog log, ElementRef<MauiWebView> web)
     {
+        // Only a completion after this show counts: the log may already hold an earlier page 1's.
+        var before = log.Completions.Count;
         c.Show(Web("page1.html", log, web));
         await Loaded<IWebView>(c, "web");
-        await c.WaitFor(() => log.Completions.Contains("page1 Success"), "page 1 to load", 10000);
+        await c.WaitFor(() => log.Completions.Skip(before).Contains("page1 Success"), "page 1 to load", 10000);
         await WaitForJs(c, web, "document.title", "page1", "page 1's title", 5000);
         return web.Current!;
     }
@@ -550,6 +591,11 @@ public static partial class Fixtures
             var (attempts, completions) = (log.Attempts.Count, log.Completions.Count);
             await Js(web, "window.reactorMarker = 'kept'; 'ok'");
             await start();
+            // Waits for what the platform does rather than for a fixed time; then settles, so anything
+            // more it reports is seen too.
+            await c.WaitFor(() => log.Attempts.Skip(attempts).Contains(attempt), $"{name}: OnNavigating to be asked about {attempt}", 10000);
+            if (lateCompletion is not null)
+                await c.WaitFor(() => log.Completions.Skip(completions).Contains(lateCompletion), $"{name}: the late cancel's completion", 10000);
             await c.Settle(1200);
             var asked = log.Attempts.Skip(attempts).ToList();
             var done = log.Completions.Skip(completions).ToList();
@@ -566,6 +612,7 @@ public static partial class Fixtures
                 // A late cancel left another page: start the next case from page 2 again.
                 log.Refuse = _ => false;
                 c.Render(Web("page1.html", log, web));
+                await WaitForJs(c, web, "document.title", "page1", "page 1 again", 10000);
                 await Js(web, "location.href = 'page2.html'; 'ok'");
                 await WaitForJs(c, web, "document.title", "page2", "page 2 again", 10000);
                 log.Refuse = _ => true;

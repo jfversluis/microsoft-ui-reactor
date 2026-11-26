@@ -33,17 +33,42 @@ internal sealed class ReactorScrollView : MauiScrollView, IScrollView
 /// The scroll bridge's completion protocol (spec 070 §2.6.1): one outstanding request per scroll view,
 /// confirmed only by a finish at its target. A <see cref="ReactorScrollView"/> reports every finish; on
 /// any other scroll view the bridge sees only the finish that completes MAUI's task for its own
-/// request (an earlier request's late finish completes it too), so it checks the position then.
+/// request (an earlier request's late finish completes it too), so it checks the position then. A
+/// request whose finish never comes settles by position at <see cref="SettleBound"/>.
 /// </summary>
 internal sealed class ScrollBridge
 {
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<MauiScrollView, ScrollBridge> Foreign = new();
 
-    // How long after a stale finish (one an earlier request's animation produced) the bridge waits for
-    // its own before deciding the scroll ended elsewhere.
-    internal static readonly TimeSpan StaleFinishGrace = TimeSpan.FromMilliseconds(1500);
+    /// <summary>
+    /// A bound above the longest scroll the platform animates, after which a request whose finish never
+    /// came settles by position (spec 070 §2.15): MAUI's Android animator runs 1000 ms, scaled by the
+    /// system's animator duration scale; UIKit's animated <c>setContentOffset</c> was measured at about
+    /// 0.3 s. It isn't a guess at when the scroll ends: a request still settles at its own finish, and
+    /// one settled by the bound is <c>true</c> only if the scroll view is at its target then.
+    /// </summary>
+    internal static TimeSpan SettleBound
+    {
+        get
+        {
+#if ANDROID
+            return TimeSpan.FromMilliseconds(1000 * Math.Max(0, AnimatorDurationScale()) + 1000);
+#else
+            return TimeSpan.FromMilliseconds(1500);
+#endif
+        }
+    }
 
-    /// <summary>Schedules the stale-finish check; headless tests replace it.</summary>
+#if ANDROID
+    private static float AnimatorDurationScale()
+    {
+        if (OperatingSystem.IsAndroidVersionAtLeast(33)) return global::Android.Animation.ValueAnimator.DurationScale;
+        var resolver = global::Android.App.Application.Context.ContentResolver;
+        return resolver is null ? 1f : global::Android.Provider.Settings.Global.GetFloat(resolver, global::Android.Provider.Settings.Global.AnimatorDurationScale, 1f);
+    }
+#endif
+
+    /// <summary>Schedules the bound's check; headless tests replace it.</summary>
     internal static readonly AsyncLocal<Action<TimeSpan, Action>?> DelayOverride = new();
 
     private readonly MauiScrollView _scrollView;
@@ -51,7 +76,6 @@ internal sealed class ScrollBridge
     private TaskCompletionSource<bool>? _request;
     private Point _target;
     private int _expectedFinishes;
-    private int _finishes;
     private bool _dispatching;
     private ScrollToRequestedEventArgs? _parkedForReplay;
     private ScrollToRequestedEventArgs? _parkedForGeometry;
@@ -61,9 +85,11 @@ internal sealed class ScrollBridge
         _scrollView = scrollView;
         _observesFinishes = observesFinishes;
         scrollView.ScrollToRequested += (_, e) => OnRequested(e);
-        scrollView.HandlerChanged += (_, _) =>
+        // Before the old handler disconnects: MAUI replaces a connected handler with another, or with
+        // none, and either way the old one's animation will never report to the new one.
+        scrollView.HandlerChanging += (_, e) =>
         {
-            if (scrollView.Handler is null) Cancel();
+            if (e.OldHandler is not null) Cancel();
         };
     }
 
@@ -110,6 +136,14 @@ internal sealed class ScrollBridge
         {
             _dispatching = false;
         }
+        // However the platform ends the scroll (a user's drag can stop an animation without a finish),
+        // the task settles by the bound at the latest.
+        Delay(SettleBound, () =>
+        {
+            if (!ReferenceEquals(_request, request)) return;
+            _request = null;
+            request.TrySetResult(Matches(_scrollView, target));
+        });
         if (!_observesFinishes)
         {
             // MAUI completes the task of the newest request on the next finish, on the UI thread.
@@ -167,7 +201,6 @@ internal sealed class ScrollBridge
 
     public void OnFinished()
     {
-        _finishes++;
         _parkedForGeometry = null;
         if (_expectedFinishes > 0) _expectedFinishes--;
         if (_request is not { } request) return;
@@ -182,19 +215,9 @@ internal sealed class ScrollBridge
             _request = null;
             request.TrySetResult(false);
         }
-        else
-        {
-            // Most likely an earlier request's finish. If the bridge's own doesn't follow in time, the
-            // count was wrong (a request MAUI dropped): settle rather than wait forever.
-            var finishes = _finishes;
-            Delay(StaleFinishGrace, () =>
-            {
-                if (!ReferenceEquals(_request, request) || _finishes != finishes) return;
-                _expectedFinishes = 0;
-                _request = null;
-                request.TrySetResult(Matches(_scrollView, _target));
-            });
-        }
+        // Otherwise most likely an earlier request's finish: the request waits for its own, or for the
+        // bound armed when it started. The count is left as it is, so a late finish still arriving is
+        // absorbed rather than taken for the next request's.
     }
 
     private void Delay(TimeSpan delay, Action action)

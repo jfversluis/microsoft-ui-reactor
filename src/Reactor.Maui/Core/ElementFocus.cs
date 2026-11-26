@@ -15,6 +15,10 @@ internal sealed class ElementFocus
     // at growing intervals, up to this one, for as long as the request stands.
     private static readonly TimeSpan MaxPollInterval = TimeSpan.FromSeconds(1);
 
+    /// <summary>Headless tests: whether a platform view is in a window, and how a check is scheduled.</summary>
+    internal static readonly AsyncLocal<Func<object, bool>?> TestInWindow = new();
+    internal static readonly AsyncLocal<Action<TimeSpan, Action>?> DelayOverride = new();
+
     private readonly int _uiThreadId = Environment.CurrentManagedThreadId;
     private readonly Func<Action, bool>? _enqueue;
     private readonly IDispatcher? _dispatcher = Dispatcher.GetForCurrentThread();
@@ -84,6 +88,10 @@ internal sealed class ElementFocus
                 }
                 view.HandlerChanged += OnHandlerChanged;
                 return;
+            case { } platform when TestInWindow.Value is { } inWindow:
+                if (inWindow(platform)) view.Focus();
+                else Poll(view, generation, poll);
+                return;
 #if ANDROID
             case global::Android.Views.View { IsAttachedToWindow: false } native:
                 void OnAttached(object? sender, global::Android.Views.View.ViewAttachedToWindowEventArgs e)
@@ -95,14 +103,28 @@ internal sealed class ElementFocus
                 return;
 #elif IOS || MACCATALYST
             case global::UIKit.UIView { Window: null }:
-                var next = TimeSpan.FromTicks(Math.Min(poll.Ticks * 2, MaxPollInterval.Ticks));
-                _dispatcher?.DispatchDelayed(poll, () => WhenReady(view, generation, next));
+                Poll(view, generation, poll);
                 return;
 #endif
             default:
                 view.Focus();
                 return;
         }
+    }
+
+    // The scheduled check holds the request and the view weakly: a tree discarded without being
+    // unmounted, whose view never joins a window, can still be collected, and the checks stop then.
+    private void Poll(DirectView view, int generation, TimeSpan poll)
+    {
+        var next = TimeSpan.FromTicks(Math.Min(poll.Ticks * 2, MaxPollInterval.Ticks));
+        var self = new WeakReference<ElementFocus>(this);
+        var target = new WeakReference<DirectView>(view);
+        void Check()
+        {
+            if (self.TryGetTarget(out var focus) && target.TryGetTarget(out var v)) focus.WhenReady(v, generation, next);
+        }
+        if (DelayOverride.Value is { } delay) delay(poll, Check);
+        else _dispatcher?.DispatchDelayed(poll, Check);
     }
 
     private void Post(Action action)

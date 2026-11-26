@@ -194,6 +194,43 @@ public static class RefPlatform
         _ => null,
     };
 
+    /// <summary>
+    /// Interrupts a running scroll animation the way a user's touch does: on UIKit, a non-animated
+    /// offset write at the current position (what a drag's first touch does to an animation); on
+    /// Android, a short drag dispatched to the scroll view. Returns how.
+    /// </summary>
+    public static async Task<string> InterruptScroll(MauiScrollView scroll)
+    {
+        switch (Native(scroll))
+        {
+#if IOS || MACCATALYST
+            case UIKit.UIScrollView native:
+                native.SetContentOffset(native.ContentOffset, false);
+                await Task.Yield();
+                return "a non-animated SetContentOffset at the current offset";
+#elif ANDROID
+            case Android.Views.View native:
+                var x = native.Width / 2f;
+                var time = Android.OS.SystemClock.UptimeMillis();
+                void Send(Android.Views.MotionEventActions action, float y, long at)
+                {
+                    using var e = Android.Views.MotionEvent.Obtain(time, at, action, x, y, 0)!;
+                    native.DispatchTouchEvent(e);
+                }
+                Send(Android.Views.MotionEventActions.Down, 400, time);
+                for (var i = 1; i <= 5; i++)
+                {
+                    Send(Android.Views.MotionEventActions.Move, 400 + i * 30, time + i * 16);
+                    await Task.Delay(16);
+                }
+                Send(Android.Views.MotionEventActions.Up, 550, time + 6 * 16);
+                return "a dispatched touch drag";
+#endif
+            default:
+                throw new CheckFailedException("no platform scroll view");
+        }
+    }
+
     /// <summary>Starts a refresh the way a pull does; returns how, or null if the platform offers none.</summary>
     public static async Task<string?> PullToRefresh(IRefreshView refresh, FixtureContext c)
     {

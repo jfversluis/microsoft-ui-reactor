@@ -438,7 +438,44 @@ public class ScrollBridgeProtocolTests
     }
 
     [Fact]
-    public async Task AFinishTheBridgeWaitedForInVain_SettlesAfterTheGracePeriod()
+    public async Task ARequestWhoseFinishNeverComes_SettlesByPositionAtTheBound()
+    {
+        var (_, scroll, _) = Mount();
+        var delayed = new List<(TimeSpan Delay, Action Action)>();
+        ScrollBridge.DelayOverride.Value = (delay, action) => delayed.Add((delay, action));
+        try
+        {
+            // A user's drag stops the animation part way, and the platform reports no finish.
+            var interrupted = Request(scroll, 900);
+            scroll.SetScrolledPosition(0, 250);
+            var (bound, settle) = Assert.Single(delayed);
+            Assert.Equal(ScrollBridge.SettleBound, bound);
+            Assert.False(interrupted.IsCompleted);
+            settle();
+            Assert.False(await Completed(interrupted), "settled where the scroll stopped, not at the target");
+
+            // At its target when the bound passes, it is confirmed.
+            var arrived = Request(scroll, 600);
+            scroll.SetScrolledPosition(0, 600);
+            delayed[^1].Action();
+            Assert.True(await Completed(arrived));
+
+            // One that settled at its own finish isn't touched by its bound afterwards.
+            var finished = Request(scroll, 100);
+            Finish(scroll, 100);
+            Assert.True(await Completed(finished));
+            var next = Request(scroll, 700);
+            delayed[^2].Action();
+            Assert.False(next.IsCompleted, "an earlier request's bound doesn't settle a later request");
+        }
+        finally
+        {
+            ScrollBridge.DelayOverride.Value = static (_, _) => { };
+        }
+    }
+
+    [Fact]
+    public async Task ALateFinish_AfterItsRequestSettledByTheBound_DoesntSettleTheNextRequest()
     {
         var (_, scroll, _) = Mount();
         var delayed = new List<Action>();
@@ -446,19 +483,40 @@ public class ScrollBridgeProtocolTests
         try
         {
             _ = Request(scroll, 300);
-            var later = Request(scroll, 900);
-            // The first animation's finish arrives; the second's never does (MAUI dropped it).
+            var slow = Request(scroll, 900);
             Finish(scroll, 300);
-            Assert.False(later.IsCompleted);
+            // The second animation outlasts the bound (a large animator duration scale).
+            scroll.SetScrolledPosition(0, 600);
+            delayed[^1]();
+            Assert.False(await Completed(slow));
 
-            Assert.Single(delayed)();
-
-            Assert.False(await Completed(later));
+            var next = Request(scroll, 1200);
+            // The slow animation's finish arrives at last, at its own target.
+            Finish(scroll, 900);
+            Assert.False(next.IsCompleted, "the late finish was the settled request's, not the next one's");
+            Finish(scroll, 1200);
+            Assert.True(await Completed(next));
         }
         finally
         {
-            ScrollBridge.DelayOverride.Value = null;
+            ScrollBridge.DelayOverride.Value = static (_, _) => { };
         }
+    }
+
+    [Fact]
+    public async Task AHandlerReplacedByAnother_CompletesTheOutstandingRequestFalse()
+    {
+        var (_, scroll, _) = Mount();
+        var task = Request(scroll, 900);
+        // MAUI's SetHandler swaps a connected handler for another without a null in between.
+        scroll.Handler = new StubViewHandler();
+        Assert.False(await Completed(task));
+        Assert.Equal(0, Bridge(scroll).ExpectedFinishes);
+
+        // The first handler isn't cancelling anything: a request before any handler is replayed.
+        var replayed = Request(scroll, 400);
+        Finish(scroll, 400);
+        Assert.True(await Completed(replayed));
     }
 
     [Fact]
@@ -498,6 +556,7 @@ public class ForeignScrollViewTests
         ((IView)scroll).Arrange(new Rect(0, 0, 300, 400));
         scroll.Content.Handler = new StubViewHandler();
         ((IView)scroll.Content).Arrange(new Rect(0, 0, 300, 2000));
+        ScrollBridge.DelayOverride.Value = static (_, _) => { };
         return (scroll, handler);
     }
 
@@ -538,6 +597,11 @@ public class ForeignScrollViewTests
         scroll.Handler = null;
         Assert.False(await Completed(second));
 
+        scroll.Handler = new StubViewHandler();
+        var third = Request(scroll, 300);
+        scroll.Handler = new StubViewHandler();
+        Assert.False(await Completed(third), "a handler replaced by another");
+
         var failed = ScrollBridge.For(scroll).Start(new Point(0, 1), () => throw new InvalidOperationException("boom"));
         Assert.False(await Completed(failed));
     }
@@ -545,6 +609,7 @@ public class ForeignScrollViewTests
     [Fact]
     public async Task TheExtension_ScrollsAForeignScrollView_ToAReactorTarget()
     {
+        ScrollBridge.DelayOverride.Value = static (_, _) => { };
         var target = TypedElementRef.Create<IView>();
         var host = new TestHost(MauiHandlers.CreateRegistry()).Render(VStack(Label("top"), Label("target").Ref(target)));
         var scroll = new MauiScrollView { Content = (View)host.RootView! };

@@ -739,6 +739,76 @@ public class ElementFocusTests
     }
 
     [Fact]
+    public void APendingRequestForAViewThatNeverJoinsAWindow_DoesntKeepItsTreeAlive()
+    {
+        var scheduled = new List<Action>();
+        ElementFocus.DelayOverride.Value = (_, check) => scheduled.Add(check);
+        ElementFocus.TestInWindow.Value = _ => false;
+        try
+        {
+            var (entry, focus) = RequestAndDiscard();
+            // Not checked between collections: a TryGetTarget here would keep its result on this frame.
+            for (var i = 0; i < 3; i++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+
+            Assert.NotEmpty(scheduled);
+            Assert.False(entry.TryGetTarget(out _), "the scheduled check doesn't keep the view alive");
+            Assert.False(focus.TryGetTarget(out _), "nor the request");
+            var before = scheduled.Count;
+            scheduled[^1]();
+            Assert.Equal(before, scheduled.Count);
+        }
+        finally
+        {
+            ElementFocus.DelayOverride.Value = null;
+            ElementFocus.TestInWindow.Value = null;
+        }
+    }
+
+    // A tree with a pending request, waiting for a window, discarded without an unmount.
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static (WeakReference<DirectEntry> Entry, WeakReference<Action> Focus) RequestAndDiscard()
+    {
+        var (host, seen, first, _) = Mount();
+        seen[0].Request();
+        first.Handler = new StubViewHandler();
+        host.Scheduler.Drain();
+        Assert.DoesNotContain(((StubViewHandler)first.Handler).Commands, c => c.Command == nameof(IView.Focus));
+        return (new(first), new(seen[0].Request));
+    }
+
+    [Fact]
+    public void AViewThatJoinsAWindowLater_IsFocusedByTheCheck()
+    {
+        var scheduled = new List<Action>();
+        var inWindow = false;
+        ElementFocus.DelayOverride.Value = (_, check) => scheduled.Add(check);
+        ElementFocus.TestInWindow.Value = _ => inWindow;
+        try
+        {
+            var (host, seen, first, _) = Mount();
+            seen[0].Request();
+            var handler = new StubViewHandler();
+            first.Handler = handler;
+            host.Scheduler.Drain();
+            Assert.False(Focused(handler));
+            scheduled[^1]();
+            Assert.False(Focused(handler));
+            inWindow = true;
+            scheduled[^1]();
+            Assert.True(Focused(handler));
+        }
+        finally
+        {
+            ElementFocus.DelayOverride.Value = null;
+            ElementFocus.TestInWindow.Value = null;
+        }
+    }
+
+    [Fact]
     public void ARequestFromAnotherThread_RunsOnTheRendersThread()
     {
         var (host, seen, first, _) = Mount();
