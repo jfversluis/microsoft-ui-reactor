@@ -88,8 +88,20 @@ internal sealed class MauiDialogPlatform : IDialogPlatform
     {
 #if IOS || MACCATALYST
         // The alerts already on screen aren't the queue's: only its own alert holds the next one back.
+        // Which alert is its own is settled as soon as MAUI has presented it (a posted turn on the main
+        // thread), before any answer, so an alert the answer's callback opens is never taken for it.
         if (presenter.Window is { } window)
-            Tracking.GetOrCreateValue(window).Before = [.. AlertsIn(window).Select(static a => a.Handle)];
+        {
+            var tracking = Tracking.GetOrCreateValue(window);
+            tracking.Begin(window, content);
+            var shown = Show(presenter, content);
+            tracking.CaptureSoon();
+            return shown.ContinueWith(t =>
+            {
+                tracking.CaptureNow();
+                return t.GetAwaiter().GetResult();
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
 #endif
         return Show(presenter, content);
     }
@@ -122,21 +134,90 @@ internal sealed class MauiDialogPlatform : IDialogPlatform
         // The queue's own last alert, until UIKit has finished dismissing it (it is in the window's
         // presentation chain until then). An alert the app or the system shows outside the queue never
         // holds a dialog back: MAUI presents the next one above it.
-        if (Tracking.TryGetValue(window, out var tracking))
-        {
-            foreach (var own in tracking.Own)
-                if (own.TryGetTarget(out var alert) && alert.PresentingViewController is not null) return true;
-            tracking.Own.Clear();
-        }
+        if (Tracking.TryGetValue(window, out var tracking)) return tracking.IsOwnShown();
 #endif
         return false;
     }
 
 #if IOS || MACCATALYST
+    /// <summary>The queue's own alert in one window, from its presentation until UIKit has dismissed it.</summary>
     private sealed class AlertTracking
     {
-        public HashSet<IntPtr> Before = [];
-        public readonly List<WeakReference<UIKit.UIAlertController>> Own = [];
+        private const int CaptureFrames = 60;
+
+        private WeakReference<Window>? _window;
+        private DialogContent? _content;
+        private HashSet<IntPtr> _before = [];
+        private bool _capturing;
+        private int _attempts;
+        private int _generation;
+
+        // Strong references: a collected managed wrapper must not lose an alert UIKit still presents.
+        // Released once its dismissal has been observed.
+        private readonly List<UIKit.UIAlertController> _own = [];
+
+        public void Begin(Window window, DialogContent content)
+        {
+            _window = new(window);
+            _content = content;
+            _before = [.. AlertsIn(window).Select(static a => a.Handle)];
+            _own.Clear();
+            _capturing = true;
+            _attempts = 0;
+            _generation++;
+        }
+
+        /// <summary>Settles which alert is the queue's on the main thread turn after MAUI's own presentation turn.</summary>
+        public void CaptureSoon() => CaptureSoon(_generation);
+
+        private void CaptureSoon(int generation)
+        {
+            if (generation != _generation) return;
+            if (_window?.TryGetTarget(out var window) is not true || window.Handler?.PlatformView is not UIKit.UIWindow platformWindow)
+            {
+                _capturing = false;
+                return;
+            }
+            // MAUI presents through BeginInvokeOnMainThread: the same FIFO queue runs this right after it.
+            platformWindow.BeginInvokeOnMainThread(() =>
+            {
+                if (generation != _generation) return;
+                CaptureNow();
+                if (_capturing && ++_attempts < CaptureFrames && window.Dispatcher is { } dispatcher
+                    && !dispatcher.DispatchDelayed(Frame, () => CaptureSoon(generation)))
+                    _capturing = false;
+            });
+        }
+
+        /// <summary>
+        /// Takes the alerts that appeared since the presentation began, preferring the one showing the
+        /// request's title. A no-op once settled, so the answer (which runs this before any callback) can't
+        /// take an alert presented after the queue's own.
+        /// </summary>
+        public void CaptureNow()
+        {
+            if (!_capturing || _window?.TryGetTarget(out var window) is not true) return;
+            var added = AlertsIn(window).Where(a => !_before.Contains(a.Handle)).ToList();
+            if (added.Count == 0) return;
+            var title = _content switch
+            {
+                AlertContent alert => alert.Title,
+                ActionSheetContent sheet => sheet.Title,
+                PromptContent prompt => prompt.Title,
+                _ => null,
+            };
+            var matching = added.Where(a => (a.Title ?? "") == (title ?? "")).ToList();
+            _own.AddRange(matching.Count > 0 ? matching : added);
+            _capturing = false;
+        }
+
+        public bool IsOwnShown()
+        {
+            foreach (var alert in _own)
+                if (alert.PresentingViewController is not null) return true;
+            _own.Clear();
+            return false;
+        }
     }
 
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Window, AlertTracking> Tracking = new();
@@ -151,15 +232,6 @@ internal sealed class MauiDialogPlatform : IDialogPlatform
 
     public void AfterAnswer(Window window, Action next)
     {
-#if IOS || MACCATALYST
-        // The answered alert, if UIKit is still dismissing it: the alerts that appeared since it was presented.
-        if (Tracking.TryGetValue(window, out var tracking))
-        {
-            tracking.Own.Clear();
-            foreach (var alert in AlertsIn(window))
-                if (!tracking.Before.Contains(alert.Handle)) tracking.Own.Add(new(alert));
-        }
-#endif
 #if ANDROID
         // AppCompat's AlertDialog runs a button's callback from one posted message and posts its
         // dismissal right after (a list row's click dismisses synchronously after its callback), so a

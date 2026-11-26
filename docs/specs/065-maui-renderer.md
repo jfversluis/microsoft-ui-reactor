@@ -305,7 +305,7 @@ refreshed and unsubscribed, found late, left when a hosted page leaves its windo
 running before the teardown, with its errors held until after it; `ModalPresentationStyle` written
 before the modal is presented; and the README snippets.
 
-**Device tier** (`tests/Reactor.Maui.DeviceTests`, 90 fixtures; platform no-ops report TAP's `# SKIP`). All pass on Mac Catalyst (macOS 26,
+**Device tier** (`tests/Reactor.Maui.DeviceTests`, 92 fixtures; platform no-ops report TAP's `# SKIP`). All pass on Mac Catalyst (macOS 26,
 Apple silicon), an iPhone 18 Pro simulator (iOS 27) and the Android API 37 emulator; the 25 earlier
 ones also ran on a Pixel 10 (Android 16). They check what the
 native views show, not the virtual tree:
@@ -359,7 +359,8 @@ native views show, not the virtual tree:
   when the next is presented); a dialog requested during a push shown only once it has finished; a
   dialog on a modal opened after an earlier dialog shown on it at once; a dialog requested from a
   background thread; an alert shown outside the queue not holding a Reactor dialog back; and on iOS
-  and Mac Catalyst, an answer arriving before its alert has gone holding the next dialog until it has. On Android: the back key reaching a `UseSystemBackButton` handler before a
+  and Mac Catalyst, an answer arriving before its alert has gone holding the next dialog until it has
+  (also after a forced collection), and an alert an `OnClosed` opens not taken for the queue's own. On Android: the back key reaching a `UseSystemBackButton` handler before a
   `NavigationHost`, at the root (handled, and unhandled reaching the platform's default), a real back
   key on a modal (the modal's handler, then the root's, then MAUI popping it) and in a Shell (the
   handler once, before the Shell's guarded back), the handle overload consuming a back the guard refuses, and Reactor's callback enabled only with a handler on

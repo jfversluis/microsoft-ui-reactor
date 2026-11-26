@@ -843,11 +843,18 @@ modals. Other platforms ignore it, and it is not applied on Mac Catalyst (§5.6)
   the answer arrives inside that callback, and shows the next dialog from a turn it posts then: after
   the dismissal. Nothing waits on the window focus, so an earlier dialog never delays a later one (a
   MAUI modal, itself a focused dialog window on Android, shows the next dialog promptly). On iOS and
-  Mac Catalyst the barrier waits only for the queue's own last alert: the alerts that appeared in the
-  window's presentation chain between its presentation and its answer, until each has left the chain
-  (checked once per frame, `DispatchDelayed(16 ms)`). It used to wait for any alert in the chain, so an
-  alert the app showed outside the queue (or one that never went) held every Reactor dialog back
-  forever; that was a product bug, fixed in the CI round. UIKit's tap runs an action's handler only
+  Mac Catalyst the barrier waits only for the queue's own last alert, until it has left the window's
+  presentation chain (checked once per frame, `DispatchDelayed(16 ms)`). Which alert is the queue's is
+  settled right after MAUI presents it: MAUI presents from a `BeginInvokeOnMainThread` turn, and the
+  queue's capture runs in the turn it posts on that same FIFO queue right after (retried per frame if
+  the alert isn't in the chain yet, and once more inside the answer's continuation, before any
+  callback); it is the alert that appeared since the presentation began, preferring the one with the
+  request's title. So an alert the answer's own callback (an `OnClosed`) opens is never taken for the
+  queue's. The queue holds its alert's `UIAlertController` strongly until it has seen it leave the
+  chain: a weak managed wrapper could be collected while UIKit still presents the native alert, which
+  would have released the barrier early. It used to wait for any alert in the chain, so an alert the
+  app showed outside the queue (or one that never went) held every Reactor dialog back forever; that
+  was a product bug, fixed in the CI round. UIKit's tap runs an action's handler only
   once the alert has gone (iOS 27), so for a tap the barrier is already met when the answer arrives;
   it matters for an answer that arrives earlier, which a fixture produces on purpose.
 - **A navigation transition is one of Reactor's navigators running**: the window page's navigation

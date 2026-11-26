@@ -29,6 +29,8 @@ public static partial class Fixtures
         new("Dialogs_RequestedFromABackgroundThread_IsShownOnce", ClosingDialogs(DialogFromABackgroundThread)),
         new("Dialogs_AnAlertOutsideTheQueue_DoesNotHoldReactorsDialogsBack", ClosingDialogs(DialogOverAForeignAlert)),
         new("Dialogs_AnAnswerArrivingBeforeTheAlertHasGone_HoldsTheNextDialog", ClosingDialogs(DialogAnsweredBeforeItHasGone)),
+        new("Dialogs_TheQueuesOwnAlert_HoldsTheNextDialog_AfterACollection", ClosingDialogs(DialogOwnAlertAfterACollection)),
+        new("Dialogs_AnAlertOnClosedOpens_IsNotTakenForTheQueuesOwn", ClosingDialogs(DialogOpenedByOnClosed)),
         new("SystemBack_HandlerRunsBeforeTheNavigationHost", BackBeforeHost),
         new("SystemBack_AtTheRoot_AHandlerKeepsTheApp_AndWithoutOneTheDefaultRuns", BackAtTheRoot),
         new("SystemBack_HandleOverload_ConsumesABackTheGuardRefuses", BackHandleOverload),
@@ -285,21 +287,102 @@ public static partial class Fixtures
 #endif
     }
 
+    // The queue's own alert holds the next dialog for as long as UIKit presents it, even once the
+    // managed wrappers of that alert have been collected.
+    private static async Task DialogOwnAlertAfterACollection(FixtureContext c)
+    {
+#if IOS || MACCATALYST
+        var dialogs = await ShowDialogs(c);
+        var first = dialogs.Alert("Own", null, "Yes", "No");
+        var second = dialogs.Alert("Next", null, "Yes", "No");
+        await c.WaitFor(() => NativeDialogs.IsReady(c.Window, "Own"), "the queue's dialog", NativeDialogs.Timeout);
+        NativeDialogs.AnswerWithoutDismissing(c.Window, "Yes");
+        Equal(true, await first.WaitAsync(TimeSpan.FromSeconds(5)), "the first answer");
+        await Collected(c);
+        Equal(1, NativeDialogs.Count(c.Window), $"the answered alert is still presented: {NativeDialogs.Describe(c.Window)}");
+        Check(MauiDialogPlatform.Instance.IsDialogShown(c.Window), "the barrier still sees the queue's own alert after a collection");
+        await Task.Delay(300);
+        Equal(1, NativeDialogs.Count(c.Window), $"the next dialog is held: {NativeDialogs.Describe(c.Window)}");
+        await NativeDialogs.Dismiss(c.Window, "Own");
+        await c.WaitFor(() => NativeDialogs.IsReady(c.Window, "Next"), "the next dialog once the first has gone", NativeDialogs.Timeout);
+        await NativeDialogs.Answer(c.Window, "No");
+        Equal(false, await second.WaitAsync(TimeSpan.FromSeconds(5)), "the next answer");
+#else
+        await Task.CompletedTask;
+        throw new SkipException("Android's barrier is the posted turn, checked by Dialogs_TwoQueued_AreNeverShownAtOnce");
+#endif
+    }
+
+    private static async Task Collected(FixtureContext c)
+    {
+        for (var i = 0; i < 4; i++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            await c.Settle();
+        }
+    }
+
+    private sealed record ForeignOnClosedProps(Action<Dialogs> Report, Action OnClosed);
+
+    private sealed class ForeignOnClosedPage : Component<ForeignOnClosedProps>
+    {
+        public override Element Render()
+        {
+            var (open, setOpen) = UseState(true);
+            Props.Report(UseDialogs());
+            return Page("foreign-on-closed", VStack(
+                Label("foreign-on-closed"),
+                Alert("Declared", null, "OK", "Cancel") with
+                {
+                    IsOpen = open,
+                    OnClosed = _ =>
+                    {
+                        Props.OnClosed();
+                        setOpen(false);
+                    },
+                }));
+        }
+    }
+
+    // An alert the answer's own callback opens isn't the queue's: it doesn't hold Reactor's next dialog,
+    // while Reactor's own alert, shown above it, still does.
+    private static async Task DialogOpenedByOnClosed(FixtureContext c)
+    {
+#if IOS || MACCATALYST
+        Dialogs? dialogs = null;
+        c.Show(Component<ForeignOnClosedPage, ForeignOnClosedProps>(new(d => dialogs = d, () => NativeDialogs.PresentForeign(c.Window, "Foreign"))));
+        await LoadedPage<ContentPage>(c);
+        await c.WaitFor(() => NativeDialogs.IsReady(c.Window, "Declared"), "the declared alert", NativeDialogs.Timeout);
+        var next = dialogs!.Alert("Next", null, "Yes", "No");
+        var third = dialogs.Alert("Third", null, "Yes", "No");
+        await NativeDialogs.Answer(c.Window, "OK");
+        await c.WaitFor(() => NativeDialogs.IsReady(c.Window, "Foreign"), "the alert OnClosed opened", NativeDialogs.Timeout);
+        await c.WaitFor(() => NativeDialogs.IsReady(c.Window, "Next"), "Reactor's next dialog, above the alert OnClosed opened", NativeDialogs.Timeout);
+        NativeDialogs.AnswerWithoutDismissing(c.Window, "Yes");
+        Equal(true, await next.WaitAsync(TimeSpan.FromSeconds(5)), "the next answer");
+        await Collected(c);
+        await Task.Delay(300);
+        Check(!NativeDialogs.IsReady(c.Window, "Third"), $"Reactor's own alert holds the third dialog: {NativeDialogs.Describe(c.Window)}");
+        Equal(2, NativeDialogs.Count(c.Window), $"the foreign alert and Reactor's answered one: {NativeDialogs.Describe(c.Window)}");
+        await NativeDialogs.Dismiss(c.Window, "Next");
+        await c.WaitFor(() => NativeDialogs.IsReady(c.Window, "Third"), "the third dialog once Reactor's has gone", NativeDialogs.Timeout);
+        await NativeDialogs.Answer(c.Window, "No");
+        Equal(false, await third.WaitAsync(TimeSpan.FromSeconds(5)), "the third answer");
+        Check(await NativeDialogs.CloseAll(c.Window), $"the foreign alert closed: {NativeDialogs.Describe(c.Window)}");
+#else
+        await Task.CompletedTask;
+        throw new SkipException("Android's barrier is the posted turn: no alert is tracked as the queue's own");
+#endif
+    }
+
     // An alert shown outside Reactor's queue (by the app through UIKit or Android directly, or by the
     // system) never holds Reactor's dialogs back: they show above it.
     private static async Task DialogOverAForeignAlert(FixtureContext c)
     {
         var dialogs = await ShowDialogs(c);
-#if IOS || MACCATALYST
-        var top = (c.Window.Handler?.PlatformView as UIKit.UIWindow)?.RootViewController ?? throw new CheckFailedException("no root view controller");
-        while (top.PresentedViewController is { } presented) top = presented;
-        var foreign = UIKit.UIAlertController.Create("Foreign", "Not Reactor's", UIKit.UIAlertControllerStyle.Alert);
-        foreign.AddAction(UIKit.UIAlertAction.Create("Dismiss", UIKit.UIAlertActionStyle.Cancel, null));
-        top.PresentViewController(foreign, true, null);
-#elif ANDROID
-        new AndroidX.AppCompat.App.AlertDialog.Builder(Microsoft.Maui.ApplicationModel.Platform.CurrentActivity!)
-            .SetTitle("Foreign")!.SetMessage("Not Reactor's")!.SetNegativeButton("Dismiss", (_, _) => { })!.Create()!.Show();
-#endif
+        NativeDialogs.PresentForeign(c.Window, "Foreign");
         await c.WaitFor(() => NativeDialogs.IsReady(c.Window, "Foreign"), "the foreign alert", NativeDialogs.Timeout);
         var answer = dialogs.Alert("Reactor's", null, "Yes", "No");
         await c.WaitFor(() => NativeDialogs.IsReady(c.Window, "Reactor's"), "Reactor's dialog above the foreign one", NativeDialogs.Timeout);

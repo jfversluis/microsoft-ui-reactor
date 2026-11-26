@@ -100,6 +100,45 @@ public static class NativeDialogs
 #endif
     }
 
+#if IOS || MACCATALYST
+    /// <summary>
+    /// Runs the action <paramref name="button"/> of the top alert without dismissing it: an answer the
+    /// app has had while UIKit still presents the alert.
+    /// </summary>
+    public static void AnswerWithoutDismissing(Window window, string button)
+    {
+        var alert = Alerts(window).LastOrDefault(a => !a.IsBeingDismissed)
+            ?? throw new CheckFailedException("no alert controller on screen");
+        var action = alert.Actions.FirstOrDefault(a => a.Title == button)
+            ?? throw new CheckFailedException($"the alert has no '{button}' action: {Describe(window)}");
+        RunHandler(action);
+    }
+
+    /// <summary>Dismisses the alert titled <paramref name="title"/> (and only it) and waits until it has gone.</summary>
+    public static async Task Dismiss(Window window, string title)
+    {
+        var alert = Alerts(window).LastOrDefault(a => a.Title == title)
+            ?? throw new CheckFailedException($"no alert titled '{title}': {Describe(window)}");
+        alert.PresentingViewController?.DismissViewController(true, null);
+        await Gone(window, alert, $"the alert '{title}' dismissed");
+    }
+
+    /// <summary>Presents an alert outside Reactor's queue, as the app or the system would, above what is shown.</summary>
+    public static void PresentForeign(Window window, string title)
+    {
+        var top = (window.Handler?.PlatformView as UIWindow)?.RootViewController ?? throw new CheckFailedException("no root view controller");
+        while (top.PresentedViewController is { IsBeingDismissed: false } presented) top = presented;
+        var foreign = UIAlertController.Create(title, "Not Reactor's", UIAlertControllerStyle.Alert);
+        foreign.AddAction(UIAlertAction.Create("Dismiss", UIAlertActionStyle.Cancel, null));
+        top.PresentViewController(foreign, true, null);
+    }
+#elif ANDROID
+    /// <summary>Shows an alert outside Reactor's queue, as the app or the system would.</summary>
+    public static void PresentForeign(Window window, string title) =>
+        new AndroidX.AppCompat.App.AlertDialog.Builder(Microsoft.Maui.ApplicationModel.Platform.CurrentActivity!)
+            .SetTitle(title)!.SetMessage("Not Reactor's")!.SetNegativeButton("Dismiss", (_, _) => { })!.Create()!.Show();
+#endif
+
     /// <summary>
     /// Closes every native dialog still on screen (through its cancel button, else by dismissing it),
     /// waiting until each has gone, so a failed fixture can't leave one that blocks the next fixture's
