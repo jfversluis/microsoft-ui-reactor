@@ -1,3 +1,4 @@
+using Microsoft.UI.Reactor.Core.Diagnostics;
 using Microsoft.UI.Reactor.Maui.Hosting;
 
 namespace Microsoft.UI.Reactor.Maui;
@@ -20,7 +21,8 @@ internal sealed record PromptContent(
 internal sealed class DialogRequest(
     Func<DialogContent> content, Action<object?> answered, Action<Exception> failed, Action cancelled, Func<bool>? isStale = null)
 {
-    private bool _settled;
+    // 0 until settled; settling can race between the dispatcher and a thread whose dispatch was refused.
+    private int _settled;
 
     /// <summary>What to show, read when the dialog is dequeued (a declarative dialog's latest content).</summary>
     public DialogContent Content() => content();
@@ -28,26 +30,25 @@ internal sealed class DialogRequest(
     /// <summary>A declarative dialog whose open is no longer the element's current one.</summary>
     public bool IsStale => isStale?.Invoke() == true;
 
-    public void Answer(object? result)
-    {
-        if (Settle()) answered(result);
-    }
+    public void Answer(object? result) => Settle(() => answered(result));
 
-    public void Fail(Exception error)
-    {
-        if (Settle()) failed(error);
-    }
+    public void Fail(Exception error) => Settle(() => failed(error));
 
-    public void Cancel()
-    {
-        if (Settle()) cancelled();
-    }
+    public void Cancel() => Settle(cancelled);
 
-    private bool Settle()
+    // A callback that throws (an error report whose dispatch is refused, say) is logged: it must never
+    // abort the queue's work around it.
+    private void Settle(Action callback)
     {
-        if (_settled) return false;
-        _settled = true;
-        return true;
+        if (Interlocked.Exchange(ref _settled, 1) != 0) return;
+        try
+        {
+            callback();
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.SwallowedError(LogCategory.Hosting, "Dialogs.Settle", ex);
+        }
     }
 }
 

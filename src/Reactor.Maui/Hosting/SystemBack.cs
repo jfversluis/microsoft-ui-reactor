@@ -38,7 +38,37 @@ internal static class SystemBack
     /// The system back key in <paramref name="window"/>: the handlers first, then
     /// <paramref name="passOn"/> (MAUI's back handling) if none handled it.
     /// </summary>
-    public static bool HandleBackKey(Window window, Func<bool> passOn) => Ask(window) || passOn();
+    public static bool HandleBackKey(Window window, Func<bool> passOn)
+    {
+        if (StateOf(window, create: false) is not { } state) return passOn();
+        if (state.BeginAsk() && Ask(window)) return true;
+        state.PassingOn++;
+        try
+        {
+            return passOn();
+        }
+        finally
+        {
+            state.PassingOn--;
+        }
+    }
+
+    /// <summary>
+    /// Whether a page's <c>OnBackButtonPressed</c> asks the handlers: on Android, where a Shell's own back
+    /// callback can sit above Reactor's (MAUI adds it when the Shell item's view is created). iOS and Mac
+    /// Catalyst call it for Shell's navigation-bar back, which must not ask them. Tests set it.
+    /// </summary>
+    internal static bool PagesAsk { get; set; } = OperatingSystem.IsAndroid();
+
+    /// <summary>
+    /// The back reached a Reactor page that MAUI asks directly (the Shell): asks the handlers unless this
+    /// back has already asked them (through Reactor's callback, which then passes the key on to MAUI).
+    /// </summary>
+    public static bool AskFromPage(Window? window) =>
+        PagesAsk && window is not null && StateOf(window, create: false) is { Count: > 0 } state && state.BeginAsk() && Ask(window);
+
+    /// <summary>Makes <paramref name="dispatcher"/> end each back's turn in <paramref name="window"/> (tests).</summary>
+    internal static void UseDispatcher(Window window, IDispatcher dispatcher) => StateOf(window, create: true)!.Dispatcher = dispatcher;
 
     /// <summary>Whether the window's Android back callback is enabled (tests).</summary>
     internal static bool HasEnabledCallback(Window window) => StateOf(window, create: false)?.CallbackEnabled == true;
@@ -46,6 +76,10 @@ internal static class SystemBack
 #if ANDROID
     /// <summary>The window's Android back callback, if it has one (device tests reorder callbacks).</summary>
     internal static AndroidX.Activity.OnBackPressedCallback? CallbackOf(Window window) => StateOf(window, create: false)?.Callback;
+
+    /// <summary>The back callbacks Reactor added to the window's modals' dialogs (device tests).</summary>
+    internal static IEnumerable<AndroidX.Activity.OnBackPressedCallback> ModalCallbacksOf(Window window) =>
+        StateOf(window, create: false)?.ModalCallbacks ?? [];
 #endif
 
     private static WindowBack? StateOf(Window window, bool create)
@@ -167,6 +201,28 @@ internal static class SystemBack
 
         public int Count => _registrations.Count;
 
+        /// <summary>Set while Reactor passes a back on to MAUI, so the pages it reaches don't ask again.</summary>
+        public int PassingOn { get; set; }
+
+        private bool _askedThisBack;
+
+        /// <summary>
+        /// Whether this back may ask the handlers: once per back. A back is one turn of the UI thread, so
+        /// the mark is cleared from a posted turn (a back whose MAUI path reaches Reactor's callback after
+        /// a page already asked, as a Shell's callback does when it passes the key on, asks once).
+        /// </summary>
+        public bool BeginAsk()
+        {
+            if (PassingOn > 0 || _askedThisBack) return false;
+            _askedThisBack = true;
+            if ((Dispatcher ?? _window.Dispatcher) is not { IsDispatchRequired: false } dispatcher || !dispatcher.Dispatch(() => _askedThisBack = false))
+                _askedThisBack = false;
+            return true;
+        }
+
+        /// <summary>The dispatcher that ends a back's turn: the window's; tests replace it.</summary>
+        public IDispatcher? Dispatcher { get; set; }
+
         public IReadOnlyList<Registration> Registrations => _registrations;
 
         public void Add(Registration registration)
@@ -185,10 +241,20 @@ internal static class SystemBack
         private AndroidX.Activity.ComponentActivity? _activity;
         private BackCallback? _callback;
         private bool _passingOn;
+        private bool _subscribedModals;
+        private int _modalRetries;
+
+        // A MAUI modal is a dialog (a ComponentDialog) with its own back dispatcher, which takes the key
+        // while the modal is shown and never reaches the activity's: each one gets a Reactor callback too.
+        private readonly Dictionary<Page, (AndroidX.Activity.ComponentDialog Dialog, BackCallback Callback)> _modals =
+            new(ReferenceEqualityComparer.Instance);
 
         public AndroidX.Activity.OnBackPressedCallback? Callback => _callback;
 
         public bool CallbackEnabled => _callback?.Enabled == true;
+
+        /// <summary>The callbacks of the modals shown, by modal page (device tests).</summary>
+        public IEnumerable<AndroidX.Activity.OnBackPressedCallback> ModalCallbacks => _modals.Values.Select(m => (AndroidX.Activity.OnBackPressedCallback)m.Callback);
 
         private void Update()
         {
@@ -199,23 +265,95 @@ internal static class SystemBack
                 _callback = null;
                 _activity = activity;
             }
-            if (_registrations.Count > 0 && _callback is null && activity is not null)
+            var wanted = _registrations.Count > 0;
+            if (wanted && _callback is null && activity is not null)
             {
-                _callback = new BackCallback(this);
+                _callback = new BackCallback(OnBack);
                 activity.OnBackPressedDispatcher.AddCallback(activity, _callback);
             }
-            if (_callback is not null && !_passingOn) _callback.Enabled = _registrations.Count > 0;
+            if (_callback is not null && !_passingOn) _callback.Enabled = wanted;
+            UpdateModals(activity, wanted);
         }
 
-        private void OnBack()
+        private void UpdateModals(AndroidX.Activity.ComponentActivity? activity, bool wanted)
         {
-            if (Ask(_window) || _activity is not { } activity || _callback is not { } callback) return;
-            // Nothing handled it: MAUI's callback (or the platform's default) gets the key, as without Reactor.
-            _passingOn = true;
-            callback.Enabled = false;
+            if (!_subscribedModals && wanted)
+            {
+                _subscribedModals = true;
+                _window.ModalPushed += (_, _) => Post(Update);
+                _window.ModalPopped += (_, _) => Post(Update);
+            }
+            var shown = _window.Navigation.ModalStack;
+            foreach (var gone in _modals.Keys.Where(m => !shown.Contains(m)).ToList())
+            {
+                _modals[gone].Callback.Remove();
+                _modals.Remove(gone);
+            }
+            var unresolved = false;
+            if (wanted && activity is not null)
+            {
+                foreach (var modal in shown)
+                {
+                    if (_modals.ContainsKey(modal)) continue;
+                    if (DialogOf(modal, activity) is not { } dialog)
+                    {
+                        unresolved = true;
+                        continue;
+                    }
+                    var callback = new BackCallback(OnBack);
+                    dialog.OnBackPressedDispatcher.AddCallback(dialog, callback);
+                    _modals[modal] = (dialog, callback);
+                }
+            }
+            foreach (var (_, callback) in _modals.Values)
+                if (!_passingOn) callback.Enabled = wanted;
+            // The modal's dialog is created after ModalPushed; look again for a while.
+            if (unresolved && _modalRetries++ < 60) _window.Dispatcher?.DispatchDelayed(TimeSpan.FromMilliseconds(50), Update);
+            else if (!unresolved) _modalRetries = 0;
+        }
+
+        // The dialog whose window shows the modal page: a DialogFragment's, in the activity's fragments.
+        private static AndroidX.Activity.ComponentDialog? DialogOf(Page modal, AndroidX.Activity.ComponentActivity activity)
+        {
+            if (modal.Handler?.PlatformView is not global::Android.Views.View { RootView: { } root }
+                || activity is not AndroidX.Fragment.App.FragmentActivity fragments)
+                return null;
+            return Find(fragments.SupportFragmentManager);
+
+            AndroidX.Activity.ComponentDialog? Find(AndroidX.Fragment.App.FragmentManager manager)
+            {
+                foreach (var fragment in manager.Fragments)
+                {
+                    if (fragment is AndroidX.Fragment.App.DialogFragment { Dialog: AndroidX.Activity.ComponentDialog dialog }
+                        && root.Equals(dialog.Window?.DecorView))
+                        return dialog;
+                    if (fragment.IsAdded && Find(fragment.ChildFragmentManager) is { } nested) return nested;
+                }
+                return null;
+            }
+        }
+
+        private void Post(Action work)
+        {
+            if (_window.Dispatcher is not { } dispatcher || !dispatcher.Dispatch(work)) work();
+        }
+
+        private void OnBack(BackCallback callback)
+        {
+            var dispatcher = _modals.Values.FirstOrDefault(m => ReferenceEquals(m.Callback, callback)).Dialog?.OnBackPressedDispatcher
+                ?? _activity?.OnBackPressedDispatcher;
+            if (dispatcher is null) return;
             try
             {
-                activity.OnBackPressedDispatcher.OnBackPressed();
+                HandleBackKey(_window, () =>
+                {
+                    // Nothing handled it: MAUI (the modal's own callback, or the activity's) or the
+                    // platform's default gets the key, as without Reactor.
+                    _passingOn = true;
+                    callback.Enabled = false;
+                    dispatcher.OnBackPressed();
+                    return true;
+                });
             }
             finally
             {
@@ -224,9 +362,9 @@ internal static class SystemBack
             }
         }
 
-        private sealed class BackCallback(WindowBack owner) : AndroidX.Activity.OnBackPressedCallback(true)
+        private sealed class BackCallback(Action<BackCallback> onBack) : AndroidX.Activity.OnBackPressedCallback(true)
         {
-            public override void HandleOnBackPressed() => owner.OnBack();
+            public override void HandleOnBackPressed() => onBack(this);
         }
 #else
         public bool CallbackEnabled => false;

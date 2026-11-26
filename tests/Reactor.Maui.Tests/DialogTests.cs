@@ -1,4 +1,5 @@
 using Microsoft.UI.Reactor.Core;
+using Microsoft.UI.Reactor.Hosting;
 using Microsoft.UI.Reactor.Maui.Handlers;
 using Microsoft.UI.Reactor.Maui.Hosting;
 using static Microsoft.UI.Reactor.Maui.Factories;
@@ -77,6 +78,9 @@ internal sealed class FakeDialogPlatform : IDialogPlatform
         Posted.Clear();
         foreach (var next in posted) next();
     }
+
+    /// <summary>The dialog shown last fails after it was presented (an asynchronous presentation failure).</summary>
+    public void FailAnswer(Exception error) => Presented[^1].Answer.SetException(error);
 
     /// <summary>The user answers the dialog shown last; the native UI is still dismissing.</summary>
     public void Answer(object? result) => Presented[^1].Answer.SetResult(result);
@@ -386,7 +390,7 @@ public class DialogTests
     }
 
     [Fact]
-    public async Task ARefusedDispatch_SettlesTheRequest_InsteadOfStrandingIt()
+    public async Task ARefusedEnqueue_SettlesTheRequest_AndTerminatesTheQueue()
     {
         var h = new Harness();
         var dialogs = h.Dialogs();
@@ -394,11 +398,103 @@ public class DialogTests
         Assert.Equal("shown", h.Platform.Titles);
         // The app is shutting down: the dispatcher refuses work.
         h.Queue.Dispatcher = new RefusingDispatcher();
-        var refused = dialogs.Alert("refused", null, "Yes", "No");
-        Assert.False(await Soon(refused));
-        // The answer can't be dispatched either: it is delivered where it arrived.
+        Assert.False(await Soon(dialogs.Alert("refused", null, "Yes", "No")));
+        // Nothing more can run on the dispatcher: the dialog on screen is settled too.
+        Assert.False(await Soon(shown));
+        Assert.True(h.Queue.IsTerminal);
+        h.Platform.Answer(true);
+        Assert.False(await Soon(shown));
+    }
+
+    private sealed class SwitchableDispatcher : IDispatcher
+    {
+        public bool Refuse { get; set; }
+        public bool IsDispatchRequired => true;
+
+        public bool Dispatch(Action action)
+        {
+            if (Refuse) return false;
+            action();
+            return true;
+        }
+
+        public bool DispatchDelayed(TimeSpan delay, Action action) => Dispatch(action);
+        public IDispatcherTimer CreateTimer() => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public async Task ARefusedAnswerDispatch_TerminatesTheQueue_LeavingNoTaskStranded()
+    {
+        var h = new Harness();
+        var dispatcher = new SwitchableDispatcher();
+        h.Queue.Dispatcher = dispatcher;
+        var dialogs = h.Dialogs();
+        var shown = dialogs.Alert("shown", null, "Yes", "No");
+        var queued = dialogs.Prompt("queued", null);
+        Assert.Equal("shown", h.Platform.Titles);
+
+        dispatcher.Refuse = true;
         h.Platform.Answer(true);
         Assert.True(await Soon(shown));
+        Assert.Null(await Soon(queued));
+        Assert.True(h.Queue.IsTerminal);
+        Assert.Null(h.Queue.Showing);
+        Assert.Equal(0, h.Queue.WaitingCount);
+
+        // Even once the dispatcher accepts work again, the queue reports terminal: a request is settled at once.
+        dispatcher.Refuse = false;
+        Assert.False(await Soon(dialogs.Alert("later", null, "Yes", "No")));
+        Assert.Equal("shown", h.Platform.Titles);
+    }
+
+    private sealed class RefusableScheduler : IRenderScheduler
+    {
+        private readonly Queue<Action> _queue = new();
+        public bool Refuse { get; set; }
+        public bool CheckAccess() => true;
+
+        public void Post(Action work)
+        {
+            if (Refuse) throw new InvalidOperationException("The MAUI dispatcher refused the render work.");
+            _queue.Enqueue(work);
+        }
+
+        public void Drain()
+        {
+            while (_queue.TryDequeue(out var work)) work();
+        }
+    }
+
+    [Fact]
+    public async Task AFailureReportTheRenderThreadRefuses_StillCompletesTheTask_AndTheQueueMovesOn()
+    {
+        var h = new Harness();
+        var scheduler = new RefusableScheduler();
+        Dialogs? dialogs = null;
+        var root = new ReactorRoot(MauiHandlers.CreateRegistry(), scheduler, _ => { });
+        root.Render(MauiContexts.Window.Provide(h.Window,
+            ErrorBoundary(Component<DialogsProbe, DialogsProbeProps>(new(d => dialogs = d)), e => Label("caught"))));
+        scheduler.Drain();
+        var failing = dialogs!.Alert("fails later", null, "Yes", "No");
+        var next = dialogs.Alert("next", null, "Yes", "No");
+
+        // The presentation fails asynchronously while the render thread refuses the boundary report.
+        scheduler.Refuse = true;
+        try
+        {
+            h.Platform.FailAnswer(new InvalidOperationException("presentation failed"));
+            Assert.False(await Soon(failing));
+            h.Platform.Dismiss();
+            Assert.Equal("fails later,next", h.Platform.Titles);
+            h.Platform.Answer(true);
+            Assert.True(await Soon(next));
+        }
+        finally
+        {
+            // The root stays in hot reload's list of live roots until it is collected.
+            scheduler.Refuse = false;
+            root.Unmount();
+        }
     }
 
     [Fact]

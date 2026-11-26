@@ -204,6 +204,70 @@ public class SystemBackTests
         Assert.Equal("a", log.Take());
     }
 
+    private sealed class TurnDispatcher : IDispatcher
+    {
+        private readonly Queue<Action> _posted = new();
+        public bool IsDispatchRequired => false;
+        public bool Dispatch(Action action)
+        {
+            _posted.Enqueue(action);
+            return true;
+        }
+        public bool DispatchDelayed(TimeSpan delay, Action action) => Dispatch(action);
+        public IDispatcherTimer CreateTimer() => throw new NotSupportedException();
+
+        /// <summary>The UI thread's turn ends: the next back is another one.</summary>
+        public void EndTurn()
+        {
+            while (_posted.TryDequeue(out var action)) action();
+        }
+    }
+
+    [Fact]
+    public void AShellsOwnBackCallback_AndReactors_AskTheHandlersOncePerBack()
+    {
+        var pagesAsked = SystemBack.PagesAsk;
+        SystemBack.PagesAsk = true;
+        try
+        {
+            var log = new BackLog();
+            var shown = new Shown(Shell("a", null, TabBar(ShellTab("a", "A", ProbePage("a", log)))));
+
+            // While Reactor passes the key on, the Shell doesn't ask, even where a back's turn ends at once.
+            Assert.False(shown.BackKey());
+            Assert.Equal("a", log.Take());
+
+            // The Shell's own back path asks the handlers (a Shell's callback can be asked before Reactor's).
+            log.Handles.Add("a");
+            Assert.True(shown.View<ReactorShell>().SendBackButtonPressed());
+            Assert.Equal("a", log.Take());
+            log.Handles.Clear();
+
+            var turns = new TurnDispatcher();
+            SystemBack.UseDispatcher(shown.Window, turns);
+
+            // Reactor's callback first: it asks, then passes the key on to MAUI, whose Shell doesn't ask again.
+            Assert.False(shown.BackKey());
+            Assert.Equal("a", log.Take());
+            turns.EndTurn();
+
+            // The Shell's own callback first (MAUI adds it above Reactor's): the Shell asks; Reactor's
+            // callback, which the Shell's reaches when it passes the key on in the same back, doesn't.
+            Assert.False(shown.View<ReactorShell>().SendBackButtonPressed());
+            Assert.False(SystemBack.HandleBackKey(shown.Window, () => false));
+            Assert.Equal("a", log.Take());
+
+            // The next back asks again.
+            turns.EndTurn();
+            Assert.False(SystemBack.HandleBackKey(shown.Window, () => false));
+            Assert.Equal("a", log.Take());
+        }
+        finally
+        {
+            SystemBack.PagesAsk = pagesAsked;
+        }
+    }
+
     [Fact]
     public void ARootPage_PassesAnUnhandledBackOn()
     {

@@ -21,6 +21,10 @@ internal sealed class DialogQueue
     private bool _frameScheduled;
     private bool _waitingForNavigation;
     private bool _destroyed;
+    // Destroyed, or a dispatch was refused: every request is settled at once from then on.
+    private volatile bool _terminal;
+    private bool _awaitingCreated;
+    private readonly Lock _gate = new();
 
     private DialogQueue(Window window)
     {
@@ -53,16 +57,31 @@ internal sealed class DialogQueue
     /// <summary>Whether the window was destroyed (and not created again).</summary>
     internal bool IsDestroyed => _destroyed;
 
-    public void Enqueue(DialogRequest request) => OnDispatcher(() =>
+    /// <summary>Whether the queue settles every request at once: its window was destroyed, or its dispatcher refused work.</summary>
+    internal bool IsTerminal => _terminal;
+
+    public void Enqueue(DialogRequest request)
     {
-        if (_destroyed)
+        if (_terminal)
         {
             request.Cancel();
             return;
         }
-        _waiting.Add(request);
-        Pump();
-    }, request.Cancel);
+        OnDispatcher(() =>
+        {
+            if (_terminal)
+            {
+                request.Cancel();
+                return;
+            }
+            lock (_gate) _waiting.Add(request);
+            Pump();
+        }, () =>
+        {
+            request.Cancel();
+            Terminate();
+        });
+    }
 
     /// <summary>
     /// Runs <paramref name="work"/> on the dispatcher, or <paramref name="refused"/> on this thread when
@@ -82,15 +101,20 @@ internal sealed class DialogQueue
 
     private void Pump()
     {
-        while (!_destroyed && _showing is null && !_frameScheduled && !_waitingForNavigation)
+        while (!_terminal && _showing is null && !_frameScheduled && !_waitingForNavigation)
         {
-            // A declarative dialog made stale before it was shown is dropped without a word.
-            _waiting.RemoveAll(static r => r.IsStale);
-            if (_waiting.Count == 0) return;
+            DialogRequest request;
+            lock (_gate)
+            {
+                // A declarative dialog made stale before it was shown is dropped without a word.
+                _waiting.RemoveAll(static r => r.IsStale);
+                if (_waiting.Count == 0) return;
+                request = _waiting[0];
+            }
             if (Platform.IsDialogShown(_window))
             {
                 _frameScheduled = true;
-                if (!Platform.ScheduleFrame(_window, OnFrame)) CancelAll();
+                if (!Platform.ScheduleFrame(_window, OnFrame)) Terminate();
                 return;
             }
             if (Platform.WaitForNavigation(_window, OnNavigationFinished))
@@ -99,8 +123,11 @@ internal sealed class DialogQueue
                 return;
             }
 
-            var request = _waiting[0];
-            _waiting.RemoveAt(0);
+            lock (_gate)
+            {
+                if (_waiting.Count == 0 || !ReferenceEquals(_waiting[0], request)) continue;
+                _waiting.RemoveAt(0);
+            }
             Task<object?> answer;
             try
             {
@@ -114,7 +141,12 @@ internal sealed class DialogQueue
                 continue;
             }
             _showing = request;
-            answer.ContinueWith(t => OnDispatcher(() => Answered(request, t), () => Settle(request, t)), CancellationToken.None,
+            answer.ContinueWith(t => OnDispatcher(() => Answered(request, t), () =>
+                {
+                    // Nothing more can run on the dispatcher: settle this answer and everything queued.
+                    Settle(request, t);
+                    Terminate();
+                }), CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
     }
@@ -134,7 +166,7 @@ internal sealed class DialogQueue
                 Pump();
             }))
         {
-            CancelAll();
+            Terminate();
         }
     }
 
@@ -164,24 +196,38 @@ internal sealed class DialogQueue
         else request.Answer(answer.Result);
     }
 
-    private void CancelAll()
+    /// <summary>
+    /// Settles the dialog shown and every queued one with its cancel answer, and every later request at
+    /// once. The queue stays the window's (a tombstone) until MAUI creates the window again. Safe from
+    /// any thread: it also runs where a refused dispatch left the work.
+    /// </summary>
+    private void Terminate()
     {
-        var cancelled = new List<DialogRequest>(_waiting.Count + 1);
-        if (_showing is { } showing) cancelled.Add(showing);
-        cancelled.AddRange(_waiting);
-        _showing = null;
-        _waiting.Clear();
+        List<DialogRequest> cancelled;
+        lock (_gate)
+        {
+            _terminal = true;
+            cancelled = new List<DialogRequest>(_waiting.Count + 1);
+            if (_showing is { } showing) cancelled.Add(showing);
+            cancelled.AddRange(_waiting);
+            _showing = null;
+            _waiting.Clear();
+            if (!_awaitingCreated)
+            {
+                _awaitingCreated = true;
+                _window.Created += OnCreated;
+            }
+        }
         foreach (var request in cancelled) request.Cancel();
     }
 
     private void OnDestroying(object? sender, EventArgs e)
     {
         _destroyed = true;
-        CancelAll();
-        // Kept as the window's queue, so a request made later (even by a later Destroying handler) is
-        // settled at once rather than shown on a dead window. MAUI may create the window again.
         _window.Destroying -= OnDestroying;
-        _window.Created += OnCreated;
+        // Kept as the window's queue, so a request made later (even by a later Destroying handler) is
+        // settled at once rather than shown on a dead window.
+        Terminate();
     }
 
     private void OnCreated(object? sender, EventArgs e)

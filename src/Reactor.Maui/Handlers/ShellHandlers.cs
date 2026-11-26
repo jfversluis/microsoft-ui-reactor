@@ -127,6 +127,9 @@ internal sealed class ReactorShell : Shell
 
     protected override bool OnBackButtonPressed()
     {
+        // On Android, MAUI's Shell adds its own back callback when an item's view is created, which can
+        // sit above Reactor's: the handlers are asked here then, once per back (spec 069 §5.6).
+        if (Hosting.SystemBack.AskFromPage(Window)) return true;
         if (BackKeyIsModelBack && CurrentItem?.CurrentItem is { } section && section.Navigation.ModalStack.Count == 0
             && ShellNatives.GetNavigator(section) is { } navigator)
         {

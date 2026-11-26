@@ -64,8 +64,9 @@ public sealed class Dialogs
             answer => completion.TrySetResult(convert(answer)),
             error =>
             {
-                ReportFailure(error);
+                // Settled first: the report can fail (a refused dispatch) and must not strand the task.
                 completion.TrySetResult(cancelAnswer);
+                ReportFailure(error);
             },
             () => completion.TrySetResult(cancelAnswer)));
         return completion.Task;
@@ -74,7 +75,16 @@ public sealed class Dialogs
     private void ReportFailure(Exception error)
     {
         DiagnosticLog.SwallowedError(LogCategory.Hosting, "Dialogs.Present", error);
-        if (Owner is { Unmounted: false } owner && HookNodes.HasBoundaryAbove(owner)) owner.Root.ReportCallbackError(owner, error);
+        if (Owner is not { Unmounted: false } owner || !HookNodes.HasBoundaryAbove(owner)) return;
+        try
+        {
+            owner.Root.ReportCallbackError(owner, error);
+        }
+        catch (Exception reportError)
+        {
+            // The render thread refused the report (the app is shutting down): logged only.
+            DiagnosticLog.SwallowedError(LogCategory.Hosting, "Dialogs.ReportFailure", reportError);
+        }
     }
 
     /// <summary>Queues a request on the window, or keeps it until the window is known.</summary>
