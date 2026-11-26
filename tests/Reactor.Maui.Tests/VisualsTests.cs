@@ -122,6 +122,12 @@ public class VisualsTests
         host.Render(Label("x"));
         if (direct) Assert.IsType<DirectLabel>(host.RootView);
         else Assert.False(label.IsSet(VisualElement.BackgroundProperty));
+
+        // A null color is no brush: it doesn't need a Controls view.
+        Color? none = null;
+        var plain = Host(direct).Render(Label("x").Background(none));
+        if (direct) Assert.IsType<DirectLabel>(plain.RootView);
+        else Assert.False(((MauiLabel)plain.RootView!).IsSet(VisualElement.BackgroundProperty));
     }
 
     [Fact]
@@ -193,6 +199,12 @@ public class VisualsTests
         plain.Render(Ellipse() with { Fill = none });
         Assert.False(unstyled.IsSet(Shape.FillProperty));
 
+        // A brush keeps the current thickness, as on shapes; a color defaults to 1, as before.
+        var withBrush = Border(null).Stroke(Colors.Blue, 4).Stroke(MatrixCases.Gradient());
+        Assert.Equal(4, withBrush.StrokeThickness);
+        Assert.Equal(1, Border(null).Stroke(Colors.Blue, 4).Stroke(Colors.Red).StrokeThickness);
+        Assert.Equal(3, Border(null).Stroke(MatrixCases.Gradient(), 3).StrokeThickness);
+
         var borderHost = Host().Render(Border(null).Stroke(Colors.Blue));
         var border = (MauiBorder)borderHost.RootView!;
         borderHost.Render(Border(null).Stroke(null));
@@ -252,13 +264,60 @@ public class VisualsTests
         };
 
         host.Render(Path2D("M 0,0 L 100,0 L 0,100 Z"));
-        Assert.Equal(["identity", "unset"], seen);
+        Assert.Equal(["unset", "identity", "unset"], seen);
         Assert.False(path.IsSet(MauiPath.RenderTransformProperty));
 
         // Nothing set: clearing writes nothing.
         seen.Clear();
         host.Render(Path2D("M 0,0 L 100,0 L 0,100 Z"));
         Assert.Empty(seen);
+    }
+
+    private static Style TransformStyle(Shapes.Transform transform)
+    {
+        var style = new Style(typeof(MauiPath));
+        style.Setters.Add(new Setter { Property = MauiPath.RenderTransformProperty, Value = transform });
+        return style;
+    }
+
+    private static List<string> WatchTransform(MauiPath path)
+    {
+        var seen = new List<string>();
+        path.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(MauiPath.RenderTransform))
+                seen.Add(path.RenderTransform switch { null => "unset", Shapes.MatrixTransform m when m.Matrix.IsIdentity => "identity", var t => t.GetType().Name });
+        };
+        return seen;
+    }
+
+    [Fact]
+    public void RemovingAStyleThatProvidedTheTransform_ResetsTheDrawable()
+    {
+        var style = TransformStyle(new Shapes.RotateTransform(90, 50, 50));
+        var host = Host().Render(Path2D("M 0,0 L 100,0 L 0,100 Z").Style(style));
+        var path = (MauiPath)host.RootView!;
+        Assert.IsType<Shapes.RotateTransform>(path.RenderTransform);
+        var seen = WatchTransform(path);
+
+        // Both declarations have no transform of their own: only the style's goes away.
+        host.Render(Path2D("M 0,0 L 100,0 L 0,100 Z"));
+        Assert.Equal(["unset", "identity", "unset"], seen);
+        Assert.Null(path.RenderTransform);
+        Assert.False(path.IsSet(MauiPath.RenderTransformProperty));
+    }
+
+    [Fact]
+    public void ATransformAStyleStillProvides_IsLeftAlone()
+    {
+        var style = TransformStyle(new Shapes.RotateTransform(90, 50, 50));
+        var host = Host().Render(Path2D("M 0,0 L 100,0 L 0,100 Z").Style(style) with { RenderTransform = new Shapes.ScaleTransform(2, 2) });
+        var path = (MauiPath)host.RootView!;
+        var seen = WatchTransform(path);
+
+        host.Render(Path2D("M 0,0 L 100,0 L 0,100 Z").Style(style));
+        Assert.Equal(["RotateTransform"], seen);
+        Assert.IsType<Shapes.RotateTransform>(path.RenderTransform);
     }
 
     [Fact]
@@ -361,6 +420,8 @@ public class VisualsTests
             { "files, same path", ImageSource.FromFile("a.png"), ImageSource.FromFile("a.png"), true },
             { "files, other paths", ImageSource.FromFile("a.png"), ImageSource.FromFile("b.png"), false },
             { "URIs, same", ImageSource.FromUri(new Uri("https://x/a.png")), ImageSource.FromUri(new Uri("https://x/a.png")), true },
+            { "URIs differing only in user info (Uri's == ignores it)", ImageSource.FromUri(new Uri("https://alice@x/a.png")), ImageSource.FromUri(new Uri("https://bob@x/a.png")), false },
+            { "URIs differing only in the fragment", ImageSource.FromUri(new Uri("https://x/a.png#one")), ImageSource.FromUri(new Uri("https://x/a.png#two")), false },
             { "URIs, caching off", ImageSource.FromUri(new Uri("https://x/a.png")), new UriImageSource { Uri = new Uri("https://x/a.png"), CachingEnabled = false }, false },
             { "URIs, another validity", ImageSource.FromUri(new Uri("https://x/a.png")), new UriImageSource { Uri = new Uri("https://x/a.png"), CacheValidity = TimeSpan.FromHours(1) }, false },
             { "fonts, same", Font(), Font(), true },
@@ -460,6 +521,14 @@ public class VisualsTests
         Assert.NotSame(icon, page.IconImageSource);
         Assert.NotSame(item, page.ToolbarItems[0]);
         Assert.NotSame(back, Microsoft.Maui.Controls.Shell.GetBackButtonBehavior(page));
+
+        // The back button follows its other values with an equal icon.
+        host.Render(Screen("B") with { BackButtonBehavior = new ShellBackButton("Return", Font("B")) });
+        Assert.Equal("Return", Microsoft.Maui.Controls.Shell.GetBackButtonBehavior(page).TextOverride);
+        host.Render(Screen("B") with { BackButtonBehavior = new ShellBackButton("Return", Font("B"), IsVisible: false) });
+        Assert.False(Microsoft.Maui.Controls.Shell.GetBackButtonBehavior(page).IsVisible);
+        host.Render(Screen("B") with { BackButtonBehavior = new ShellBackButton("Return", Font("B"), IsVisible: false, IsEnabled: false) });
+        Assert.False(Microsoft.Maui.Controls.Shell.GetBackButtonBehavior(page).IsEnabled);
 
         SwipeViewElement Row(string glyph) => SwipeView(Label("row")) with { RightItems = [new SwipeItemData("Delete") { Icon = Font(glyph) }] };
         var swipeHost = Host().Render(Row("A"));

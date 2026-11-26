@@ -96,7 +96,7 @@ public sealed record ViewModifiers
 
     /// <summary>Whether a setting that only a <c>Microsoft.Maui.Controls</c> view supports is used.</summary>
     internal bool NeedsControls =>
-        Style is not null || StyleClass is not null || Shadow is not null || Clip is not null || Background is not null
+        Style is not null || StyleClass is not null || Shadow is not null || Clip is not null || Handlers.BrushComparer.Normalize(Background) is not null
         || OnTap is not null || OnSwipe is not null || OnPan is not null || Configure is not null
         || FlexGrow is not null || FlexShrink is not null || FlexBasis is not null || FlexAlignSelf is not null
         || AbsoluteBounds is not null || AbsoluteFlags is not null;

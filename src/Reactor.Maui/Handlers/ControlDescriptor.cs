@@ -24,6 +24,7 @@ public sealed class ControlDescriptor<TElement, TView> : Reactor.Hosting.IElemen
     private readonly List<Entry> _entries = [];
     private Action<TView>? _unmount;
     private Func<TElement, TElement, bool>? _canUpdate;
+    private Action<TView>? _afterModifiers;
 
     /// <param name="create">Creates the view for an element. Don't write the element's values here; entries do.</param>
     public ControlDescriptor(Func<TElement, TView> create)
@@ -138,11 +139,22 @@ public sealed class ControlDescriptor<TElement, TView> : Reactor.Hosting.IElemen
         return this;
     }
 
+    /// <summary>
+    /// Runs after the entries and the shared modifiers on every mount and update, for a value the
+    /// view derives from both (a path's transform, which a style can provide).
+    /// </summary>
+    internal ControlDescriptor<TElement, TView> WithAfterModifiers(Action<TView> afterModifiers)
+    {
+        _afterModifiers = afterModifiers ?? throw new ArgumentNullException(nameof(afterModifiers));
+        return this;
+    }
+
     TView Reactor.Hosting.IElementHandler<TElement, TView>.Mount(HandlerContext<TElement> context, TElement element)
     {
         var view = _create(element);
         foreach (var entry in _entries) entry.Mount(view, element);
         ViewApplier.Apply(context, view, null, element.Modifiers);
+        _afterModifiers?.Invoke(view);
         foreach (var entry in _entries) entry.Wire(context, view);
         return view;
     }
@@ -151,6 +163,7 @@ public sealed class ControlDescriptor<TElement, TView> : Reactor.Hosting.IElemen
     {
         foreach (var entry in _entries) entry.Update(context, control, oldElement, newElement);
         ViewApplier.Apply(context, control, oldElement.Modifiers, newElement.Modifiers);
+        _afterModifiers?.Invoke(control);
     }
 
     void Reactor.Hosting.IElementHandler<TElement, TView>.Unmount(TView control) => _unmount?.Invoke(control);

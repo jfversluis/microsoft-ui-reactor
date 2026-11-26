@@ -190,13 +190,16 @@ public static class ViewElementExtensions
     public static BorderElement Padding(this BorderElement element, double horizontal, double vertical) =>
         element with { Padding = new Thickness(horizontal, vertical) };
 
-    /// <summary>A solid border; <c>null</c> removes the stroke.</summary>
+    /// <summary>A solid border, 1 unit thick unless given; <c>null</c> removes the stroke.</summary>
     public static BorderElement Stroke(this BorderElement element, Color? color, double thickness = 1) =>
         element with { Stroke = color is null ? null : (Brush)color, StrokeThickness = thickness };
 
-    /// <summary>A border painted with <paramref name="brush"/>, compared by value; <c>null</c> removes the stroke.</summary>
-    public static BorderElement Stroke(this BorderElement element, Brush? brush, double thickness = 1) =>
-        element with { Stroke = brush, StrokeThickness = thickness };
+    /// <summary>
+    /// A border painted with <paramref name="brush"/>, compared by value; <c>null</c> removes the stroke.
+    /// A <c>null</c> thickness keeps the current one, as for shapes.
+    /// </summary>
+    public static BorderElement Stroke(this BorderElement element, Brush? brush, double? thickness = null) =>
+        element with { Stroke = brush, StrokeThickness = thickness ?? element.StrokeThickness };
 
     public static BorderElement CornerRadius(this BorderElement element, double radius) => element with { CornerRadius = new CornerRadius(radius) };
 
@@ -231,6 +234,20 @@ public static class ViewElementExtensions
     /// <summary>Dash and gap lengths, in multiples of the stroke thickness (copied).</summary>
     public static T StrokeDashArray<T>(this T shape, params double[] dashes) where T : ShapeElement =>
         (T)(((ShapeElement)shape) with { StrokeDashArray = dashes });
+
+    /// <summary>Where the dash pattern starts, in multiples of the stroke thickness.</summary>
+    public static T StrokeDashOffset<T>(this T shape, double offset) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { StrokeDashOffset = offset });
+
+    /// <summary>How far a miter join may extend, relative to half the stroke thickness.</summary>
+    public static T StrokeMiterLimit<T>(this T shape, double limit) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { StrokeMiterLimit = limit });
+
+    /// <summary>How the polygon's interior is determined for its fill.</summary>
+    public static PolygonElement FillRule(this PolygonElement polygon, FillRule rule) => polygon with { FillRule = rule };
+
+    /// <summary>How the polyline's interior is determined for its fill.</summary>
+    public static PolylineElement FillRule(this PolylineElement polyline, FillRule rule) => polyline with { FillRule = rule };
 
     public static T StrokeLineCap<T>(this T shape, PenLineCap cap) where T : ShapeElement =>
         (T)(((ShapeElement)shape) with { StrokeLineCap = cap });

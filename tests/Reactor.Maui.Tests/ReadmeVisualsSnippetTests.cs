@@ -15,8 +15,7 @@ public class ReadmeVisualsSnippetTests
 {
     private sealed class AvatarStore
     {
-        public int Opened;
-        public Stream OpenAvatar(string id) { Opened++; return new MemoryStream(); }
+        public Stream OpenAvatar(string id) => new MemoryStream();
     }
 
     private sealed record User(string Id);
@@ -59,8 +58,9 @@ public class ReadmeVisualsSnippetTests
         var host = Host().Render(Image(StreamImage($"avatar:{user.Id}", () => store.OpenAvatar(user.Id))));
         var image = host.View<MauiImage>();
         var source = image.Source;
+        // The same key isn't written again; that it isn't loaded again is the device fixture
+        // Image_EqualSourceDoesNotReload (headless, nothing loads images at all).
         host.Render(Image(StreamImage($"avatar:{user.Id}", () => store.OpenAvatar(user.Id))));
         Assert.Same(source, image.Source);
-        Assert.Equal(0, store.Opened);
     }
 }

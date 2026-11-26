@@ -205,10 +205,11 @@ public class ElementCensusTests
     private static readonly Type[] ValueRecords =
         [typeof(SwipeItemData), typeof(ToolbarAction), typeof(RichTextRun), typeof(RichTextHyperlink), typeof(ItemGroup), typeof(ShellBackButton)];
 
-    /// <summary>The elements 4c-3a added: none of their properties may be pending.</summary>
-    private static readonly Type[] NewIn4c3a =
+    /// <summary>The elements 4c-3a added or made ✅: none of their properties may be pending.</summary>
+    private static readonly Type[] CoveredIn4c3a =
         [typeof(RectangleElement), typeof(EllipseElement), typeof(RoundRectangleElement), typeof(LineElement),
-         typeof(PolygonElement), typeof(PolylineElement), typeof(PathElement), typeof(ContentViewElement)];
+         typeof(PolygonElement), typeof(PolylineElement), typeof(PathElement), typeof(ContentViewElement),
+         typeof(BorderElement), typeof(ImageElement), typeof(ImageButtonElement)];
 
     // The first run's count; an enumeration that finds fewer is broken (or an element was removed on purpose).
     private const int TypeFloor = 58;
@@ -302,11 +303,19 @@ public class ElementCensusTests
     [Fact]
     public void ThePendingBaseline_OnlyShrinks_AndHoldsNothingNew()
     {
-        Assert.True(CensusBaseline.Pending.Length <= CensusBaseline.Ceiling,
-            $"the pending baseline has {CensusBaseline.Pending.Length} entries, more than its ceiling {CensusBaseline.Ceiling}: it may only shrink");
+        // The original list is frozen: its hash is pinned.
+        var original = string.Join("\n", CensusBaseline.Original.Order(StringComparer.Ordinal));
+        var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(original)));
+        Assert.Equal(CensusBaseline.OriginalHash, hash);
+
+        // The pending list is a subset of it, its size is the ceiling (lowered with each removal), no repeats.
+        Assert.Equal(CensusBaseline.Ceiling, CensusBaseline.Pending.Length);
         Assert.Equal(CensusBaseline.Pending.Length, CensusBaseline.Pending.Distinct(StringComparer.Ordinal).Count());
-        var newNames = NewIn4c3a.Select(t => t.Name + ".").ToArray();
-        var newPending = CensusBaseline.Pending.Where(k => newNames.Any(n => k.StartsWith(n, StringComparison.Ordinal))).ToList();
-        Assert.True(newPending.Count == 0, "Properties added in 4c-3a can't be pending:\n" + string.Join("\n", newPending));
+        var added = CensusBaseline.Pending.Except(CensusBaseline.Original, StringComparer.Ordinal).ToList();
+        Assert.True(added.Count == 0, "Pending entries not in the original baseline:\n" + string.Join("\n", added));
+
+        var covered = CoveredIn4c3a.Select(t => t.Name + ".").ToArray();
+        var coveredPending = CensusBaseline.Pending.Where(k => covered.Any(n => k.StartsWith(n, StringComparison.Ordinal))).ToList();
+        Assert.True(coveredPending.Count == 0, "Properties of elements 4c-3a covered can't be pending:\n" + string.Join("\n", coveredPending));
     }
 }

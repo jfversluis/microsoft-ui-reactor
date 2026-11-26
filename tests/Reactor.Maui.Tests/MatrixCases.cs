@@ -63,6 +63,36 @@ public static class MatrixCases
 
     private static string Join<T>(IEnumerable<T>? items) => items is null ? "" : string.Join(";", items);
 
+    /// <summary>
+    /// A case from fresh factory calls: the element from <paramref name="make"/>, and A, B and the equal B
+    /// each set with <paramref name="set"/> on a fresh element from a fresh value, so reference values
+    /// (brushes, lists) are new instances every time and the expectations are their own instances too.
+    /// </summary>
+    private static PropertyCase Case<TElement, TValue>(
+        Func<TElement> make, string property, Func<TElement, TValue, TElement> set, Func<TValue> a, Func<TValue> b,
+        Func<object, object?> read, BindableProperty native, Func<object?, object?, bool>? same = null,
+        Func<TValue, object?>? expect = null, string? direct = null, bool clears = true)
+        where TElement : Element
+    {
+        expect ??= static value => value;
+        return new()
+        {
+            ElementType = make().GetType(),
+            Property = property,
+            Base = () => make(),
+            WithA = () => set(make(), a()),
+            WithB = () => set(make(), b()),
+            WithBAgain = () => set(make(), b()),
+            Read = read,
+            A = expect(a()),
+            B = expect(b()),
+            NativeProperty = native,
+            Same = same ?? ((x, y) => Equals(x, y)),
+            DirectProperty = direct,
+            Clears = clears,
+        };
+    }
+
     private static PropertyCase Case<TElement>(
         TElement @base, string property, Func<TElement, TElement> a, Func<TElement, TElement> b, Func<TElement, TElement>? bAgain,
         Func<object, object?> read, object? valueA, object? valueB, BindableProperty native,
@@ -88,32 +118,32 @@ public static class MatrixCases
 
     private static IEnumerable<PropertyCase> ShapeCases()
     {
-        ShapeElement[] shapes =
+        Func<ShapeElement>[] shapes =
         [
-            Rectangle(), Ellipse(), RoundRectangle(4), Line(0, 0, 10, 10), Polygon(Triangle), Polyline(Triangle), Path2D("M 0,0 L 10,0 L 0,10 Z"),
+            () => Rectangle(), () => Ellipse(), () => RoundRectangle(4), () => Line(0, 0, 10, 10),
+            () => Polygon(Triangle), () => Polyline(Triangle), () => Path2D("M 0,0 L 10,0 L 0,10 Z"),
         ];
         foreach (var shape in shapes)
         {
-            yield return Case(shape, nameof(ShapeElement.Fill), s => s with { Fill = Solid(Colors.Red) }, s => s with { Fill = Gradient() }, null,
-                v => ((Shape)v).Fill, Solid(Colors.Red), Gradient(), Shape.FillProperty, SameBrush);
-            yield return Case(shape, nameof(ShapeElement.Stroke), s => s with { Stroke = Gradient() }, s => s with { Stroke = Radial() }, null,
-                v => ((Shape)v).Stroke, Gradient(), Radial(), Shape.StrokeProperty, SameBrush);
-            yield return Case(shape, nameof(ShapeElement.StrokeThickness), s => s with { StrokeThickness = 3 }, s => s with { StrokeThickness = 5 }, null,
-                v => ((Shape)v).StrokeThickness, 3d, 5d, Shape.StrokeThicknessProperty);
-            yield return Case(shape, nameof(ShapeElement.StrokeDashArray), s => s with { StrokeDashArray = [2, 1] }, s => s with { StrokeDashArray = [4, 2] },
-                s => s with { StrokeDashArray = new List<double> { 4, 2 } },
-                v => Join(((Shape)v).StrokeDashArray), "2;1", "4;2", Shape.StrokeDashArrayProperty);
-            yield return Case(shape, nameof(ShapeElement.StrokeDashOffset), s => s with { StrokeDashOffset = 2 }, s => s with { StrokeDashOffset = 3 }, null,
-                v => ((Shape)v).StrokeDashOffset, 2d, 3d, Shape.StrokeDashOffsetProperty);
-            yield return Case(shape, nameof(ShapeElement.StrokeLineCap), s => s with { StrokeLineCap = Shapes.PenLineCap.Round }, s => s with { StrokeLineCap = Shapes.PenLineCap.Square }, null,
-                v => ((Shape)v).StrokeLineCap, Shapes.PenLineCap.Round, Shapes.PenLineCap.Square, Shape.StrokeLineCapProperty);
-            yield return Case(shape, nameof(ShapeElement.StrokeLineJoin), s => s with { StrokeLineJoin = Shapes.PenLineJoin.Round }, s => s with { StrokeLineJoin = Shapes.PenLineJoin.Bevel }, null,
-                v => ((Shape)v).StrokeLineJoin, Shapes.PenLineJoin.Round, Shapes.PenLineJoin.Bevel, Shape.StrokeLineJoinProperty);
-            yield return Case(shape, nameof(ShapeElement.StrokeMiterLimit), s => s with { StrokeMiterLimit = 4 }, s => s with { StrokeMiterLimit = 6 }, null,
-                v => ((Shape)v).StrokeMiterLimit, 4d, 6d, Shape.StrokeMiterLimitProperty);
+            yield return Case(shape, nameof(ShapeElement.Fill), static (s, brush) => s.Fill(brush), static () => Solid(Colors.Red), static () => Gradient(),
+                v => ((Shape)v).Fill, Shape.FillProperty, SameBrush);
+            yield return Case(shape, nameof(ShapeElement.Stroke), static (s, brush) => s.Stroke(brush), static () => Gradient(), static () => Radial(),
+                v => ((Shape)v).Stroke, Shape.StrokeProperty, SameBrush);
+            yield return Case(shape, nameof(ShapeElement.StrokeThickness), static (s, t) => s.StrokeThickness(t), static () => 3d, static () => 5d,
+                v => ((Shape)v).StrokeThickness, Shape.StrokeThicknessProperty);
+            yield return Case(shape, nameof(ShapeElement.StrokeDashArray), static (s, dashes) => s.StrokeDashArray(dashes), static () => new double[] { 2, 1 }, static () => new double[] { 4, 2 },
+                v => Join(((Shape)v).StrokeDashArray), Shape.StrokeDashArrayProperty, expect: static d => Join(d));
+            yield return Case(shape, nameof(ShapeElement.StrokeDashOffset), static (s, o) => s.StrokeDashOffset(o), static () => 2d, static () => 3d,
+                v => ((Shape)v).StrokeDashOffset, Shape.StrokeDashOffsetProperty);
+            yield return Case(shape, nameof(ShapeElement.StrokeLineCap), static (s, cap) => s.StrokeLineCap(cap), static () => PenLineCap.Round, static () => PenLineCap.Square,
+                v => ((Shape)v).StrokeLineCap, Shape.StrokeLineCapProperty);
+            yield return Case(shape, nameof(ShapeElement.StrokeLineJoin), static (s, join) => s.StrokeLineJoin(join), static () => PenLineJoin.Round, static () => PenLineJoin.Bevel,
+                v => ((Shape)v).StrokeLineJoin, Shape.StrokeLineJoinProperty);
+            yield return Case(shape, nameof(ShapeElement.StrokeMiterLimit), static (s, limit) => s.StrokeMiterLimit(limit), static () => 4d, static () => 6d,
+                v => ((Shape)v).StrokeMiterLimit, Shape.StrokeMiterLimitProperty);
             // Neither is a default: MAUI's rectangles and ellipse construct with Fill, the others with None.
-            yield return Case(shape, nameof(ShapeElement.Aspect), s => s with { Aspect = Stretch.UniformToFill }, s => s with { Aspect = Stretch.Uniform }, null,
-                v => ((Shape)v).Aspect, Stretch.UniformToFill, Stretch.Uniform, Shape.AspectProperty);
+            yield return Case(shape, nameof(ShapeElement.Aspect), static (s, aspect) => s.Aspect(aspect), static () => Stretch.UniformToFill, static () => Stretch.Uniform,
+                v => ((Shape)v).Aspect, Shape.AspectProperty);
         }
 
         yield return Case(Rectangle(), nameof(RectangleElement.RadiusX), r => r with { RadiusX = 2 }, r => r with { RadiusX = 4 }, null,
@@ -134,12 +164,12 @@ public static class MatrixCases
 
         yield return Case(Polygon(), nameof(PolygonElement.Points), p => p with { Points = Triangle }, p => p with { Points = BigTriangle },
             p => p with { Points = [.. BigTriangle] }, v => Join(((MauiPolygon)v).Points), Join(Triangle), Join(BigTriangle), MauiPolygon.PointsProperty);
-        yield return Case(Polygon(Triangle), nameof(PolygonElement.FillRule), p => p with { FillRule = Shapes.FillRule.Nonzero }, p => p with { FillRule = Shapes.FillRule.EvenOdd }, null,
-            v => ((MauiPolygon)v).FillRule, Shapes.FillRule.Nonzero, Shapes.FillRule.EvenOdd, MauiPolygon.FillRuleProperty);
+        yield return Case(() => Polygon(Triangle), nameof(PolygonElement.FillRule), static (p, rule) => p.FillRule(rule), static () => FillRule.Nonzero, static () => FillRule.EvenOdd,
+            v => ((MauiPolygon)v).FillRule, MauiPolygon.FillRuleProperty);
         yield return Case(Polyline(), nameof(PolylineElement.Points), p => p with { Points = Triangle }, p => p with { Points = BigTriangle },
             p => p with { Points = [.. BigTriangle] }, v => Join(((MauiPolyline)v).Points), Join(Triangle), Join(BigTriangle), MauiPolyline.PointsProperty);
-        yield return Case(Polyline(Triangle), nameof(PolylineElement.FillRule), p => p with { FillRule = Shapes.FillRule.Nonzero }, p => p with { FillRule = Shapes.FillRule.EvenOdd }, null,
-            v => ((MauiPolyline)v).FillRule, Shapes.FillRule.Nonzero, Shapes.FillRule.EvenOdd, MauiPolyline.FillRuleProperty);
+        yield return Case(() => Polyline(Triangle), nameof(PolylineElement.FillRule), static (p, rule) => p.FillRule(rule), static () => FillRule.Nonzero, static () => FillRule.EvenOdd,
+            v => ((MauiPolyline)v).FillRule, MauiPolyline.FillRuleProperty);
 
         yield return Case(Path2D(), nameof(PathElement.PathDataString), p => p with { PathDataString = "M 0,0 L 10,0 L 0,10 Z" },
             p => p with { PathDataString = "M 5,5 L 10,0 L 0,10 Z" }, p => p with { PathDataString = string.Concat("M 5,5 L 10,0", " L 0,10 Z") },
@@ -223,12 +253,4 @@ public static class MatrixCases
         yield return Case(button, nameof(ImageButtonElement.Padding), b => b with { Padding = new Thickness(4) }, b => b with { Padding = new Thickness(1, 2, 3, 4) }, null,
             v => ((MauiImageButton)v).Padding, new Thickness(4), new Thickness(1, 2, 3, 4), MauiImageButton.PaddingProperty);
     }
-}
-
-/// <summary>
-/// The properties that had no executable evidence when the census landed (spec 070 §4.8), generated
-/// once and checked in. 4c-3b empties it; it may only shrink.
-/// </summary>
-public static partial class CensusBaseline
-{
 }

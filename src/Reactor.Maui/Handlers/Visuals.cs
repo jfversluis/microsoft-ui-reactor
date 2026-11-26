@@ -228,21 +228,14 @@ internal static class VisualDescriptors
         ControlDescriptor.Create<PathElement, MauiPath>()
             .ShapeProperties()
             .OneWay<(string? Markup, Geometry? Data)>(static e => (e.PathDataString, e.Data), static (v, data) => PathData.Write(v, data.Markup, data.Data), PathData.Comparer)
-            .OneWay(static e => e.RenderTransform, static (v, transform) => PathData.WriteTransform(v, transform), ReferenceEqualityComparer<Transform?>.Instance);
+            .OneWay<Transform?>(static e => e.RenderTransform, static (v, transform) => PathData.WriteTransform(v, transform), ReferenceEqualityComparer.Instance)
+            .WithAfterModifiers(PathData.ResetClearedTransform);
 
     public static ControlDescriptor<ContentViewElement, MauiContentView> ContentView() =>
         ControlDescriptor.Create<ContentViewElement, MauiContentView>()
             .Property(MauiContentView.PaddingProperty, static e => e.Padding)
             .WithChildren(ChildrenStrategy.Single<ContentViewElement, MauiContentView, object>(
                 static e => e.Content, static (view, content) => view.Content = content is null ? null : Props.AsView(content)));
-}
-
-/// <summary>Reference equality for any reference type, nullable included.</summary>
-internal sealed class ReferenceEqualityComparer<T> : IEqualityComparer<T> where T : class?
-{
-    public static readonly ReferenceEqualityComparer<T> Instance = new();
-    public bool Equals(T? x, T? y) => ReferenceEquals(x, y);
-    public int GetHashCode(T obj) => obj is null ? 0 : RuntimeHelpers.GetHashCode(obj);
 }
 
 /// <summary>A path's data and transform, written as WinUI's <c>Path</c> writes them (spec 070 §4.3).</summary>
@@ -277,21 +270,31 @@ internal static class PathData
         else view.Data = geometry;
     }
 
-    /// <summary>
-    /// Clearing the transform first writes an identity one: MAUI's iOS and Android path handlers update
-    /// the drawn matrix only for a non-null transform, so a plain clear would keep the old one drawn
-    /// (characterized on all three platforms, spec 070 §4.13).
-    /// </summary>
     public static void WriteTransform(MauiPath view, Transform? transform)
     {
-        if (transform is not null)
+        if (transform is not null) view.RenderTransform = transform;
+        else view.ClearValue(MauiPath.RenderTransformProperty);
+    }
+
+    // Whether the path showed a transform after its last apply.
+    private static readonly ConditionalWeakTable<MauiPath, StrongBox<bool>> HadTransform = new();
+
+    /// <summary>
+    /// After the element's own transform and its modifiers (a style can provide one) are applied: if the
+    /// path showed a transform and now shows none, reset the drawn one by writing an identity transform
+    /// and clearing it. MAUI's iOS and Android path handlers update the drawn matrix only for a non-null
+    /// transform, so a plain clear keeps the old one drawn (characterized on all three platforms, spec
+    /// 070 §4.13). A transform that remains (from a style) is left alone.
+    /// </summary>
+    public static void ResetClearedTransform(MauiPath view)
+    {
+        var had = HadTransform.GetOrCreateValue(view);
+        if (had.Value && view.RenderTransform is null)
         {
-            view.RenderTransform = transform;
-            return;
+            view.RenderTransform = new MatrixTransform();
+            view.ClearValue(MauiPath.RenderTransformProperty);
         }
-        if (!view.IsSet(MauiPath.RenderTransformProperty)) return;
-        view.RenderTransform = new MatrixTransform();
-        view.ClearValue(MauiPath.RenderTransformProperty);
+        had.Value = view.RenderTransform is not null;
     }
 
     private sealed class DataComparer : IEqualityComparer<(string? Markup, Geometry? Data)>
@@ -332,7 +335,8 @@ internal static class ImageSources
         return (a, b) switch
         {
             (FileImageSource fa, FileImageSource fb) => fa.File == fb.File,
-            (UriImageSource ua, UriImageSource ub) => ua.Uri == ub.Uri && ua.CachingEnabled == ub.CachingEnabled && ua.CacheValidity == ub.CacheValidity,
+            // OriginalString, ordinally: Uri's == ignores the user info and the fragment.
+            (UriImageSource ua, UriImageSource ub) => string.Equals(ua.Uri?.OriginalString, ub.Uri?.OriginalString, StringComparison.Ordinal) && ua.CachingEnabled == ub.CachingEnabled && ua.CacheValidity == ub.CacheValidity,
             (FontImageSource x, FontImageSource y) => x.Glyph == y.Glyph && x.FontFamily == y.FontFamily && x.Size.Equals(y.Size)
                 && Equals(x.Color, y.Color) && x.FontAutoScalingEnabled == y.FontAutoScalingEnabled,
             _ => false,

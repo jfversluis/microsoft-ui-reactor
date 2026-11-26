@@ -1,11 +1,12 @@
 namespace Microsoft.UI.Reactor.Maui.Tests;
 
-// Generated when the census landed (spec 070 §4.8, 4c-3a): every element property that then had no
-// executable evidence. 4c-3b replaces each entry with a matrix case or a covered-by claim; the list
-// may only shrink, and nothing added in 4c-3a may appear in it.
+// The properties still waiting for executable evidence (spec 070 §4.8). It started as
+// CensusBaseline.Original; 4c-3b replaces each entry with a matrix case or a covered-by claim and lowers
+// the ceiling with it. It may only shrink, holds nothing outside the original list, and nothing from an
+// element 4c-3a covered.
 public static partial class CensusBaseline
 {
-    /// <summary>The baseline's size when it was generated; it may only go down.</summary>
+    /// <summary>The list's size: lowered with every entry removed, never raised.</summary>
     public const int Ceiling = 348;
 
     public static readonly string[] Pending =
