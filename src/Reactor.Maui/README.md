@@ -350,6 +350,50 @@ is pushed back. Modals are a second list on the same element:
 `NavigationStack(…) with { Modals = […], OnModalDismissed = … }`. `Tabs(selectedIndex, onSelected, pages…)`
 and `Flyout(flyout, detail, isPresented, onIsPresentedChanged)` follow the same controlled pattern.
 
+### Flyouts and split mode
+
+On tablets and desktops a flyout can be *split*: shown beside the detail all the time.
+
+```csharp
+public sealed class MailApp : Component
+{
+    public override Element Render()
+    {
+        var (open, setOpen) = UseState(false);
+        return Flyout(
+            Page("Folders", VStack(Button("Inbox", () => setOpen(false)))),
+            NavigationStack([Page("Inbox", Label("No new mail"))]),
+            open, setOpen) with { LayoutBehavior = FlyoutLayoutBehavior.Split };
+    }
+}
+```
+
+While the flyout is split, `IsPresented` is the platform's: Reactor doesn't write it (MAUI refuses
+`false` by throwing, and a refused write leaves the property stuck for the page's life), and
+`onIsPresentedChanged` doesn't report what MAUI sets itself. When a render or the device leaves split
+mode, the declared value applies again. With MAUI 11, an iPad or a Mac splits a flyout whose
+behavior is `Split` or `SplitOnPortrait`, in any orientation, and never the others (MAUI reads a
+portrait orientation there); an Android tablet splits per orientation; a phone never does. Don't
+write `IsPresented` through a ref while the flyout is split.
+
+### Toolbar items
+
+```csharp
+Page("Inbox", Label("No new mail")) with
+{
+    ToolbarItems =
+    [
+        new ToolbarAction("Compose", compose),
+        new ToolbarAction("Settings", openSettings) { Order = ToolbarItemOrder.Secondary },
+    ],
+}
+```
+
+Items appear in their declared order: primary ones in the navigation bar, secondary ones in its
+overflow menu. A render that only changes the callbacks keeps the platform's items (each runs the
+current callback); a changed text, icon, order or priority rebuilds them. An item a rebuild retired
+invokes nothing, even if the platform or your code still holds it.
+
 ### Shell
 
 `Shell` builds MAUI's Shell from elements. The app holds the selected tab as state, and each tab with

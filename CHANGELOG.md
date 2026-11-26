@@ -113,6 +113,14 @@ Conventions for contributors:
   `Render` isn't reloaded; `StreamImage(key, open)` gives a stream image a key. A path whose
   `RenderTransform` goes away, however it's cleared (the element, a style, a parent's resources, a ref),
   is redrawn untransformed (MAUI's path handlers keep the old transform otherwise).
+  A split flyout (iPad and Mac Catalyst with `Split` or `SplitOnPortrait`, Android tablets per
+  orientation) no longer fails to load: while split, and while the platform changes mode, its
+  `IsPresented` is the platform's (never written, never reported), and the declaration applies again
+  when it stops being split. A toolbar item a rebuild retired invokes nothing (it ran the action now
+  at its index). An audit of every control and layout property (spec 070 §4.14) fixed a date picker's
+  or stepper's range moving past its current maximum (the old minimum stayed), a direct check box
+  rewriting its color on every render, and, on Android, a cleared progress bar color staying drawn
+  (MAUI sets a tint and clears a filter).
   Built with `Reactor.Maui.slnx` and tested in `.github/workflows/maui.yml`, including a
   device tier that runs on the real platform controls. It doesn't change the WinUI packages.
 
