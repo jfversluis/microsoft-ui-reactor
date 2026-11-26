@@ -691,13 +691,10 @@ internal sealed class FlyoutHandler : Reactor.Hosting.IElementHandler<FlyoutElem
         WritePresented(control, newElement.IsPresented);
     }
 
-    // Assigning a split behavior makes MAUI set IsPresented itself, inside the write.
-    private static void WriteBehavior(ReactorFlyoutPage flyout, FlyoutLayoutBehavior? previous, FlyoutLayoutBehavior? next)
-    {
-        flyout.Syncing = true;
-        try { Props.Set(flyout, FlyoutPage.FlyoutLayoutBehaviorProperty, previous, next); }
-        finally { flyout.Syncing = false; }
-    }
+    // Written before IsPresented is decided. What MAUI sets inside this write is raised while split
+    // (entering) or inside the native mode change (leaving), so it is never reported.
+    private static void WriteBehavior(ReactorFlyoutPage flyout, FlyoutLayoutBehavior? previous, FlyoutLayoutBehavior? next) =>
+        Props.Set(flyout, FlyoutPage.FlyoutLayoutBehaviorProperty, previous, next);
 
     // Never while split: MAUI refuses false by throwing, which leaves the property stuck for good.
     private static void WritePresented(ReactorFlyoutPage flyout, bool declared)
