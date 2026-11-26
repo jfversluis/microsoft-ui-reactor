@@ -648,7 +648,9 @@ Reactor groups radio buttons itself, on both renderers: buttons with the same `G
 page, or unnamed buttons in the same layout. A tap checks the button, unchecks its peers on the
 platform, and then reports each change (the peers' unchecks first), so a callback already sees the
 group settled. A check made from inside such a callback (through a ref) runs on the next turn, after
-the first one. Two buttons declared checked in one group are both shown checked, and a warning is
+the first one. Don't write a button's `IsChecked` through a ref from its own callback: MAUI delays
+that write, and on Android a text radio button then flips back and forth forever; change your state
+instead. Two buttons declared checked in one group are both shown checked, and a warning is
 logged. MAUI's `RadioButtonGroup` attached properties don't apply to Reactor's buttons.
 
 ## Pickers and formatted text

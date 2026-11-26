@@ -88,6 +88,16 @@ Conventions for contributors:
   passes MAUI's `WebNavigatedEventArgs` with the result (it passed the URL); `Entry.CursorPosition`,
   `SelectionLength` and `OnSelectionChanged` with WinUI's semantics. The `ScrollView` element renders a
   `ScrollView` subclass, so an implicit style for it needs `ApplyToDerivedTypes`.
+  Collections and items (spec 070 §3): a `CollectionView` template can take the item's `ItemState`
+  (its declared selection) and then turns off the platform's selection highlight; grouped lists;
+  `ScrollToKey`; selection is reported from the event, multiple selection compares key sets, and
+  on iOS and Mac Catalyst Reactor repairs a native selection MAUI's deferred batch updates leave
+  stale. `SwipeView` items go on four sides with modes, `Threshold`, content items and the swipe
+  events; `SwipeAction` is now WinUI's `SwipeItemData`. `RadioButton(Element content, …)` shows view
+  content with MAUI's indicator or alone (`IsIndicatorVisible`), and Reactor now groups radio
+  buttons itself on both renderers (by `GroupName` per page, or by layout), reporting a tap's peers'
+  unchecks first; the native button's `GroupName` is Reactor's own. `Picker(items, display, …)`
+  shows a text per item, and `Label(Run(…), Hyperlink(…))` shows formatted runs.
   Built with `Reactor.Maui.slnx` and tested in `.github/workflows/maui.yml`, including a
   device tier that runs on the real platform controls. It doesn't change the WinUI packages.
 
