@@ -57,9 +57,9 @@ PR #15, stacked on #14.
 |---|--:|--:|---|
 | MAUI renderer (headless) | 154 | 213 | dialogs (queue, barrier, outcomes, staleness, threading), back (eligibility, order, once per back, modal and Shell paths, list cells, hosted pages), lifecycle |
 | MAUI engine (headless) | 73 | 73 | |
-| MAUI device, Android 37 | 71 | 90 | 88/88 on the full run; the back key is sent as a real key event through `adb shell input keyevent 4`. The later run of the `Dialogs_` fixtures passed 10, with 1 iOS-only fixture skipped |
-| MAUI device, Mac Catalyst | 71 | 83 + 7 skipped | the skips are the Android-only back-key and backgrounding fixtures, reported as TAP `# SKIP` |
-| MAUI device, iOS 27 | 71 | 83 + 7 skipped | as above; three full runs in a row were green after the test-harness fix (below) |
+| MAUI device, Android 37 | 71 | 89 + 5 skipped | full run at the final head; the skips are iOS-only dialog fixtures. The back key is sent as a real key event through `adb shell input keyevent 4` |
+| MAUI device, Mac Catalyst | 71 | 86 + 7 skipped | full run at the final head; the skips are the Android-only back-key and backgrounding fixtures, reported as TAP `# SKIP` |
+| MAUI device, iOS 27 | 71 | 86 + 7 skipped | as above; full run at the final head, after three earlier full runs in a row were green following the test-harness fix (below) |
 | Release build | 0 warnings | 0 warnings | |
 
 - **Native buttons:** dialogs are answered through their native buttons in process on every
@@ -68,6 +68,29 @@ PR #15, stacked on #14.
 - **Mutation checks:** more than 40 across the build and three review rounds, each killed.
 - **Known gap:** the order where Shell's own back callback runs before Reactor's is covered
   headlessly only. On the emulator, Reactor's callback always came first.
+
+## CI
+
+At `d5b53b71` every workflow passed: CI, MAUI (including device tests), Coverage, Package,
+Build metrics, Bootstrap and Node projects ([MAUI run 45765358125](https://github.com/jfversluis/microsoft-ui-reactor/actions/runs/45765358125),
+[CI run 45765358267](https://github.com/jfversluis/microsoft-ui-reactor/actions/runs/45765358267)).
+The report commit after it changes only this file.
+
+## Performance
+
+`/perf` ([run 45752173137](https://github.com/jfversluis/microsoft-ui-reactor/actions/runs/45752173137)),
+StocksGrid, 12 paired runs against `main`:
+
+| Metric | `main` | 4b-3 | Δ (95% CI) |
+|---|--:|--:|--:|
+| Renders/sec ↑ | 3.22 | 3.13 | -1.3% [-5.1, +2.4] |
+| Avg Reconcile (ms) ↓ | 118.7 | 115.5 | -1.7% [-4.0, +0.5] |
+| Avg Diff (ms) ↓ | 106.8 | 106.2 | -0.4% [-2.9, +2.0] |
+| Avg Memory (MB) ↓ | 289.9 | 291.8 | +0.5% [+0.1, +1.0] |
+
+- All 27 reconciler micro-benchmarks are within noise, with allocations unchanged.
+- The workflow flags memory at +0.5%, under the gate's +5% threshold. This phase changes no file
+  under `src/Reactor` or `src/Reactor.Core`, so the WinUI code measured is unchanged from 4b-2.
 
 ## The iOS CI failure, and a product bug it found
 
@@ -84,6 +107,15 @@ CI's first iOS device run failed four dialog fixtures:
 - **Two new fixtures** cover it, and each fails when its mutation is applied:
   - an answer arriving before the alert has gone holds the next dialog;
   - an alert outside the queue doesn't hold Reactor's dialogs back.
+- **Three follow-ups from the gpt-6.1-sol checks**, each reproduced on Mac Catalyst first, fixed,
+  and confirmed by that model's probe:
+  - the queue held its own alert weakly, so a collection could release the barrier early. It's
+    now held strongly;
+  - an alert another component opened from `OnClosed` was counted as the queue's own. Ownership is
+    now settled right after presentation;
+  - a foreign alert with the same title was also counted as owned. The queue now marks exactly the
+    one alert its presentation created (a snapshot just before MAUI presents, compared just after).
+  - Each has a device fixture that fails under its mutation.
 
 ## Review
 
