@@ -25,6 +25,14 @@ public static class MauiCoreHooks
         }
 
         /// <summary>
+        /// Returns a ref to attach to an element with <c>.Ref(...)</c>; the same instance every render.
+        /// Read its <c>Current</c> in event handlers and effects to call the mounted view
+        /// (<c>Focus()</c>, <c>ScrollToAsync(...)</c>, a web view's <c>GoBack()</c>).
+        /// </summary>
+        public Microsoft.UI.Reactor.Input.ElementRef<T> UseElementRef<T>() where T : class, IView =>
+            context.UseMemo(static () => new Microsoft.UI.Reactor.Input.ElementRef<T>(), Array.Empty<object>());
+
+        /// <summary>
         /// Root mode: creates a navigation stack with the given initial route and returns a
         /// <see cref="Navigation.NavigationHandle{TRoute}"/> that is stable across re-renders. Render it
         /// with <c>NavigationHost</c>, which also provides it to descendants, so a child component can

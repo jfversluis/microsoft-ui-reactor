@@ -126,6 +126,15 @@ public static class ViewElementExtensions
         Modify(element, m => m with { OnPan = onPan });
 
     /// <summary>
+    /// Attaches <paramref name="target"/>, so its <c>Current</c> is this element's view while the element
+    /// is mounted; <see langword="null"/> detaches. With the direct renderer, a ref whose type the direct
+    /// view isn't (<c>ElementRef&lt;Entry&gt;</c>) renders this element as a Controls view.
+    /// </summary>
+    public static TElement Ref<TElement, TView>(this TElement element, Microsoft.UI.Reactor.Input.ElementRef<TView>? target)
+        where TElement : ViewElement where TView : class, IView =>
+        Modify(element, m => m with { Ref = target?.Cell });
+
+    /// <summary>
     /// Runs <paramref name="configure"/> against the native MAUI view after every mount and update.
     /// The escape hatch for settings no modifier models; keep it idempotent.
     /// </summary>

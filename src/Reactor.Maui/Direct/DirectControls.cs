@@ -164,8 +164,48 @@ public sealed class DirectEntry : DirectControl, IEntry
     public bool IsSpellCheckEnabled => _isSpellCheckEnabled;
     public bool IsTextPredictionEnabled => true;
     public int MaxLength => _maxLength;
-    public int CursorPosition { get; set; }
-    public int SelectionLength { get; set; }
+    private int _cursorPosition;
+    private int _selectionLength;
+
+    /// <summary>Raised when the platform handler reports a new cursor position or selection length.</summary>
+    internal Action? OnSelectionChanged { get; set; }
+
+    // The handler writes these when the user moves the selection; Reactor writes through SetSelection.
+    public int CursorPosition
+    {
+        get => _cursorPosition;
+        set
+        {
+            if (_cursorPosition == value) return;
+            _cursorPosition = value;
+            OnSelectionChanged?.Invoke();
+        }
+    }
+
+    public int SelectionLength
+    {
+        get => _selectionLength;
+        set
+        {
+            if (_selectionLength == value) return;
+            _selectionLength = value;
+            OnSelectionChanged?.Invoke();
+        }
+    }
+
+    internal void SetSelection(int? cursor, int? length)
+    {
+        if (cursor is { } c && _cursorPosition != c)
+        {
+            _cursorPosition = c;
+            Remap(nameof(ITextInput.CursorPosition));
+        }
+        if (length is { } l && _selectionLength != l)
+        {
+            _selectionLength = l;
+            Remap(nameof(ITextInput.SelectionLength));
+        }
+    }
     public bool IsPassword => _isPassword;
     public ReturnType ReturnType => _returnType;
     public ClearButtonVisibility ClearButtonVisibility => _clearButtonVisibility;

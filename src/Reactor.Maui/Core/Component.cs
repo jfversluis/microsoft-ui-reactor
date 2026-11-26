@@ -39,6 +39,9 @@ public abstract class Component : ReactorComponent
         => Context.UseCallback(callback, d1, d2, d3);
 
     /// <summary>The app's current theme (light or dark). Re-renders when it changes.</summary>
+    /// <inheritdoc cref="MauiCoreHooks.UseElementRef{T}(RenderContext)"/>
+    protected Microsoft.UI.Reactor.Input.ElementRef<T> UseElementRef<T>() where T : class, IView => Context.UseElementRef<T>();
+
     protected AppTheme UseAppTheme() => Context.UseAppTheme();
 
     /// <summary>The size of the window the tree is shown in, or (0, 0) before it is known.</summary>

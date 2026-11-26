@@ -116,12 +116,46 @@ public static class DirectHandlers
                 context.RestoreAfterEvent();
             };
             view.OnCompleted = () => context.Live?.OnCompleted?.Invoke();
+            view.OnSelectionChanged = () => SelectionTracker.Find(view)?.Notified(context);
+            view.HandlerChanged += () => SelectionTracker.Find(view)?.ObservePlatform();
         }
 
         protected override void Apply(HandlerContext<EntryElement> context, DirectEntry view, EntryElement? previous, EntryElement next)
         {
-            view.Apply(next);
-            if (view.Text != next.Text) context.WriteSuppressed(view, () => view.SetText(next.Text));
+            var selection = SelectionTracker.IsUsed(next) ? SelectionTracker.For(view) : SelectionTracker.Find(view);
+            if (selection is null)
+            {
+                view.Apply(next);
+                if (view.Text != next.Text) context.WriteSuppressed(view, () => view.SetText(next.Text));
+                return;
+            }
+            if (previous is null || !SelectionTracker.IsUsed(previous)) selection.ObservePlatform();
+            // One echo scope for everything that can move the selection (spec 070 §2.8).
+            selection.BeginApply();
+            var wrote = false;
+            try
+            {
+                context.WriteSuppressed(view, () =>
+                {
+                    view.Apply(next);
+                    if (view.Text != next.Text)
+                    {
+                        view.SetText(next.Text);
+                        wrote = true;
+                    }
+                    if ((next.CursorPosition != previous?.CursorPosition || next.SelectionLength != previous?.SelectionLength)
+                        && (next.CursorPosition is not null || next.SelectionLength is not null))
+                    {
+                        view.SetSelection(next.CursorPosition, next.SelectionLength);
+                        selection.Wrote(view.CursorPosition, view.SelectionLength, view.Text);
+                        wrote = true;
+                    }
+                });
+            }
+            finally
+            {
+                selection.EndApply(context, wrote);
+            }
         }
     }
 
@@ -265,7 +299,10 @@ internal sealed class HybridHandler<TElement, TDirect, TControls> : Reactor.Host
         Children = _directChildren is null && _controlsChildren is null ? null : new HybridChildren(this);
     }
 
-    private bool UseDirect(TElement element) => !(element.Modifiers?.NeedsControls ?? false) && !_needsControls(element);
+    // A ref whose type the direct view isn't (ElementRef<Entry>) needs the Controls view (spec 070 §2.5).
+    private bool UseDirect(TElement element) =>
+        !(element.Modifiers?.NeedsControls ?? false) && !_needsControls(element)
+        && (element.Modifiers?.Ref is not { } cell || cell.ExpectedType.IsAssignableFrom(typeof(TDirect)));
 
     public object Mount(HandlerContext<TElement> context, TElement element) =>
         UseDirect(element) ? _direct.Mount(context, element) : _controls.Mount(context, element);

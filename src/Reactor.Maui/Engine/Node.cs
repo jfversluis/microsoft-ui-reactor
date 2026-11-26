@@ -58,6 +58,9 @@ internal sealed class Node : ComponentNode, ILiveElement
     public IHandlerAdapter? Handler { get; set; }
     public object? Native { get; set; }
 
+    /// <summary>The ref cell this host node bound, released when it unmounts (spec 070 §2.4).</summary>
+    public ElementRefCell? BoundRef { get; set; }
+
     // Component, function and memo nodes: the callback their hooks' setters call. Created once.
     public Action? Rerender { get; set; }
 

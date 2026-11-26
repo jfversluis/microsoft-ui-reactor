@@ -109,6 +109,35 @@ public readonly struct HandlerContext<TElement> where TElement : Element
     }
 
     /// <summary>
+    /// Runs <paramref name="report"/> on the root's scheduler instead of inside a platform callback
+    /// (spec 070 §2.9). The caller detaches the state it reports before posting or at the start of
+    /// <paramref name="report"/>, and invokes callbacks through <see cref="Live"/>, which is checked
+    /// again before each. Nothing runs once the element has unmounted. An exception goes to the error
+    /// boundaries, never into the dispatcher; with <paramref name="restore"/>, the control is restored
+    /// afterwards even then.
+    /// </summary>
+    internal void PostReport(Action report, bool restore = false)
+    {
+        var node = (Node)_live;
+        node.Root.Post(() =>
+        {
+            if (node.Unmounted) return;
+            try
+            {
+                report();
+            }
+            catch (Exception ex)
+            {
+                node.Root.ReportHandlerError(node, ex);
+            }
+            finally
+            {
+                if (restore && !node.Unmounted) node.Root.RequestRestore(node);
+            }
+        });
+    }
+
+    /// <summary>
     /// Call after reporting user input: once state has settled, the control is updated with the
     /// element that is current then. A controlled control whose callback did not accept the input
     /// (did not change state) therefore returns to its declared value.

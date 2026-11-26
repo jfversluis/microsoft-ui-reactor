@@ -29,14 +29,21 @@ public abstract class DirectView : IView, IVisualTreeElement
     public IViewHandler? Handler
     {
         get => _handler;
-        set => _handler = value;
+        set
+        {
+            _handler = value;
+            HandlerChanged?.Invoke();
+        }
     }
 
     IElementHandler? IElement.Handler
     {
         get => _handler;
-        set => _handler = (IViewHandler?)value;
+        set => Handler = (IViewHandler?)value;
     }
+
+    /// <summary>Raised after a handler connects or disconnects.</summary>
+    internal event Action? HandlerChanged;
 
     public string AutomationId { get; internal set; } = "";
     public LayoutAlignment HorizontalLayoutAlignment { get; private set; } = LayoutAlignment.Fill;
@@ -84,8 +91,12 @@ public abstract class DirectView : IView, IVisualTreeElement
     public Size Measure(double widthConstraint, double heightConstraint) =>
         DesiredSize = this.ComputeDesiredSize(widthConstraint, heightConstraint);
 
+    /// <summary>Whether a layout pass has arranged this view: its default <see cref="Frame"/> of zero can't tell (spec 070 §2.6.1).</summary>
+    internal bool IsArranged { get; private set; }
+
     public Size Arrange(Rect bounds)
     {
+        IsArranged = true;
         Frame = this.ComputeFrame(bounds);
         _handler?.PlatformArrange(Frame);
         return Frame.Size;
@@ -97,9 +108,18 @@ public abstract class DirectView : IView, IVisualTreeElement
 
     public void InvalidateArrange() { }
 
-    public bool Focus() => false;
+    /// <summary>Focuses the platform view through the handler's <c>Focus</c> command, as a Controls view does.</summary>
+    public bool Focus()
+    {
+        if (_handler is null) return false;
+        var request = new FocusRequest();
+        _handler.Invoke(nameof(IView.Focus), request);
+        // A handler that doesn't map the command leaves no result.
+        request.TrySetResult(false);
+        return request.Result;
+    }
 
-    public void Unfocus() { }
+    public void Unfocus() => _handler?.Invoke(nameof(IView.Unfocus));
 
     /// <summary>
     /// The Controls element this direct tree is hosted under (the Grid wrapping it in a page or

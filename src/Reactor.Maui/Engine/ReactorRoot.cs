@@ -372,6 +372,7 @@ public sealed class ReactorRoot
                     node.Native = node.Handler!.Mount(node, _echo);
                     ReconcileChildren(node, node.Handler.GetChildren(element));
                     SyncHost(node);
+                    BindRef(node);
                     break;
             }
         }
@@ -435,6 +436,7 @@ public sealed class ReactorRoot
                 node.Handler!.Update(node, _echo, previous, next, node.Native!);
                 ReconcileChildren(node, node.Handler.GetChildren(next));
                 SyncHost(node);
+                BindRef(node);
                 break;
         }
     }
@@ -820,6 +822,7 @@ public sealed class ReactorRoot
         node.HookContext?.RunCleanupsIsolated(errors.Add);
         if (node.Subscriptions is { } subscriptions)
             foreach (var provider in subscriptions) provider.Subscribers?.Remove(node);
+        ReleaseRef(node);
         if (node.Kind == NodeKind.Host && node.Native is { } native)
         {
             try
@@ -831,6 +834,33 @@ public sealed class ReactorRoot
                 errors.Add(ex);
             }
         }
+    }
+
+    /// <summary>
+    /// Binds the ref the host node's element declares, after a successful mount or update (spec 070
+    /// §2.4). The cell the node bound before is released first, but only if it still names this node,
+    /// so a ref moved to another element in the same render keeps its new binding whatever the order.
+    /// </summary>
+    private static void BindRef(Node node)
+    {
+        var wanted = (node.Element as IRefTarget)?.RefCell;
+        if (ReferenceEquals(wanted, node.BoundRef)) return;
+        if (wanted is not null && !wanted.ExpectedType.IsInstanceOfType(node.Native))
+            throw new InvalidOperationException(
+                $"An ElementRef<{wanted.ExpectedType.Name}> is attached to a {node.Element.GetType().Name}, which renders a "
+                + $"{node.Native?.GetType().Name ?? "null"}. Use a ref whose type the view is, such as ElementRef<IView>.");
+        ReleaseRef(node);
+        if (wanted is null) return;
+        wanted.Bind(node, node.Native!);
+        node.BoundRef = wanted;
+    }
+
+    /// <summary>Releases the cell the node bound. Reads the node, never its element, which an update may already have replaced.</summary>
+    private static void ReleaseRef(Node node)
+    {
+        if (node.BoundRef is not { } cell) return;
+        cell.Release(node);
+        node.BoundRef = null;
     }
 
     /// <summary>Records the top-most natives of a subtree about to be unmounted, to release them after the pass.</summary>

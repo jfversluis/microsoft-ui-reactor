@@ -141,7 +141,15 @@ internal sealed class ReactorCell : ContentView
 
     public void Render()
     {
-        if (_host.Stopped || BindingContext is not ItemBox box) return;
+        if (_host.Stopped) return;
+        if (BindingContext is not ItemBox box)
+        {
+            // Retired: MAUI cleared the cell's item (iOS and Mac Catalyst's TemplatedCell2.Unbind sets
+            // it to null). Its tree unmounts, running cleanups and releasing refs; a later item mounts
+            // a fresh one, with or without ReuseItemTrees (spec 070 §2.4).
+            Unmount();
+            return;
+        }
         _root ??= _host.CreateRoot(native => Content = native is null ? null : Props.AsView(native));
         var element = _host.Template(box.Item) ?? EmptyElement.Instance;
         // Keyed by item, so a cell recycled for another item remounts instead of keeping that

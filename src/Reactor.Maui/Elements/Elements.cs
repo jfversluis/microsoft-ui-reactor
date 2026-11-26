@@ -50,9 +50,28 @@ public sealed record BorderElement(Element? Content) : ViewElement
 
 public sealed record GraphicsViewElement(IDrawable Drawable) : ViewElement;
 
+/// <summary>
+/// A web view. <see cref="Url"/> is the source the app requests, not the page the view shows: it is
+/// loaded when it changes. Keep the current page in separate state; rendering
+/// <see cref="OnNavigated"/>'s URL back into <see cref="Url"/> loads it again. <see cref="Html"/>, when
+/// set, wins over <see cref="Url"/>.
+/// </summary>
 public sealed record WebViewElement(string? Url, string? Html = null) : ViewElement
 {
-    public Action<string>? OnNavigated { get; init; }
+    /// <summary>
+    /// Asked before a navigation; set <c>Cancel</c> to refuse it. Synchronous: the platform waits for
+    /// the answer, so <c>Cancel</c> set after an <c>await</c> does nothing. Not exactly once (Android
+    /// can ask twice), so give the same answer for the same URL. Navigations a changed <see cref="Url"/>
+    /// starts are asked too. A throwing callback cancels the navigation.
+    /// </summary>
+    public Action<WebNavigatingEventArgs>? OnNavigating { get; init; }
+
+    /// <summary>
+    /// A navigation completed, with its <c>Result</c>: <c>Success</c>, <c>Cancel</c>, <c>Failure</c> or
+    /// <c>Timeout</c>. Called after the platform callback, so <c>CanGoBack</c> and <c>CanGoForward</c> are
+    /// up to date.
+    /// </summary>
+    public Action<WebNavigatedEventArgs>? OnNavigated { get; init; }
 }
 
 // ── Input ───────────────────────────────────────────────────────────────────
@@ -87,6 +106,23 @@ public sealed record EntryElement(string Text, Action<string>? OnTextChanged = n
     public TextAlignment? HorizontalTextAlignment { get; init; }
     public bool? IsSpellCheckEnabled { get; init; }
     public Action? OnCompleted { get; init; }
+
+    /// <summary>
+    /// Where the caret goes, written when this value changes (and at mount), as WinUI's
+    /// <c>TextBox.SelectionStart</c>. Not controlled: the user moves the caret freely, and a move isn't
+    /// undone. <see langword="null"/> never writes. Clamped to the text by the platform.
+    /// </summary>
+    public int? CursorPosition { get; init; }
+
+    /// <summary>How many characters after <see cref="CursorPosition"/> are selected; written like it.</summary>
+    public int? SelectionLength { get; init; }
+
+    /// <summary>
+    /// The selection changed: the selected text, the cursor position and the selection length, as the
+    /// platform shows them. Reported once per burst of changes, after the platform callback. A selection
+    /// Reactor wrote isn't reported; a caret a text change moved is.
+    /// </summary>
+    public Action<string, int, int>? OnSelectionChanged { get; init; }
 }
 
 /// <summary>A controlled multi-line text input: it always shows <see cref="Text"/>.</summary>

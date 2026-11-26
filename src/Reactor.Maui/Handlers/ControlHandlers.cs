@@ -77,7 +77,23 @@ internal sealed class WebViewHandler : ViewHandler<WebViewElement, MauiWebView>
     protected override MauiWebView Create(HandlerContext<WebViewElement> context, WebViewElement element)
     {
         var view = new MauiWebView();
-        view.Navigated += (_, e) => context.Live?.OnNavigated?.Invoke(e.Url);
+        view.Navigating += (_, e) =>
+        {
+            if (context.Live?.OnNavigating is not { } onNavigating) return;
+            try
+            {
+                onNavigating(e);
+            }
+            catch (Exception ex)
+            {
+                // Never into the platform's decision callback (an iOS crash); refused instead, as a
+                // throwing navigation guard refuses (spec 070 §2.7).
+                e.Cancel = true;
+                context.ReportError(ex);
+            }
+        };
+        // Posted: Android updates CanGoBack and CanGoForward after raising Navigated.
+        view.Navigated += (_, e) => context.PostReport(() => context.Live?.OnNavigated?.Invoke(e));
         return view;
     }
 
@@ -142,10 +158,53 @@ internal sealed class EntryHandler : ViewHandler<EntryElement, MauiEntry>
             context.RestoreAfterEvent();
         };
         view.Completed += (_, _) => context.Live?.OnCompleted?.Invoke();
+        view.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(MauiEntry.CursorPosition) or nameof(MauiEntry.SelectionLength))
+                SelectionTracker.Find(view)?.Notified(context);
+        };
+        view.HandlerChanged += (_, _) => SelectionTracker.Find(view)?.ObservePlatform();
         return view;
     }
 
     protected override void Apply(HandlerContext<EntryElement> context, MauiEntry view, EntryElement? previous, EntryElement next)
+    {
+        var selection = SelectionTracker.IsUsed(next) ? SelectionTracker.For(view) : SelectionTracker.Find(view);
+        if (selection is null)
+        {
+            ApplyProperties(context, view, previous, next);
+            return;
+        }
+        if (previous is null || !SelectionTracker.IsUsed(previous)) selection.ObservePlatform();
+        // One echo scope for everything that can move the selection (spec 070 §2.8): input-type and
+        // MaxLength updates, the text, then the selection.
+        selection.BeginApply();
+        var wrote = false;
+        try
+        {
+            context.WriteSuppressed(view, () =>
+            {
+                wrote = ApplyProperties(context, view, previous, next);
+                if (next.CursorPosition != previous?.CursorPosition || next.SelectionLength != previous?.SelectionLength)
+                {
+                    if (next.CursorPosition is { } cursor) view.CursorPosition = cursor;
+                    if (next.SelectionLength is { } length) view.SelectionLength = length;
+                    if (next.CursorPosition is not null || next.SelectionLength is not null)
+                    {
+                        selection.Wrote(view.CursorPosition, view.SelectionLength, view.Text ?? "");
+                        wrote = true;
+                    }
+                }
+            });
+        }
+        finally
+        {
+            selection.EndApply(context, wrote);
+        }
+    }
+
+    /// <summary>Applies everything but the selection; returns whether it wrote the text.</summary>
+    private static bool ApplyProperties(HandlerContext<EntryElement> context, MauiEntry view, EntryElement? previous, EntryElement next)
     {
         Props.ApplyText(view, previous, next);
         Props.SetRef(view, MauiEntry.PlaceholderProperty, previous?.Placeholder, next.Placeholder);
@@ -159,7 +218,9 @@ internal sealed class EntryHandler : ViewHandler<EntryElement, MauiEntry>
         Props.Set(view, MauiEntry.HorizontalTextAlignmentProperty, previous?.HorizontalTextAlignment, next.HorizontalTextAlignment);
         Props.Set(view, MauiEntry.IsSpellCheckEnabledProperty, previous?.IsSpellCheckEnabled, next.IsSpellCheckEnabled);
         // Compared with the control, not the old element: the user may have typed since the last render.
-        if ((view.Text ?? "") != next.Text) context.WriteSuppressed(view, () => view.Text = next.Text);
+        if ((view.Text ?? "") == next.Text) return false;
+        context.WriteSuppressed(view, () => view.Text = next.Text);
+        return true;
     }
 }
 

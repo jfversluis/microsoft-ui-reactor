@@ -95,24 +95,26 @@ internal sealed class AbsoluteLayoutHandler : LayoutHandler<AbsoluteLayoutElemen
     protected override void ApplyLayout(MauiAbsoluteLayout view, AbsoluteLayoutElement? previous, AbsoluteLayoutElement next) { }
 }
 
-internal sealed class ScrollViewHandler : ViewHandler<ScrollViewElement, MauiScrollView>
+internal sealed class ScrollViewHandler : ViewHandler<ScrollViewElement, ReactorScrollView>
 {
-    protected override MauiScrollView Create(HandlerContext<ScrollViewElement> context, ScrollViewElement element)
+    protected override ReactorScrollView Create(HandlerContext<ScrollViewElement> context, ScrollViewElement element)
     {
-        var view = new MauiScrollView();
+        var view = new ReactorScrollView();
         view.Scrolled += (_, e) => context.Live?.OnScrolled?.Invoke(e.ScrollX, e.ScrollY);
         return view;
     }
 
-    protected override void Apply(HandlerContext<ScrollViewElement> context, MauiScrollView view, ScrollViewElement? previous, ScrollViewElement next)
+    protected override void Apply(HandlerContext<ScrollViewElement> context, ReactorScrollView view, ScrollViewElement? previous, ScrollViewElement next)
     {
         Props.Set(view, MauiScrollView.OrientationProperty, previous?.Orientation, next.Orientation);
         Props.Set(view, MauiScrollView.VerticalScrollBarVisibilityProperty, previous?.VerticalScrollBarVisibility, next.VerticalScrollBarVisibility);
         Props.Set(view, MauiScrollView.HorizontalScrollBarVisibilityProperty, previous?.HorizontalScrollBarVisibility, next.HorizontalScrollBarVisibility);
     }
 
-    public override IChildrenStrategy<ScrollViewElement, MauiScrollView> Children { get; } =
-        ChildrenStrategy.Single<ScrollViewElement, MauiScrollView, object>(
+    public override void Unmount(ReactorScrollView control) => control.Bridge.Cancel();
+
+    public override IChildrenStrategy<ScrollViewElement, ReactorScrollView> Children { get; } =
+        ChildrenStrategy.Single<ScrollViewElement, ReactorScrollView, object>(
             e => e.Content, (scrollView, content) => scrollView.Content = content is null ? null : Props.AsView(content));
 }
 

@@ -15,6 +15,7 @@
     <Using Include="Microsoft.UI.Reactor.Maui" />
     <Using Include="Microsoft.UI.Reactor.Maui.Hosting" />
     <Using Include="Microsoft.UI.Reactor.Maui.Direct" />
+    <Using Include="Microsoft.UI.Reactor.Input" />
     <Using Include="Microsoft.UI.Reactor.Core.Element" Alias="Element" />
     <Using Include="Microsoft.UI.Reactor.Navigation.NavigationMode" Alias="NavigationMode" />
   </ItemGroup>
