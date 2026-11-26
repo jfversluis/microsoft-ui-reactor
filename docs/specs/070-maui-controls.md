@@ -1,6 +1,6 @@
 # Spec 070: MAUI controls (phase 4c)
 
-Phase 4c closes the controls rows of spec 068's inventory. It lands in three gated PRs:
+Phase 4c closes the controls rows of spec 068's inventory. It lands in four gated PRs:
 
 | PR | Scope |
 |---|---|
@@ -24,6 +24,9 @@ is spec 068 §1.
 - **4c-2, collections and items** (§3). It reuses 4c-1's refs for `CollectionView.ScrollTo` and
   `SwipeView.Open`/`Close`.
 - **4c-3, shapes, brushes, ContentView, image equality, tests and the audit** (§4, later).
+- **4c-4, CarouselView and IndicatorView** (§5). Moved out of 4c-2 in its design review: the
+  carousel's position echo must never write or report during a drag and must not guess an
+  operation's provenance (§5 lists the requirements).
 
 ## 2. 4c-1: element refs and imperative commands
 
@@ -797,10 +800,30 @@ allocations +0.0–0.2%.
   and GPU processes (its own log: 6.4 s and 1.4 s), not a missed event, a rejected completion or an
   unresolved asset URL. The fixtures now give the process's first web view page 60 s and later ones
   the ordinary 10 s, note each load's time, and on a timeout list every event with its time and URL.
+- `WebView_Navigations_AreAttemptedAndCompleted` failed intermittently in full Android runs (2 of 3
+  on the 4c-2 branch, never alone). Two fixture races, both reproduced on purpose:
+  - **The recovery after a late cancel.** Where Android's late-cancelled reload landed early, it left
+    a blank page (title `""`; a probe got it every time with no delay in `OnNavigating`, and the
+    reloaded page 2 with 150 ms or more), and the fixture then went back to page 2 by declaring page 1
+    and running a script navigation. Android marks an entry that navigates away without a user
+    gesture as one its back skips, so the refused back then went to page 2 and asked `Back page2`,
+    not `Back page1`. Forcing that recovery path fails the old fixture every time with the CI
+    message; the fixture now starts the next case from a new web view (page 1, then page 2 declared)
+    after any late cancel.
+  - **A script poll lost to a navigation.** MAUI's Android `EvaluateJavaScriptAsync` never completes
+    when a navigation replaces the document before the script answers: 5 of 17 polls of
+    `document.title` during navigations went unanswered (a probe). The fixture awaited it without a
+    bound, so a poll racing the positive control's navigation hung it past the runner's 30 s. Every
+    script call now has a bound: polls retry, reads fail with a clear message, and scripts that
+    navigate don't wait for their own answer.
+
+  With both fixed, three consecutive full Android runs passed (156 passed, 5 skipped each).
 - The WebView fixture once waited for a page 1 completion its shared log already held from an
   earlier show, so on a slow CI simulator it read the title before the new web view had loaded;
   `ShowPage1` now counts only completions after its own show, and the refused cases wait for the
   attempt (and Android's late completion) instead of a fixed delay.
+- MAUI's Android `EvaluateJavaScriptAsync` can stay pending forever when a navigation replaces the
+  document before the script answers: MAUI behaviour to file upstream; await it with a timeout.
 - Android can't keep the previous page when it cancels a reload or a back navigation (§2.7's table);
   MAUI's own overloads can leave a superseded `ScrollToAsync` pending; both are MAUI behaviour to
   file upstream.
@@ -1117,7 +1140,7 @@ HStack(12,
 **Content.**
 
 - **`ContentElement`** (`Element?`, WinUI's name), taking precedence over the text `Content`, and
-  WinUI's factory `RadioButton(Element content, bool isChecked, Action<bool>? onCheckedChanged = null, string? groupName = null)`.
+  WinUI's factory `RadioButton(Element content, bool isChecked, Action<bool>? onIsCheckedChanged = null, string? groupName = null)`.
   The content is a child of the radio button, so it renders through the registry: direct views in
   it are hosted by `AsView` on the direct registry.
 - **The template.** MAUI shows view content only through a `ControlTemplate` (`ContentAsString`
@@ -1502,7 +1525,9 @@ Catalyst 154 passed, 7 skipped; iOS simulator 154 passed, 7 skipped; Android emu
 skipped. Two earlier full Android runs each failed one 4c-1 fixture of code 4c-2 doesn't touch,
 `WebView_Navigations_AreAttemptedAndCompleted` (once a refused back wasn't asked within 10 s, once
 the fixture ran past 30 s after its back case); it passed alone twice and in the grouped ref and echo
-runs, and the base commit's one full run passed it. The cause isn't established.
+runs, and the base commit's one full run passed it. The cause was two races in that fixture, timing
+dependent and unrelated to 4c-2 (§2.15, open issues); fixed in the fixture, after which three
+consecutive full Android runs passed.
 
 **Mutation checks** (each broke the code, ran the class's tests, restored and touched the file): all
 red but the two equivalent mutants of deviation 7. Label: rebuilding on every change, invoking
@@ -1523,16 +1548,65 @@ description warning per render, the template switch updated in place.
 total time within noise in every scenario on both renderers (head −5% to +0.3%), allocations
 identical to the kilobyte. The benchmark renders stacks of labels and buttons, so it covers the
 label's changed text path, not the list path; the list path's added work per commit is a key
-dictionary rebuild in `Sync` and, on iOS and Mac Catalyst for a list with a selection mode, one empty
-batch update.
+dictionary rebuild in `Sync` and, on iOS and Mac Catalyst, one empty batch update after a commit
+that wrote the selection or its mode, or followed user input (since the review round below; before
+it, after every commit of a selecting list).
+
+**Review round (pr-review of `a7db2b0c`).** Changes, each with its headless test:
+
+- **Radio group lifetime.** A group (members and generation) is one object in one dictionary and goes
+  with its last member, so a popped page or removed layout (a group key's scope) isn't kept alive; a
+  transaction or queued check on a removed group stops. Test: a weak reference to a removed layout
+  whose buttons were checked collects.
+- **A queued check survives a render.** A callback that changes state and then checks another button
+  through a ref: the state change's render ran before the queue and re-applied the button's
+  declaration (suppressed), so the queue dropped the check. A render now skips the controlled write
+  for a button with a queued check (the queue restores its declaration if it drops the check).
+- **Radio accessible name.** The effective description (the declared one, else non-empty text) is
+  written after the modifiers (a new `ViewHandler.AfterModifiers` hook), so removing
+  `.Semantics(description:)` keeps the text as the name and empty text clears it.
+- **Native verification only when needed** (§3.4 changed): a commit schedules it only when it wrote
+  the selection or its mode, or input arrived since the native selection was last found as declared;
+  an unrelated re-render issues no batch update. The stale-completion reissue is unchanged.
+- **Run decorations** toggle one flag of the effective value (a hyperlink starts underlined), so
+  `.Strikethrough(false)` keeps a hyperlink's underline and `.Underline().Strikethrough()` keeps both.
+- `Label` gained `.LineHeight(...)` and `.TextTransform(...)`; a swipe content item no longer rebuilds
+  its side for a color or icon it doesn't show; `RadioButton`'s callback parameter is
+  `onIsCheckedChanged`, WinUI's name.
+- Not done: replacing `LabelInlines`' two weak tables with a `Label` subclass (optional in the review;
+  the tables work and the subclass would change the native type users see).
+
+More tests: an unnamed group across a component boundary, MAUI's own grouping as a witness on both
+registries (Controls unchecks the peer, direct doesn't), a ref uncheck outside a transaction, queued
+checks superseded or unmounted before they run, two queued checks where the first unchecks the
+second, swipe mode-only and icon-only rebuilds, content items unmounted with the swipe view, header
+replacement with new text, a group header cell's state across rebinds. Device fixture code (to run):
+`SwipeView_ContentItems` (new), the Execute side below its threshold, the overlap precondition and a
+correction count on iOS and Mac Catalyst, MAUI's real iOS label tap dispatch, exact events in gate 1
+and exact selections in the selection characterization, radio accessibility before and after a
+declared change, and the recycled list's exact native selection.
+
+Mutation checks of this round (headless; each red unless noted): the item state cached per cell,
+slots that skip unmount, the threshold through `Current`, grouped items left out of the key index,
+keys unique per group only, the cell tree keyed by box, a tree kept across retirement, `ScrollToKey`
+passing the key, the radio name scope widened to the root, the unnamed scope walking `ContextParent`,
+peers by parent node (red since the component-boundary test), a kept empty group, a render writing a
+queued button, the description written before the modifiers, scheduling regardless of writes, only
+virtual writes scheduling, a notification that doesn't make verification pending, entering `None`
+unverified (it survived at first: the stub port arrived after mount and left verification pending,
+so the test now settles the mount first and counts issued barriers), the decoration replacing the
+whole value, content items comparing color and icon, the mode not compared, a queued check
+superseding every group (the per-group generation mutant moved there: transactions never nest, so
+bumping every group in `Process` was equivalent). One more equivalent mutant: not restoring a dropped
+queue entry, because the transaction that unchecked it restores it on a posted turn, after the drain.
+Every earlier mutant still dies. Device-only and not yet run: the radio content template set after
+the handler.
 
 **Open issues.**
 
 - Android: plain MAUI's infinite loop on a text radio button written from its own notification
   (deviation 4), and MAUI's iOS `ValidateAndSelectItem` not checking that its item is still the
   selected one (§3.4): both to file upstream.
-- The Android WebView flake above (4c-1's fixture): 2 of 3 full runs on this branch, 0 of 1 on the
-  base commit, never in isolation; to watch in CI.
 - Not in 4c-2, as designed: CarouselView and IndicatorView (§5), the spec 068 gaps of §3.11, Windows
   (4g).
 

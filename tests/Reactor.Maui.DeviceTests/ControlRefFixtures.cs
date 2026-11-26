@@ -549,20 +549,37 @@ public static partial class Fixtures
             },
         }).Ref(web).AutomationId("web").Height(300);
 
-    // Polls a script's value without blocking the UI thread, which the web view needs to answer.
+    // Polls a script's value without blocking the UI thread, which the web view needs to answer. A
+    // poll that races a navigation may never be answered on Android (see TryJs): it counts as "not yet".
     private static async Task WaitForJs(FixtureContext c, ElementRef<MauiWebView> web, string script, string expected, string what, int timeoutMs)
     {
         var clock = System.Diagnostics.Stopwatch.StartNew();
-        var last = "";
-        while ((last = await Js(web, script)) != expected)
+        string? last;
+        while ((last = await TryJs(web, script, 1000)) != expected)
         {
-            if (clock.ElapsedMilliseconds > timeoutMs) throw new CheckFailedException($"timed out after {timeoutMs} ms waiting for {what} (last: {last})");
+            if (clock.ElapsedMilliseconds > timeoutMs) throw new CheckFailedException($"timed out after {timeoutMs} ms waiting for {what} (last: {last ?? "no answer"})");
             await Task.Delay(50);
         }
     }
 
+    // MAUI's Android EvaluateJavaScriptAsync never completes when a navigation replaces the document
+    // before the script answers (measured: 5 of 17 polls during navigations; spec 070 §2.15), so no
+    // call here awaits it unbounded. Null means it wasn't answered in time.
+    private static async Task<string?> TryJs(ElementRef<MauiWebView> web, string script, int timeoutMs)
+    {
+        var answer = web.Current!.EvaluateJavaScriptAsync(script);
+        if (await Task.WhenAny(answer, Task.Delay(timeoutMs)) != answer) return null;
+        return (await answer ?? "").Trim('"');
+    }
+
+    // A script that reads the page, with no navigation running: it must answer.
     private static async Task<string> Js(ElementRef<MauiWebView> web, string script) =>
-        (await web.Current!.EvaluateJavaScriptAsync(script) ?? "").Trim('"');
+        await TryJs(web, script, 5000)
+        ?? throw new CheckFailedException($"EvaluateJavaScriptAsync({script}) wasn't answered within 5 s");
+
+    // A script that starts a navigation: its own answer can be lost to that navigation, so it isn't
+    // waited for beyond a moment; the caller waits for the navigation's effect instead.
+    private static Task Navigate(ElementRef<MauiWebView> web, string script) => TryJs(web, script, 1000);
 
     private static async Task<MauiWebView> ShowPage1(FixtureContext c, WebLog log, ElementRef<MauiWebView> web)
     {
@@ -599,7 +616,7 @@ public static partial class Fixtures
         await ShowPage1(c, log, web);
 
         // Positive control: an allowed link from page 1 to page 2.
-        await Js(web, "document.getElementById('next').click(); 'ok'");
+        await Navigate(web, "document.getElementById('next').click(); 'ok'");
         await c.WaitFor(() => log.Completions.Contains("page2 Success"), "page 2 to load", 10000);
         await WaitForJs(c, web, "document.title", "page2", "page 2's title", 5000);
         Note($"after the link: {RefPlatform.History(web.Current!)}");
@@ -628,8 +645,8 @@ public static partial class Fixtures
         log.Refuse = url => true;
         foreach (var (name, start, attempt, lateCompletion) in new (string, Func<Task>, string, string?)[]
         {
-            ("link", () => Js(web, "document.getElementById('back').click(); 'ok'"), "NewPage page1", null),
-            ("script", () => Js(web, "location.href = 'page1.html'; 'ok'"), "NewPage page1", null),
+            ("link", () => Navigate(web, "document.getElementById('back').click(); 'ok'"), "NewPage page1", null),
+            ("script", () => Navigate(web, "location.href = 'page1.html'; 'ok'"), "NewPage page1", null),
             ("reload", () => { web.Current!.Reload(); return Task.CompletedTask; }, "Refresh page2", android ? "page2 Cancel" : null),
             ("back", () => { web.Current!.GoBack(); return Task.CompletedTask; }, "Back page1", android ? "page1 Cancel" : null),
         })
@@ -640,7 +657,14 @@ public static partial class Fixtures
             await start();
             // Waits for what the platform does rather than for a fixed time; then settles, so anything
             // more it reports is seen too.
-            await c.WaitFor(() => log.Attempts.Skip(attempts).Contains(attempt), $"{name}: OnNavigating to be asked about {attempt}", 10000);
+            try
+            {
+                await c.WaitFor(() => log.Attempts.Skip(attempts).Contains(attempt), $"{name}: OnNavigating to be asked about {attempt}", 10000);
+            }
+            catch (CheckFailedException ex)
+            {
+                throw new CheckFailedException($"{ex.Message} (asked [{string.Join(", ", log.Attempts.Skip(attempts))}], {RefPlatform.History(web.Current!)})");
+            }
             if (lateCompletion is not null)
                 await c.WaitFor(() => log.Completions.Skip(completions).Contains(lateCompletion), $"{name}: the late cancel's completion", 10000);
             await c.Settle(1200);
@@ -654,14 +678,21 @@ public static partial class Fixtures
             Equal(lateCompletion ?? "", string.Join(", ", done), $"{name}: the completions reported");
             if (lateCompletion is null) Equal("page2 kept", $"{title} {marker}", $"{name}: refused before loading, the previous page stays");
             else Equal("gone", marker, $"{name}: refused after the load started, the previous document is gone");
-            if (title != "page2" && name != "back")
+            if (lateCompletion is not null || title != "page2")
             {
-                // A late cancel left another page: start the next case from page 2 again.
+                // Android's late cancel leaves the web view as §2.7 says: unspecified (a blank page, the
+                // reloaded page, or the back entry, depending on when the stop lands). The next case
+                // starts from a new web view with the same history as the first: page 1, then page 2
+                // declared. (Reusing this one with a script navigation back to page 2 made page 1 an
+                // entry Android's back skips, so a refused back then asked about page 2.)
                 log.Refuse = _ => false;
-                c.Render(Web("page1.html", log, web));
-                await WaitForJs(c, web, "document.title", "page1", "page 1 again", 10000);
-                await Js(web, "location.href = 'page2.html'; 'ok'");
-                await WaitForJs(c, web, "document.title", "page2", "page 2 again", 10000);
+                c.Unmount();
+                await c.Settle(200);
+                await ShowPage1(c, log, web);
+                var loaded = log.Completions.Count;
+                c.Render(Web("page2.html", log, web));
+                await c.WaitFor(() => log.Completions.Skip(loaded).Contains("page2 Success"), "page 2 declared again", 10000);
+                await WaitForJs(c, web, "document.title", "page2", "page 2 declared again", 10000);
                 log.Refuse = _ => true;
             }
         }
@@ -671,7 +702,7 @@ public static partial class Fixtures
         var from = await Js(web, "document.title");
         var to = from == "page1" ? "page2" : "page1";
         var before = (log.Attempts.Count, log.Completions.Count);
-        await Js(web, $"location.href = '{to}.html'; 'ok'");
+        await Navigate(web, $"location.href = '{to}.html'; 'ok'");
         await WaitForJs(c, web, "document.title", to, $"the allowed script navigation to {to}", 10000);
         await c.WaitFor(() => log.Completions.Skip(before.Item2).Contains($"{to} Success"), "the allowed navigation to complete", 5000);
         // Asked about the page; the event kind is MAUI's: Android keeps the kind of the last command
