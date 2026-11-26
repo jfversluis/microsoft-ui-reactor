@@ -25,9 +25,12 @@ public static partial class Fixtures
         new("Dialogs_Declarative_ReportsTheAnswerToOnClosed", ClosingDialogs(DialogDeclarative)),
         new("Dialogs_TwoQueued_AreNeverShownAtOnce", ClosingDialogs(DialogTwoQueued)),
         new("Dialogs_RequestedDuringANavigation_WaitForIt", ClosingDialogs(DialogDuringNavigation)),
+        new("Dialogs_OnAModalOpenedAfterAnEarlierDialog_IsShownOnItPromptly", ClosingDialogs(DialogOnALaterModal)),
+        new("Dialogs_RequestedFromABackgroundThread_IsShownOnce", ClosingDialogs(DialogFromABackgroundThread)),
         new("SystemBack_HandlerRunsBeforeTheNavigationHost", BackBeforeHost),
         new("SystemBack_AtTheRoot_AHandlerKeepsTheApp_AndWithoutOneTheDefaultRuns", BackAtTheRoot),
         new("SystemBack_HandleOverload_ConsumesABackTheGuardRefuses", BackHandleOverload),
+        new("SystemBack_PageAndTabsRoots_TheCallbackIsEnabledOnlyWithAHandler", BackOnPageAndTabsRoots),
         new("WindowLifecycle_StoppedAndResumed_WhenTheAppIsBackgrounded", LifecycleBackgrounded),
         new("ModalPresentationStyle_PageSheet_OnIOS", ModalPageSheet),
     ];
@@ -179,49 +182,100 @@ public static partial class Fixtures
         public void Stop() => _running = false;
     }
 
+    /// <summary>MAUI's platform, recording what each presentation found (device tests check the barrier).</summary>
+    private sealed class RecordingPlatform(Action<Page> presenting) : IDialogPlatform
+    {
+        private readonly IDialogPlatform _inner = MauiDialogPlatform.Instance;
+
+        public Task<object?> Present(Page presenter, DialogContent content)
+        {
+            presenting(presenter);
+            return _inner.Present(presenter, content);
+        }
+
+        public bool IsDialogShown(Window window) => _inner.IsDialogShown(window);
+        public bool WaitForNavigation(Window window, Action resume) => _inner.WaitForNavigation(window, resume);
+        public bool ScheduleFrame(Window window, Action check) => _inner.ScheduleFrame(window, check);
+        public void AfterAnswer(Window window, Action next) => _inner.AfterAnswer(window, next);
+    }
+
+    /// <summary>Runs <paramref name="body"/> with the window's dialogs presented through a <see cref="RecordingPlatform"/>.</summary>
+    private static async Task Recording(FixtureContext c, Action<Page> presenting, Func<Task> body)
+    {
+        var queue = DialogQueue.For(c.Window);
+        queue.Platform = new RecordingPlatform(presenting);
+        try
+        {
+            await body();
+        }
+        finally
+        {
+            queue.Platform = MauiDialogPlatform.Instance;
+        }
+    }
+
     private static async Task DialogTwoQueued(FixtureContext c)
     {
         var dialogs = await ShowDialogs(c);
         var sampler = new DialogSampler(c);
-        var first = dialogs.Alert("First", null, "Yes", "No");
-        var second = dialogs.ActionSheet("Second", "Cancel", null, "One", "Two");
-#if ANDROID
-        // Android runs a dialog button's click and the dialog's dismissal in one looper turn, so no
-        // frame could show both dialogs even without the barrier. What the barrier guarantees there is
-        // that the first dialog's window is gone (the activity has the focus back) before the second
-        // is added; without it, the focus goes straight from one dialog to the next.
-        await c.WaitFor(() => NativeDialogs.IsReady(c.Window), "the first dialog to be shown");
-        var decor = Microsoft.Maui.ApplicationModel.Platform.CurrentActivity!.Window!.DecorView;
-        var activityFocused = 0;
-        var listener = new FocusListener(focused => { if (focused) activityFocused++; });
-        decor.ViewTreeObserver!.AddOnWindowFocusChangeListener(listener);
-        try
+        // When each dialog is presented, how many native dialogs are still on screen: none, every time.
+        var onScreenAtPresentation = new List<int>();
+        await Recording(c, _ => onScreenAtPresentation.Add(NativeDialogs.Count(c.Window)), async () =>
         {
+            var first = dialogs.Alert("First", null, "Yes", "No");
+            var second = dialogs.ActionSheet("Second", "Cancel", null, "One", "Two");
             Equal(true, await AnswerNatively(c, first, "Yes", expect: "First"), "the first answer");
             await c.WaitFor(() => NativeDialogs.IsReady(c.Window), "the second dialog to be shown");
-            Equal(1, activityFocused, "times the activity had the focus between the two dialogs");
-        }
-        finally
-        {
-            decor.ViewTreeObserver!.RemoveOnWindowFocusChangeListener(listener);
-        }
-#else
-        Equal(true, await AnswerNatively(c, first, "Yes", expect: "First"), "the first answer");
-#endif
-        await c.WaitFor(() => NativeDialogs.IsReady(c.Window), "the second dialog to be shown");
-        Check(NativeDialogs.Describe(c.Window).Contains("Second", StringComparison.Ordinal) || NativeDialogs.Describe(c.Window).Contains("Two", StringComparison.Ordinal),
-            $"the second dialog is shown: {NativeDialogs.Describe(c.Window)}");
-        Equal("Two", await AnswerNatively(c, second, "Two"), "the second answer");
+            Check(NativeDialogs.Describe(c.Window).Contains("Second", StringComparison.Ordinal) || NativeDialogs.Describe(c.Window).Contains("Two", StringComparison.Ordinal),
+                $"the second dialog is shown: {NativeDialogs.Describe(c.Window)}");
+            Equal("Two", await AnswerNatively(c, second, "Two"), "the second answer");
+        });
         sampler.Stop();
+        // Android runs a button's click and the dialog's dismissal in one looper turn, so no frame could
+        // show both even without the barrier: the oracle is that the first dialog's window is gone when
+        // the second is presented.
+        Equal("0,0", string.Join(",", onScreenAtPresentation), "native dialogs on screen at each presentation");
         Equal(1, sampler.MostAtOnce, "most native dialogs on screen at once");
     }
 
-#if ANDROID
-    private sealed class FocusListener(Action<bool> changed) : Java.Lang.Object, Android.Views.ViewTreeObserver.IOnWindowFocusChangeListener
+    private static async Task DialogOnALaterModal(FixtureContext c)
     {
-        public void OnWindowFocusChanged(bool hasFocus) => changed(hasFocus);
+        var dialogs = await ShowDialogs(c);
+        // An earlier dialog, answered: nothing of it may hold back the next one.
+        Equal(true, await AnswerNatively(c, dialogs.Alert("Earlier", null, "Yes", "No"), "Yes"), "the earlier answer");
+        var modal = new ContentPage { Title = "modal", Content = new Label { Text = "modal" } };
+        await c.Window.Navigation.PushModalAsync(modal, false);
+        await c.WaitFor(() => modal.IsLoaded, "the modal to be shown");
+        await c.Settle();
+        Page? presenter = null;
+        await Recording(c, p => presenter = p, async () =>
+        {
+            var clock = Stopwatch.StartNew();
+            var answer = dialogs.Alert("On the modal", null, "Yes", "No");
+            await c.WaitFor(() => NativeDialogs.IsReady(c.Window), "the dialog to be shown on the modal", 1500);
+            Console.WriteLine($"#   shown after {clock.ElapsedMilliseconds} ms");
+            Check(ReferenceEquals(presenter, modal), "presented on the modal");
+            Equal(false, await AnswerNatively(c, answer, "No"), "the answer");
+        });
+        await c.Window.Navigation.PopModalAsync(false);
     }
-#endif
+
+    private static async Task DialogFromABackgroundThread(FixtureContext c)
+    {
+        var dialogs = await ShowDialogs(c);
+        var sampler = new DialogSampler(c);
+        var onWorker = false;
+        // The request itself, made on a pool thread (not awaited there).
+        var answer = await Task.Run(() =>
+        {
+            onWorker = !MainThread.IsMainThread;
+            return Task.FromResult(dialogs.Alert("From a worker", null, "Yes", "No"));
+        });
+        Check(onWorker, "the request was made off the UI thread");
+        Equal(true, await AnswerNatively(c, answer, "Yes", expect: "From a worker"), "the answer");
+        sampler.Stop();
+        Equal(1, sampler.MostAtOnce, "native dialogs on screen at once");
+    }
 
     private sealed record DialogStackProps(Action<RouteStack<string>, Dialogs> Report);
 
@@ -249,6 +303,9 @@ public static partial class Fixtures
         await c.WaitFor(() => !navigator.IsIdle, "the push to start");
         var sampler = new DialogSampler(c, () => NativeDialogs.Count(c.Window) > 0 && !navigator.IsIdle ? "a dialog was shown during the push" : null);
         var answer = dialogs!.Alert("During", "Requested while pushing.", "Yes", "No");
+        // Positive control: the request did arrive during the push, and nothing is shown yet.
+        Check(!navigator.IsIdle, "the push is still running after the request");
+        Equal(0, NativeDialogs.Count(c.Window), "native dialogs right after the request");
         Equal(true, await AnswerNatively(c, answer, "Yes", expect: "During"), "the answer");
         sampler.Stop();
         Equal(0, sampler.Violations.Count, "dialogs shown while the push ran");
@@ -316,9 +373,50 @@ public static partial class Fixtures
         await c.Settle();
     }
 
+    private const string NoBackKey = "iOS and Mac Catalyst have no back key";
+
 #if ANDROID
-    private static AndroidX.Activity.OnBackPressedDispatcher BackDispatcher =>
-        ((AndroidX.Activity.ComponentActivity)Microsoft.Maui.ApplicationModel.Platform.CurrentActivity!).OnBackPressedDispatcher;
+    private static AndroidX.Activity.ComponentActivity Activity =>
+        (AndroidX.Activity.ComponentActivity)Microsoft.Maui.ApplicationModel.Platform.CurrentActivity!;
+
+    private static AndroidX.Activity.OnBackPressedDispatcher BackDispatcher => Activity.OnBackPressedDispatcher;
+
+    private static AndroidX.Activity.OnBackPressedCallback MauiCallback =>
+        (AndroidX.Activity.OnBackPressedCallback?)typeof(MauiAppCompatActivity)
+            .GetField("_mauiOnBackPressedCallback", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?.GetValue(Activity)
+        ?? throw new CheckFailedException("MAUI's back callback was not found (MauiAppCompatActivity changed)");
+
+    /// <summary>
+    /// Presses back with a stand-in for the platform's default (moving the task to the back) below
+    /// MAUI's callback and Reactor's, so the app stays in front. Returns whether the default was reached.
+    /// </summary>
+    private static bool BackReachingTheDefault(Window window)
+    {
+        var reached = 0;
+        var standIn = new StandInCallback(() => reached++);
+        var maui = MauiCallback;
+        var reactor = Microsoft.UI.Reactor.Maui.Hosting.SystemBack.CallbackOf(window);
+        // Callbacks are asked last-added first: Reactor's, then MAUI's, then the stand-in.
+        reactor?.Remove();
+        maui.Remove();
+        BackDispatcher.AddCallback(Activity, standIn);
+        BackDispatcher.AddCallback(Activity, maui);
+        if (reactor is not null) BackDispatcher.AddCallback(Activity, reactor);
+        try
+        {
+            BackDispatcher.OnBackPressed();
+        }
+        finally
+        {
+            standIn.Remove();
+        }
+        return reached > 0;
+    }
+
+    private sealed class StandInCallback(Action onBack) : AndroidX.Activity.OnBackPressedCallback(true)
+    {
+        public override void HandleOnBackPressed() => onBack();
+    }
 #endif
 
     private static async Task BackBeforeHost(FixtureContext c)
@@ -342,8 +440,8 @@ public static partial class Fixtures
         Equal("back:detail,guard:detail", string.Join(",", log.Entries), "the handler, then the host's guard, once each");
         Equal("home", nav.CurrentRoute, "the handle's route");
 #else
-        Console.WriteLine("#   Android only: iOS and Mac Catalyst have no back key");
         await Task.CompletedTask;
+        throw new SkipException(NoBackKey);
 #endif
     }
 
@@ -351,53 +449,91 @@ public static partial class Fixtures
     {
 #if ANDROID
         var (_, page, log) = await ShowBackApp(c, handleOverload: false);
-        var activity = (MauiAppCompatActivity)Microsoft.Maui.ApplicationModel.Platform.CurrentActivity!;
-        var mauiCallback = (AndroidX.Activity.OnBackPressedCallback?)typeof(MauiAppCompatActivity)
-            .GetField("_mauiOnBackPressedCallback", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?.GetValue(activity)
-            ?? throw new CheckFailedException("MAUI's back callback was not found (MauiAppCompatActivity changed)");
-        // A Reactor page overrides OnBackButtonPressed, so MAUI keeps its callback enabled at the root:
-        // the key reaches the page (and Android shows no predictive back-to-home preview).
-        Check(mauiCallback.Enabled, "MAUI's back callback is enabled at the root");
+        Check(Microsoft.UI.Reactor.Maui.Hosting.SystemBack.HasEnabledCallback(c.Window), "Reactor's back callback is enabled while handlers are registered");
 
         log.Handles.Add("home");
         BackDispatcher.OnBackPressed();
         await c.Settle();
         Equal("back:home", string.Join(",", log.Entries), "the root page's handler");
-        Check(!activity.IsFinishing && ReferenceEquals(c.Window.Page, page) && activity.HasWindowFocus, "the app stays in front");
+        Check(!Activity.IsFinishing && ReferenceEquals(c.Window.Page, page) && Activity.HasWindowFocus, "the app stays in front");
 
-        // Without a handler handling it, MAUI passes the key to the activity's default (which moves the
-        // task to the back). A callback below MAUI's stands in for that default, so the app stays.
+        // Without a handler handling it, the key goes on to MAUI (the host passes it on at the root),
+        // then to the platform's default.
         log.Entries.Clear();
         log.Handles.Clear();
-        var reachedDefault = 0;
-        var sentinel = new StandInCallback(() => reachedDefault++);
-        BackDispatcher.AddCallback(activity, sentinel);
-        mauiCallback.Remove();
-        BackDispatcher.AddCallback(activity, mauiCallback);
-        try
-        {
-            BackDispatcher.OnBackPressed();
-        }
-        finally
-        {
-            sentinel.Remove();
-        }
+        Check(BackReachingTheDefault(c.Window), "the platform's default reached");
         await c.Settle();
         Equal("back:home", string.Join(",", log.Entries), "the root page's handler, unhandled");
-        Equal(1, reachedDefault, "the platform default reached");
-        Check(mauiCallback.Enabled, "MAUI re-enabled its callback");
+        Check(Microsoft.UI.Reactor.Maui.Hosting.SystemBack.HasEnabledCallback(c.Window), "Reactor's callback re-enabled after passing the key on");
 #else
-        Console.WriteLine("#   Android only: iOS and Mac Catalyst have no back key");
         await Task.CompletedTask;
+        throw new SkipException(NoBackKey);
 #endif
     }
 
-#if ANDROID
-    private sealed class StandInCallback(Action onBack) : AndroidX.Activity.OnBackPressedCallback(true)
+    private sealed record RootBackProps(string Kind, bool WithHandler, List<string> Log, bool Handles);
+
+    /// <summary>A Page root or a Tabs root, with or without a back handler on the page shown.</summary>
+    private sealed class RootBackApp : Component<RootBackProps>
     {
-        public override void HandleOnBackPressed() => onBack();
+        public override Element Render()
+        {
+            var props = Props;
+            Element Content(string name) => props.WithHandler && name == "first"
+                ? Component<RootBackProbe, RootBackProps>(props)
+                : Label(name);
+            return props.Kind == "page"
+                ? Page("first", Content("first"))
+                : Tabs(0, null, Page("first", Content("first")), Page("second", Content("second")));
+        }
     }
+
+    private sealed class RootBackProbe : Component<RootBackProps>
+    {
+        public override Element Render()
+        {
+            var props = Props;
+            UseSystemBackButton(() =>
+            {
+                props.Log.Add("back");
+                return props.Handles;
+            });
+            return Label("with a handler");
+        }
+    }
+
+    private static async Task BackOnPageAndTabsRoots(FixtureContext c)
+    {
+#if ANDROID
+        foreach (var kind in new[] { "page", "tabs" })
+        {
+            foreach (var withHandler in new[] { false, true })
+            {
+                foreach (var handles in withHandler ? new[] { true, false } : new[] { false })
+                {
+                    var what = $"{kind}, {(withHandler ? $"a handler that {(handles ? "handles" : "passes")}" : "no handler")}";
+                    var log = new List<string>();
+                    c.Unmount();
+                    c.Show(Component<RootBackApp, RootBackProps>(new(kind, withHandler, log, handles)));
+                    await c.WaitFor(() => c.Window.Page is { IsLoaded: true } p && (p is ContentPage || p is TabbedPage), $"{what}: the root to load");
+                    await c.Settle();
+                    Equal(withHandler, Microsoft.UI.Reactor.Maui.Hosting.SystemBack.HasEnabledCallback(c.Window), $"{what}: Reactor's callback enabled");
+                    // A Page or Tabs root overrides nothing, so MAUI leaves its own callback off at the root
+                    // and Android can show its back-to-home preview.
+                    Equal(false, MauiCallback.Enabled, $"{what}: MAUI's callback enabled");
+                    var reachedDefault = BackReachingTheDefault(c.Window);
+                    await c.Settle(200);
+                    Equal(withHandler ? "back" : "", string.Join(",", log), $"{what}: handlers asked");
+                    Equal(!(withHandler && handles), reachedDefault, $"{what}: the platform's default reached");
+                    Console.WriteLine($"#   {what}: ok");
+                }
+            }
+        }
+#else
+        await Task.CompletedTask;
+        throw new SkipException(NoBackKey);
 #endif
+    }
 
     private static async Task BackHandleOverload(FixtureContext c)
     {
@@ -421,8 +557,8 @@ public static partial class Fixtures
         await SettledAt(c, page, "home", "the accepted back");
         Equal("back:detail,guard:detail", string.Join(",", log.Entries), "the accepted back's handlers");
 #else
-        Console.WriteLine("#   Android only: iOS and Mac Catalyst have no back key");
         await Task.CompletedTask;
+        throw new SkipException(NoBackKey);
 #endif
     }
 
@@ -458,8 +594,8 @@ public static partial class Fixtures
         await c.WaitFor(() => log.Contains("activated") && log.IndexOf("activated") > log.IndexOf("stopped"), "the window to come back", 10000);
         Equal("deactivated,stopped,resumed,activated", string.Join(",", log), "the lifecycle");
 #else
-        Console.WriteLine("#   Android only: iOS and Mac Catalyst apps can't background themselves in process");
         await Task.CompletedTask;
+        throw new SkipException("iOS and Mac Catalyst apps can't background themselves in process");
 #endif
     }
 

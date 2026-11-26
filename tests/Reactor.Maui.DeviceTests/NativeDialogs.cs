@@ -128,14 +128,16 @@ public static class NativeDialogs
 #endif
 
 #if ANDROID
-    // Every window of the process other than the activity's own: the dialogs.
+    // The process's alert dialogs: windows other than the activity's own with an alert's buttons
+    // (a MAUI modal is a dialog window too, without them).
     private static IEnumerable<Android.Views.View> DialogRoots()
     {
         var activity = Microsoft.Maui.ApplicationModel.Platform.CurrentActivity;
         var decor = activity?.Window?.DecorView;
         if (!OperatingSystem.IsAndroidVersionAtLeast(29)) throw new CheckFailedException("WindowInspector needs Android 10");
         return Android.Views.Inspectors.WindowInspector.GlobalWindowViews
-            .Where(v => !ReferenceEquals(v, decor) && v.IsAttachedToWindow && v.Visibility == Android.Views.ViewStates.Visible)
+            .Where(v => !ReferenceEquals(v, decor) && v.IsAttachedToWindow && v.Visibility == Android.Views.ViewStates.Visible
+                && (v.FindViewById(Android.Resource.Id.Button1) is not null || v.FindViewById(Android.Resource.Id.Button2) is not null))
             .ToList();
     }
 
