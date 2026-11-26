@@ -251,15 +251,17 @@ public class VisualsTests
     // ── Paths (§4.3) ────────────────────────────────────────────────────────
 
     [Fact]
-    public void ClearingRenderTransform_WritesAnIdentityFirst_SoTheDrawableResets()
+    public void ClearingRenderTransform_ResetsTheDrawnTransform()
     {
         var rotate = new Shapes.RotateTransform(90, 50, 50);
         var host = Host().Render(Path2D("M 0,0 L 100,0 L 0,100 Z") with { RenderTransform = rotate });
         var path = (MauiPath)host.RootView!;
         var seen = WatchTransform(path);
+        using var resets = new Resets(path);
 
         host.Render(Path2D("M 0,0 L 100,0 L 0,100 Z"));
-        Assert.Equal(["RotateTransform", "unset", "identity"], seen);
+        Assert.Equal(["RotateTransform"], seen);
+        Assert.Equal(1, resets.Count);
         Assert.False(path.IsSet(MauiPath.RenderTransformProperty));
 
         // Nothing set: clearing writes nothing.
@@ -280,6 +282,26 @@ public class VisualsTests
     /// cleared again inside another change's notification is seen here even when a later observer of
     /// the notification no longer could.
     /// </summary>
+    /// <summary>Counts the drawn-transform resets requested for one path while undisposed.</summary>
+    private sealed class Resets : IDisposable
+    {
+        private readonly MauiPath _path;
+        public int Count;
+
+        public Resets(MauiPath path)
+        {
+            _path = path;
+            PathData.DrawnTransformReset += OnReset;
+        }
+
+        private void OnReset(MauiPath path)
+        {
+            if (ReferenceEquals(path, _path)) Interlocked.Increment(ref Count);
+        }
+
+        public void Dispose() => PathData.DrawnTransformReset -= OnReset;
+    }
+
     private static List<string> WatchTransform(MauiPath path)
     {
         var left = new List<string>();
@@ -299,10 +321,12 @@ public class VisualsTests
         var path = (MauiPath)host.RootView!;
         Assert.IsType<Shapes.RotateTransform>(path.RenderTransform);
         var seen = WatchTransform(path);
+        using var resets = new Resets(path);
 
         // Both declarations have no transform of their own: only the style's goes away.
         host.Render(Path2D("M 0,0 L 100,0 L 0,100 Z"));
-        Assert.Equal(["RotateTransform", "unset", "identity"], seen);
+        Assert.Equal(["RotateTransform"], seen);
+        Assert.Equal(1, resets.Count);
         Assert.Null(path.RenderTransform);
         Assert.False(path.IsSet(MauiPath.RenderTransformProperty));
     }
@@ -332,9 +356,11 @@ public class VisualsTests
         var path = (MauiPath)((MauiContentView)host.RootView!).Content;
         Assert.IsType<Shapes.RotateTransform>(path.RenderTransform);
         var seen = WatchTransform(path);
+        using var resets = new Resets(path);
 
         host.Render(ClassedPath("calm"));
-        Assert.Equal(["RotateTransform", "unset", "identity"], seen);
+        Assert.Equal(["RotateTransform"], seen);
+        Assert.Equal(1, resets.Count);
         Assert.Null(path.RenderTransform);
     }
 
@@ -346,10 +372,12 @@ public class VisualsTests
         var path = reference.Current!;
         path.RenderTransform = new Shapes.RotateTransform(90, 50, 50);
         var seen = WatchTransform(path);
+        using var resets = new Resets(path);
 
         host.Render(Path2D("M 0,0 L 100,0 L 0,100 Z").Ref(reference)
             .Set<PathElement, MauiPath>(p => { if (p.RenderTransform is Shapes.RotateTransform) p.ClearValue(MauiPath.RenderTransformProperty); }));
-        Assert.Equal(["RotateTransform", "unset", "identity"], seen);
+        Assert.Equal(["RotateTransform"], seen);
+        Assert.Equal(1, resets.Count);
         Assert.Null(path.RenderTransform);
     }
 
@@ -363,31 +391,33 @@ public class VisualsTests
         var path = (MauiPath)parent.Content;
         Assert.IsType<Shapes.RotateTransform>(path.RenderTransform);
         var seen = WatchTransform(path);
+        using var resets = new Resets(path);
 
         // No render: the app replaces the parent's resources, and "spin" no longer rotates.
         var plainSpin = new Style(typeof(MauiPath)) { Class = "spin" };
         plainSpin.Setters.Add(new Setter { Property = Shape.FillProperty, Value = Colors.Black });
         parent.Resources = new ResourceDictionary { plainSpin };
 
-        Assert.Equal(["RotateTransform", "unset", "identity"], seen);
+        Assert.Equal(["RotateTransform"], seen);
+        Assert.Equal(1, resets.Count);
         Assert.Null(path.RenderTransform);
         Assert.False(path.IsSet(MauiPath.RenderTransformProperty));
     }
 
     [Fact]
-    public void ATransformSetToNullThroughARef_IsReset_AndLeavesNoLocalValue()
+    public void ATransformSetToNullThroughARef_IsReset()
     {
         var reference = Microsoft.UI.Reactor.Input.TypedElementRef.Create<MauiPath>();
         Host().Render(Path2D("M 0,0 L 100,0 L 0,100 Z").Ref(reference));
         var path = reference.Current!;
         path.RenderTransform = new Shapes.RotateTransform(90, 50, 50);
         var seen = WatchTransform(path);
+        using var resets = new Resets(path);
 
-        // A write of null runs inside MAUI's setter, which queues the identity write behind it.
         path.RenderTransform = null;
-        Assert.Equal(["RotateTransform", "unset", "identity"], seen);
+        Assert.Equal(["RotateTransform"], seen);
+        Assert.Equal(1, resets.Count);
         Assert.Null(path.RenderTransform);
-        Assert.False(path.IsSet(MauiPath.RenderTransformProperty));
     }
 
     [Fact]
@@ -397,15 +427,19 @@ public class VisualsTests
         var host = Host().Render(Path2D("M 0,0 L 100,0 L 0,100 Z") with { RenderTransform = rotate });
         var path = (MauiPath)host.RootView!;
         var seen = WatchTransform(path);
+        using var resets = new Resets(path);
         host.Render(Path2D("M 0,0 L 100,0 L 0,100 Z") with { RenderTransform = rotate });
         host.Render(Path2D("M 0,0 L 100,0 L 0,100 Z") with { RenderTransform = rotate });
         Assert.Empty(seen);
+        Assert.Equal(0, resets.Count);
 
         var classed = Host().Render(ClassedPath("spin"));
         var classedPath = (MauiPath)((MauiContentView)classed.RootView!).Content;
         var classedSeen = WatchTransform(classedPath);
+        using var classedResets = new Resets(classedPath);
         classed.Render(ClassedPath("spin"));
         Assert.Empty(classedSeen);
+        Assert.Equal(0, classedResets.Count);
     }
 
     [Fact]
@@ -415,9 +449,11 @@ public class VisualsTests
         var host = Host().Render(Path2D("M 0,0 L 100,0 L 0,100 Z").Style(style) with { RenderTransform = new Shapes.ScaleTransform(2, 2) });
         var path = (MauiPath)host.RootView!;
         var seen = WatchTransform(path);
+        using var resets = new Resets(path);
 
         host.Render(Path2D("M 0,0 L 100,0 L 0,100 Z").Style(style));
         Assert.Equal(["ScaleTransform"], seen);
+        Assert.Equal(0, resets.Count);
         Assert.IsType<Shapes.RotateTransform>(path.RenderTransform);
     }
 

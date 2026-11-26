@@ -135,8 +135,9 @@ public static partial class Fixtures
             });
             var styled = Path2D("M 0,0 L 100,0 L 0,100 Z").Fill(Colors.Black).Size(100, 100).HorizontalOptions(LayoutOptions.Start).AutomationId("styled");
             // A class style resolves only when the path is attached, after its mount's apply.
-            var classed = ContentView(Path2D("M 0,0 L 100,0 L 0,100 Z").Fill(Colors.Black).Size(100, 100)
-                    .HorizontalOptions(LayoutOptions.Start).AutomationId("classed").StyleClass(step == 0 ? "spin" : "calm"))
+            ContentViewElement Classed(string id, string styleClass) => ContentView(Path2D("M 0,0 L 100,0 L 0,100 Z").Fill(Colors.Black).Size(100, 100)
+                    .HorizontalOptions(LayoutOptions.Start).AutomationId(id).StyleClass(styleClass))
+                .AutomationId(id + "-parent")
                 .Set<ContentViewElement, ContentView>(view =>
                 {
                     if (view.Resources.Count > 0) return;
@@ -147,6 +148,9 @@ public static partial class Fixtures
                     view.Resources.Add(spin);
                     view.Resources.Add(calm);
                 });
+            var classed = Classed("classed", step == 0 ? "spin" : "calm");
+            // Keeps "spin": the fixture replaces its parent's resources outside any render.
+            var resourced = Classed("resourced", "spin");
             return Stage(
                 Ellipse().Fill(step == 0 ? Colors.Blue : Colors.Green).Size(80, 60).HorizontalOptions(LayoutOptions.Start).AutomationId("ellipse"),
                 (step == 1 ? Rectangle().StrokeDashArray(1, 1) : Rectangle())
@@ -155,7 +159,8 @@ public static partial class Fixtures
                     .AutomationId("rotated") with { RenderTransform = step == 1 ? rotate : null },
                 // The transform comes from a style; both declarations have none of their own.
                 step == 1 ? styled.Style(rotating) : styled,
-                classed);
+                classed,
+                resourced);
         }
     }
 
@@ -212,6 +217,17 @@ public static partial class Fixtures
         Console.WriteLine($"# update in place: dash solid {solid}, dashed {dashed}, cleared {cleared}; path {original} -> {rotated} -> {restored}");
         Check(cleared.Other == 0, $"clearing the dash array makes the stroke solid again: {cleared}");
         Equal(original, restored, "clearing the transform draws the path untransformed (MAUI would keep the rotation)");
+
+        // Outside any render: the path's parent gets resources whose "spin" doesn't rotate.
+        var resourced = Pattern(Snapshot.Capture(c.ById<IView>("resourced")));
+        Check(resourced != original, $"the class style's rotation is drawn: {resourced}");
+        var plainSpin = new Style(typeof(Microsoft.Maui.Controls.Shapes.Path)) { Class = "spin" };
+        plainSpin.Setters.Add(new Setter { Property = Microsoft.Maui.Controls.Shapes.Path.FillProperty, Value = Colors.Black });
+        c.ById<ContentView>("resourced-parent").Resources = new ResourceDictionary { plainSpin };
+        await c.Settle(400);
+        var resourcesReplaced = Pattern(Snapshot.Capture(c.ById<IView>("resourced")));
+        Console.WriteLine($"# update in place: parent resources replaced {resourced} -> {resourcesReplaced}");
+        Equal(original, resourcesReplaced, "replacing the parent's resources draws the path untransformed");
     }
 
     private sealed class Gradients : Component

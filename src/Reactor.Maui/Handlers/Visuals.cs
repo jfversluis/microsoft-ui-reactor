@@ -280,60 +280,49 @@ internal static class PathData
     /// to none, by any route: the element, a style or class style removed or re-resolved (a parent's
     /// resources replaced), a visual state, a write through a ref. MAUI's iOS and Android path handlers
     /// update the drawn matrix only for a non-null transform, so a cleared one stays drawn (characterized
-    /// on all three platforms, spec 070 §4.13); the reset writes an identity transform, which the handler
-    /// draws, and clears it again. MAUI's <c>Path</c> is sealed, so this is MAUI's own type, watched.
+    /// on all three platforms, spec 070 §4.13). MAUI's <c>Path</c> is sealed, so this is MAUI's own type,
+    /// watched.
     /// </summary>
     public static MauiPath Create()
     {
         var path = new MauiPath();
-        new TransformWatch(path);
+        Transform? before = null;
+        path.PropertyChanging += (_, e) =>
+        {
+            if (e.PropertyName == nameof(MauiPath.RenderTransform)) before = path.RenderTransform;
+        };
+        path.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(MauiPath.RenderTransform)) return;
+            var had = before is not null;
+            before = null;
+            if (had && path.RenderTransform is null) ResetDrawnTransform(path);
+        };
         return path;
     }
 
-    private sealed class TransformWatch
+    /// <summary>Raised for every reset, for tests (headless, there is no platform drawable to read).</summary>
+    internal static event Action<MauiPath>? DrawnTransformReset;
+
+    /// <summary>
+    /// Clears the transform the platform drawable keeps. Not through the property: a write inside the
+    /// notification that cleared it (an identity transform, then a clear) reached the property but not the
+    /// drawable on any of the three platforms (spec 070 §4.13).
+    /// </summary>
+    private static void ResetDrawnTransform(MauiPath path)
     {
-        private readonly MauiPath _path;
-        private Transform? _before;
-        private MatrixTransform? _marker;
-        private bool _clearPending;
-
-        public TransformWatch(MauiPath path)
+        DrawnTransformReset?.Invoke(path);
+#if IOS || MACCATALYST || ANDROID
+        if (path.Handler?.PlatformView is Microsoft.Maui.Platform.MauiShapeView view && view.Drawable is ShapeDrawable drawable)
         {
-            _path = path;
-            path.PropertyChanging += OnChanging;
-            path.PropertyChanged += OnChanged;
+            drawable.UpdateRenderTransform(null);
+#if ANDROID
+            view.Invalidate();
+#else
+            view.SetNeedsDisplay();
+#endif
         }
-
-        private void OnChanging(object? sender, Microsoft.Maui.Controls.PropertyChangingEventArgs e)
-        {
-            if (e.PropertyName == nameof(MauiPath.RenderTransform)) _before = _path.RenderTransform;
-        }
-
-        private void OnChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
-        {
-            if (e.PropertyName != nameof(MauiPath.RenderTransform)) return;
-            var before = _before;
-            _before = null;
-            var now = _path.RenderTransform;
-
-            // The identity arrived after a write queued behind the notification that caused it (MAUI
-            // delays a write to a property whose own setter is running): clear it now.
-            if (_clearPending && now is not null && ReferenceEquals(now, _marker))
-            {
-                _clearPending = false;
-                _path.ClearValue(MauiPath.RenderTransformProperty);
-                return;
-            }
-
-            // Only a transform going away needs a reset; the identity going away doesn't (it draws as none).
-            if (before is null || now is not null || ReferenceEquals(before, _marker)) return;
-            _marker = new MatrixTransform();
-            _clearPending = true;
-            _path.RenderTransform = _marker;
-            if (!ReferenceEquals(_path.RenderTransform, _marker)) return;
-            _clearPending = false;
-            _path.ClearValue(MauiPath.RenderTransformProperty);
-        }
+#endif
     }
 
     private sealed class DataComparer : IEqualityComparer<(string? Markup, Geometry? Data)>
