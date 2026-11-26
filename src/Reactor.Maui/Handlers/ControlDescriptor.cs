@@ -24,8 +24,6 @@ public sealed class ControlDescriptor<TElement, TView> : Reactor.Hosting.IElemen
     private readonly List<Entry> _entries = [];
     private Action<TView>? _unmount;
     private Func<TElement, TElement, bool>? _canUpdate;
-    private Func<TView, object?>? _beforeApply;
-    private Action<TView, object?>? _afterModifiers;
 
     /// <param name="create">Creates the view for an element. Don't write the element's values here; entries do.</param>
     public ControlDescriptor(Func<TElement, TView> create)
@@ -140,40 +138,19 @@ public sealed class ControlDescriptor<TElement, TView> : Reactor.Hosting.IElemen
         return this;
     }
 
-    /// <summary>
-    /// Observes the view before every mount's and update's entries run (<paramref name="before"/>), and
-    /// hands that observation to <paramref name="after"/> once the entries and the shared modifiers are
-    /// applied: for a value the view derives from both (a path's transform, which a style can provide).
-    /// The observation is taken at the start of each apply, so a change between renders (a style that
-    /// resolved on attachment, a write through a ref) is seen. One pair per descriptor.
-    /// </summary>
-    internal ControlDescriptor<TElement, TView> WithAfterModifiers<TState>(Func<TView, TState> before, Action<TView, TState> after)
-    {
-        ArgumentNullException.ThrowIfNull(before);
-        ArgumentNullException.ThrowIfNull(after);
-        if (_afterModifiers is not null) throw new InvalidOperationException("The descriptor already has an after-modifiers hook.");
-        _beforeApply = view => before(view);
-        _afterModifiers = (view, state) => after(view, (TState)state!);
-        return this;
-    }
-
     TView Reactor.Hosting.IElementHandler<TElement, TView>.Mount(HandlerContext<TElement> context, TElement element)
     {
         var view = _create(element);
-        var observed = _beforeApply?.Invoke(view);
         foreach (var entry in _entries) entry.Mount(view, element);
         ViewApplier.Apply(context, view, null, element.Modifiers);
-        _afterModifiers?.Invoke(view, observed);
         foreach (var entry in _entries) entry.Wire(context, view);
         return view;
     }
 
     void Reactor.Hosting.IElementHandler<TElement, TView>.Update(HandlerContext<TElement> context, TElement oldElement, TElement newElement, TView control)
     {
-        var observed = _beforeApply?.Invoke(control);
         foreach (var entry in _entries) entry.Update(context, control, oldElement, newElement);
         ViewApplier.Apply(context, control, oldElement.Modifiers, newElement.Modifiers);
-        _afterModifiers?.Invoke(control, observed);
     }
 
     void Reactor.Hosting.IElementHandler<TElement, TView>.Unmount(TView control) => _unmount?.Invoke(control);

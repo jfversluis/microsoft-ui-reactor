@@ -256,15 +256,10 @@ public class VisualsTests
         var rotate = new Shapes.RotateTransform(90, 50, 50);
         var host = Host().Render(Path2D("M 0,0 L 100,0 L 0,100 Z") with { RenderTransform = rotate });
         var path = (MauiPath)host.RootView!;
-        var seen = new List<string>();
-        path.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName == nameof(MauiPath.RenderTransform))
-                seen.Add(path.RenderTransform switch { null => "unset", Shapes.MatrixTransform m when m.Matrix.IsIdentity => "identity", var t => t.GetType().Name });
-        };
+        var seen = WatchTransform(path);
 
         host.Render(Path2D("M 0,0 L 100,0 L 0,100 Z"));
-        Assert.Equal(["unset", "identity", "unset"], seen);
+        Assert.Equal(["RotateTransform", "unset", "identity"], seen);
         Assert.False(path.IsSet(MauiPath.RenderTransformProperty));
 
         // Nothing set: clearing writes nothing.
@@ -280,15 +275,20 @@ public class VisualsTests
         return style;
     }
 
+    /// <summary>
+    /// The transform each change of <c>RenderTransform</c> leaves, read as it starts: a value set and
+    /// cleared again inside another change's notification is seen here even when a later observer of
+    /// the notification no longer could.
+    /// </summary>
     private static List<string> WatchTransform(MauiPath path)
     {
-        var seen = new List<string>();
-        path.PropertyChanged += (_, e) =>
+        var left = new List<string>();
+        path.PropertyChanging += (_, e) =>
         {
             if (e.PropertyName == nameof(MauiPath.RenderTransform))
-                seen.Add(path.RenderTransform switch { null => "unset", Shapes.MatrixTransform m when m.Matrix.IsIdentity => "identity", var t => t.GetType().Name });
+                left.Add(path.RenderTransform switch { null => "unset", Shapes.MatrixTransform m when m.Matrix.IsIdentity => "identity", var t => t.GetType().Name });
         };
-        return seen;
+        return left;
     }
 
     [Fact]
@@ -302,7 +302,7 @@ public class VisualsTests
 
         // Both declarations have no transform of their own: only the style's goes away.
         host.Render(Path2D("M 0,0 L 100,0 L 0,100 Z"));
-        Assert.Equal(["unset", "identity", "unset"], seen);
+        Assert.Equal(["RotateTransform", "unset", "identity"], seen);
         Assert.Null(path.RenderTransform);
         Assert.False(path.IsSet(MauiPath.RenderTransformProperty));
     }
@@ -334,7 +334,7 @@ public class VisualsTests
         var seen = WatchTransform(path);
 
         host.Render(ClassedPath("calm"));
-        Assert.Equal(["unset", "identity", "unset"], seen);
+        Assert.Equal(["RotateTransform", "unset", "identity"], seen);
         Assert.Null(path.RenderTransform);
     }
 
@@ -349,15 +349,63 @@ public class VisualsTests
 
         host.Render(Path2D("M 0,0 L 100,0 L 0,100 Z").Ref(reference)
             .Set<PathElement, MauiPath>(p => { if (p.RenderTransform is Shapes.RotateTransform) p.ClearValue(MauiPath.RenderTransformProperty); }));
-        Assert.Equal(["unset", "identity", "unset"], seen);
+        Assert.Equal(["RotateTransform", "unset", "identity"], seen);
         Assert.Null(path.RenderTransform);
     }
 
-    [Fact]
-    public void AfterModifiersHook_CanBeSetOnce()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AParentsReplacedResources_ClearingTheTransformOutsideARender_ResetTheDrawable(bool direct)
     {
-        var descriptor = ControlDescriptor.Create<EllipseElement, MauiEllipse>().WithAfterModifiers(static _ => 0, static (_, _) => { });
-        Assert.Throws<InvalidOperationException>(() => descriptor.WithAfterModifiers(static _ => 0, static (_, _) => { }));
+        var host = Host(direct).Render(ClassedPath("spin"));
+        var parent = (MauiContentView)host.RootView!;
+        var path = (MauiPath)parent.Content;
+        Assert.IsType<Shapes.RotateTransform>(path.RenderTransform);
+        var seen = WatchTransform(path);
+
+        // No render: the app replaces the parent's resources, and "spin" no longer rotates.
+        var plainSpin = new Style(typeof(MauiPath)) { Class = "spin" };
+        plainSpin.Setters.Add(new Setter { Property = Shape.FillProperty, Value = Colors.Black });
+        parent.Resources = new ResourceDictionary { plainSpin };
+
+        Assert.Equal(["RotateTransform", "unset", "identity"], seen);
+        Assert.Null(path.RenderTransform);
+        Assert.False(path.IsSet(MauiPath.RenderTransformProperty));
+    }
+
+    [Fact]
+    public void ATransformSetToNullThroughARef_IsReset_AndLeavesNoLocalValue()
+    {
+        var reference = Microsoft.UI.Reactor.Input.TypedElementRef.Create<MauiPath>();
+        Host().Render(Path2D("M 0,0 L 100,0 L 0,100 Z").Ref(reference));
+        var path = reference.Current!;
+        path.RenderTransform = new Shapes.RotateTransform(90, 50, 50);
+        var seen = WatchTransform(path);
+
+        // A write of null runs inside MAUI's setter, which queues the identity write behind it.
+        path.RenderTransform = null;
+        Assert.Equal(["RotateTransform", "unset", "identity"], seen);
+        Assert.Null(path.RenderTransform);
+        Assert.False(path.IsSet(MauiPath.RenderTransformProperty));
+    }
+
+    [Fact]
+    public void EqualRenders_WriteNoTransform()
+    {
+        var rotate = new Shapes.RotateTransform(90, 50, 50);
+        var host = Host().Render(Path2D("M 0,0 L 100,0 L 0,100 Z") with { RenderTransform = rotate });
+        var path = (MauiPath)host.RootView!;
+        var seen = WatchTransform(path);
+        host.Render(Path2D("M 0,0 L 100,0 L 0,100 Z") with { RenderTransform = rotate });
+        host.Render(Path2D("M 0,0 L 100,0 L 0,100 Z") with { RenderTransform = rotate });
+        Assert.Empty(seen);
+
+        var classed = Host().Render(ClassedPath("spin"));
+        var classedPath = (MauiPath)((MauiContentView)classed.RootView!).Content;
+        var classedSeen = WatchTransform(classedPath);
+        classed.Render(ClassedPath("spin"));
+        Assert.Empty(classedSeen);
     }
 
     [Fact]
@@ -369,7 +417,7 @@ public class VisualsTests
         var seen = WatchTransform(path);
 
         host.Render(Path2D("M 0,0 L 100,0 L 0,100 Z").Style(style));
-        Assert.Equal(["RotateTransform"], seen);
+        Assert.Equal(["ScaleTransform"], seen);
         Assert.IsType<Shapes.RotateTransform>(path.RenderTransform);
     }
 
