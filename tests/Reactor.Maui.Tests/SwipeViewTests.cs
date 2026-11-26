@@ -10,7 +10,7 @@ namespace Microsoft.UI.Reactor.Maui.Tests;
 /// <summary>Spec 070 §3.5: swipe items on four sides, content items, threshold, events and liveness.</summary>
 public class SwipeViewTests
 {
-    private sealed class Badge : Component<(string Name, List<string> Log)>
+    private sealed class Badge : Component<(string Name, List<string> Log, string Generation)>
     {
         public static readonly Dictionary<string, Action<int>> Set = [];
 
@@ -23,7 +23,7 @@ public class SwipeViewTests
         }
     }
 
-    private static Element BadgeOf(string name, List<string> log) => Component<Badge, (string, List<string>)>((name, log));
+    private static Element BadgeOf(string name, List<string> log, string generation = "") => Component<Badge, (string, List<string>, string)>((name, log, generation));
 
     private static void Invoke(object item) => ((Microsoft.Maui.ISwipeItem)item).OnInvoked();
 
@@ -89,7 +89,7 @@ public class SwipeViewTests
         SwipeViewElement Swipe(bool withContent, string callback) => SwipeView(Label("row")) with
         {
             RightItems = withContent
-                ? [new SwipeItemData("Done", () => calls.Add(callback)) { Content = BadgeOf("badge", log) }]
+                ? [new SwipeItemData("Done", () => calls.Add(callback)) { Content = BadgeOf("badge", log, callback) }]
                 : [],
         };
         var host = new TestHost(direct ? DirectHandlers.CreateRegistry() : MauiHandlers.CreateRegistry()).Render(Swipe(true, "first"));

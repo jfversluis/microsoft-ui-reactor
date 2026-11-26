@@ -405,6 +405,27 @@ public class NativeSelectionVerificationTests
     }
 
     [Fact]
+    public void AUsersSelection_IsNeverUndone_ByACorrectionComputedBeforeIt()
+    {
+        var (host, view, port, reports, _, _) = Mount();
+        Recommit(host);
+        Assert.Single(port.Queue);
+        // The user selects b before Reactor's barrier completes; the accepting render hasn't run yet.
+        port.Native.Clear();
+        port.Native.Add(Cells.Box(view, "b"));
+        view.SelectedItem = Cells.Box(view, "b");
+
+        port.RunNext();
+
+        Assert.Equal("b", Native(port));
+        Assert.Equal(0, view.Verifier.Corrections);
+        host.Scheduler.Drain();
+        port.RunAll();
+        Assert.Equal("b", Native(port));
+        Assert.Equal(["b"], Assert.Single(reports));
+    }
+
+    [Fact]
     public void AnObsoleteCompletion_IssuesExactlyOneReplacement_AndComparesNothing()
     {
         var (host, view, port, _, select, _) = Mount();
