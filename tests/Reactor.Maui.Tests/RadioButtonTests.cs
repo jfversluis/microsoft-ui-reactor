@@ -459,6 +459,37 @@ public class RadioTransactionTests
     }
 
     [Fact]
+    public void AQueuedCheck_DroppedBecauseAnotherCheckUncheckedIt_IsRestoredToItsDeclaration()
+    {
+        var log = new List<string>();
+        var c = TypedElementRef.Create<MauiRadioButton>();
+        var d = TypedElementRef.Create<MauiRadioButton>();
+        var b = TypedElementRef.Create<MauiRadioButton>();
+        var once = true;
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(VStack(
+            RadioButton("b", false, v => log.Add($"b {v}"), "g").Ref(b),
+            RadioButton("c", false, v => log.Add($"c {v}"), "g").Ref(c),
+            RadioButton("d", true, v =>
+            {
+                log.Add($"d {v}");
+                if (v || !once) return;
+                once = false;
+                // Two checks from a callback: both queue. C's runs first and unchecks D natively, so D's
+                // entry is dropped; D, declared checked, must still get its declaration back.
+                ((IRadioButton)c.Current!).IsChecked = true;
+                ((IRadioButton)d.Current!).IsChecked = true;
+            }, "g").Ref(d)));
+        host.Scheduler.Drain();
+
+        Tap(b);
+        host.Scheduler.Drain();
+
+        // C's queued check supersedes B's transaction (same group), and unchecks B and D as its peers.
+        Assert.Equal(["d False", "b False", "d False", "c True"], log);
+        Assert.Equal((false, false, true), (b.Current!.IsChecked, c.Current!.IsChecked, d.Current!.IsChecked));
+    }
+
+    [Fact]
     public void AQueuedCheck_IsNotOverwrittenByARenderBeforeItRuns()
     {
         var (host, p) = MountQueueing("state");

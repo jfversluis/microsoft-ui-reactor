@@ -507,12 +507,16 @@ public class NativeSelectionVerificationTests
     public void EnteringNone_DeselectsTheNativeSelection(SelectionMode from, bool pendingDeferred)
     {
         var (host, view, port, reports, _, setMode) = Mount(from);
+        // Settle the mount's verification (the port arrived after it), so only entering None schedules.
+        Recommit(host);
         port.RunAll();
         Assert.Equal("a", Native(port));
+        var issued = view.Verifier.Issued;
         if (pendingDeferred) port.QueueMauiSelect(Cells.Box(view, "b"));
 
         setMode(SelectionMode.None);
         host.Scheduler.Drain();
+        Assert.Equal(issued + 1, view.Verifier.Issued);
         port.RunAll();
 
         Assert.Equal("", Native(port));
