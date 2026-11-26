@@ -767,8 +767,13 @@ modals. Other platforms ignore it.
   its window's `Activated` and `Closed` events and to visibility.
 - **Errors** in a callback go to the component's error boundary. An error in `onDestroying` is
   different: the tree is about to be unmounted, and boundary handling is posted, so it would run
-  after teardown. Such an error is reported synchronously to the root's `UnhandledException` (or
-  rethrown without a subscriber), before the unmount.
+  after teardown. Such an error is held:
+  - every `onDestroying` callback still runs;
+  - the tree is unmounted in `OnDestroying`;
+  - the held errors are then reported to the root's `UnhandledException`, or rethrown without a
+    subscriber.
+
+  A throw therefore never stops MAUI's `Destroying` before the teardown has run.
 
 ### 5.5 Gate for 4b-3
 
