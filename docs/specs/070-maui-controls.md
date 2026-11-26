@@ -509,12 +509,12 @@ also asserts that the unmount, retirement or recycling it depends on happened.
 | Cell retirement: A→`null`→B, item removal, list unmount, with and without `ReuseItemTrees` | the item component's cleanup ran (count ≥ 1) and its ref is `null`; B mounts a fresh tree (a new ref); with `ReuseItemTrees`, A→B directly keeps the tree and A→`null`→B doesn't | return early on a `null` context (today's code) |
 | `ReactorPage.Unmount` | the tree's cleanups ran (count ≥ 1) and its refs are `null` | — |
 | `DirectView.Focus` | invokes the handler's `Focus` command and returns its result (stub handler) | return `false` |
-| `UseElementFocus` | a request before the direct view has a handler focuses it on the turn after the handler arrives, once; two pending requests focus once; a request is dropped when the element unmounts and when the ref moves to another view (no `Focus` command); a request from another thread runs only when the root's render queue drains; the hook returns the same pair every render | no wait for the handler; no generation; no drop; run on the calling thread |
+| `UseElementFocus` | a request before the direct view has a handler focuses it on the turn after the handler arrives, once; a view not in a window is checked again and focused once it joins one; a pending check for a view that never joins one doesn't keep the tree alive (weak references, collected); two pending requests focus once; a request is dropped when the element unmounts and when the ref moves to another view (no `Focus` command); a request from another thread runs only when the root's render queue drains; the hook returns the same pair every render | no wait for the handler; no generation; no drop; run on the calling thread; a poll that holds the request strongly; a poll that never rechecks |
 | Scroll bridge: coordinates and dispatch | a target in a direct `Grid` (nonzero row, margin, padding) inside a direct `VStack` inside the scroll view, with frames the test assigns: the point passed to `ScrollToAsync(x, y, …)` equals `GetScrollPositionForElement` applied to the summed rectangle, for each position; an `ElementRef<IEntry>` naming a `DirectEntry` directly in a Controls stack is computed too; an all-Controls chain calls MAUI's element overload instead (`ScrollToRequested` in element mode, with the target); `Orientation.Neither` completes `false` at once with no `ScrollToRequested` | walk `Parent` instead of the visual parent; delegate when only the layouts are Controls; let `Neither` through |
 | Scroll bridge: validation and readiness | an unrelated target (another scroll view's child) and a target whose subtree was detached from the scroll view throw; an empty ref, and a chain where the target, an intermediate direct layout or the scroll view has no handler or isn't arranged, return `false` and request nothing | skip the ancestry check; check only the scroll view's readiness |
 | Weak-table ownership | a Controls child moved between two direct layouts in one pass (attached to the new before detached from the old) keeps the new layout as its visual parent | remove the entry without the owner check |
 | Scroll bridge: completion protocol | a stub drives finishes and positions. A second bridge call completes the first with `false` at once, and so do a direct `ScrollToAsync(x, y, …)` call (through `ScrollToRequested`), a handler disconnect and unmount; staggered animations: A's late finish while B animates, at A's position, doesn't complete B, and B completes `true` only on a finish at its target; a finish elsewhere with no earlier finish expected completes `false`; a target beyond the range completes `true` at the range end; a dispatch that throws completes `false` and leaves no outstanding state (the next call works) | complete on any finish; drop the expected-finish count; skip the cleanup on a throw |
-| Scroll bridge: protocol details (pr-review) | a continuation of a confirmed task that starts another MAUI scroll isn't completed by the finish that confirmed the first; a request MAUI parked before the handler and replayed (it raises `ScrollToRequested` twice) is one expected finish, and a later request that ends elsewhere then settles `false`; a request parked for geometry and dropped by a newer one (the bridge's own included) is no expected finish; a finish an interrupted animation produces inside the next request's dispatch doesn't settle that request; a stale finish followed by no other settles after the grace period, by position; a negative target is confirmed at 0, a horizontal one on x | run continuations inline; count a parked request and its replay; keep a dropped geometry-parked request; skip the drop for the bridge's own request; count after dispatch; no grace settle; no start clamp; ignore x |
+| Scroll bridge: protocol details (pr-review) | a continuation of a confirmed task that starts another MAUI scroll isn't completed by the finish that confirmed the first; a request MAUI parked before the handler and replayed (it raises `ScrollToRequested` twice) is one expected finish, and a later request that ends elsewhere then settles `false`; a request parked for geometry and dropped by a newer one (the bridge's own included) is no expected finish; a finish an interrupted animation produces inside the next request's dispatch doesn't settle that request; a request whose finish never comes settles at the bound, by position (`false` where it stopped, `true` at its target), and an earlier request's bound doesn't settle a later one; a late finish after its request settled at the bound doesn't settle the next request; a handler replaced by another (no `null` in between) completes the outstanding request `false`, and a request before any handler is still replayed; a negative target is confirmed at 0, a horizontal one on x | run continuations inline; count a parked request and its replay; keep a dropped geometry-parked request; skip the drop for the bridge's own request; count after dispatch; no bound; the bound settles `true`; the bound zeroes the expected count; cancel only when the handler goes to `null`; no start clamp; ignore x |
 | Scroll bridge on a scroll view Reactor didn't create | a plain `ScrollView`: a finish at the target confirms, one elsewhere doesn't; a later request, a handler disconnect and a throwing dispatch complete `false`; the extension scrolls it to a Reactor target | confirm without checking the position; no supersession; no disconnect; let the throw escape |
 | WebView `OnNavigating` | `IWebView.Navigating(...)` (what the platform handlers call) returns cancel as decided; not called and allowed after unmount; a throw cancels and reaches the boundary | ignore `Cancel`; invoke through `Current` instead of `Live`; let the exception escape |
 | WebView `OnNavigated` | each `Result` is passed through, after the scheduler turn, not inside `IWebView.Navigated` | invoke synchronously |
@@ -545,6 +545,7 @@ only the final state.
 | `ScrollView_ScrollToAnElement_EquivalentTrees_WithInsets [iOS, Catalyst]` | the gate for the inset adapter: a scroll view under a navigation bar with nonzero adjusted content insets, holding the same geometry once from Controls layouts and once from direct layouts (content with a nonzero origin); the adjusted top inset is asserted ≥ 50 and the bridge's result `true` on every iteration; for all four positions, including `MakeVisible` from above, from below and already visible, the bridge's platform offset on the direct tree equals MAUI's own overload's on the Controls tree. Android runs it too, with no adapter, and records whether any inset appears |
 | `ScrollView_ScrollToAnElement_NotReady` | called before the page is shown, it returns `false` and the offset stays 0; a target inserted by a render into an arranged scroll view returns `false` when called in that render's turn, and after the next layout pass scrolls to the right offset; an unrelated target throws |
 | `ScrollView_ScrollToAnElement_Superseded`, both registries | the number of finishes two overlapping animated requests produce equals what the bridge expects (recorded in §2.15). Then two animated bridge scrolls in a row: the first task completes `false` within one second, the second completes `true` only once the platform offset is at its target, and the final offset is the second's |
+| `ScrollView_ScrollToAnElement_Interrupted`, both registries | an uninterrupted animated scroll is confirmed by its own finish within the settle bound (its duration recorded); interrupted the way a touch does (UIKit: a non-animated offset write; Android: a dispatched drag), the task completes within the bound and is `true` exactly when the scroll view is at the target |
 | `ScrollView_ScrollBars_ReachThePlatform` | the platform's indicator flags follow the declared visibility |
 | `RefreshView_UserRefresh_IsReported_AndRefusalStopsTheSpinner` | a refresh triggered through the platform control (`UIRefreshControl` value-changed action; the `SwipeRefreshLayout` listener) is reported once; the platform spinner follows the declaration (still spinning 200 ms into an accepted refresh); refused, it stops, and the sequence after settling is exactly that one report. If Catalyst has no pull-to-refresh, the fixture records that and the inventory says so |
 | `WebView_Navigations_AreAttemptedAndCompleted` | bundled HTML pages (no network). Positive control: a link from page 1 to page 2 is allowed, completes with `Success`, `document.title` is page 2's, and `CanGoBack` read in `OnNavigated` is `true`. Cancelled, each started a different way (a link, `EvaluateJavaScriptAsync("location.href=…")`, `Reload()`, `GoBack()` with `CanGoBack` asserted first): each was asked about its page; no `Success`; the exact completions §2.15 records (none, or Android's late `Cancel`); refused before loading, the previous page and its script state stay; refused late, the document is gone. Positive control: the same script navigation allowed is asked and completes with `Success` |
@@ -660,8 +661,9 @@ pr-review fixes after it):
   (a conditional weak table), which settles on MAUI's task by position. The bridge mirrors MAUI 11's
   dispatch: a request parked before the handler and replayed counts one expected finish, one parked
   for geometry and dropped by a newer request counts none; the expected finish is counted before the
-  dispatch; tasks run continuations asynchronously; a stale finish not followed by another within
-  1.5 s settles by position.
+  dispatch; tasks run continuations asynchronously. Every request settles at a bound at the latest
+  (`SettleBound`, armed when it starts), by position, without touching the expected count; a handler
+  replaced by another, or removed, cancels outstanding work in `HandlerChanging`.
 
 **Deviations from §2, and why:**
 
@@ -694,16 +696,27 @@ pr-review fixes after it):
 9. **Scroll views Reactor didn't create get a bridge** (pr-review M1), so the extension's task always
    completes; such a bridge sees only the finish that completes MAUI's task, and checks the position
    then.
-10. **A stale-finish grace period** (pr-review H2): if a finish the bridge counted never arrives (a
-    request MAUI dropped in a way the bridge doesn't mirror), a non-matching finish is followed, after
-    1.5 s without another, by a settle on the position, so no task waits forever.
+10. **A settle bound** (pr-review H2, then the verification round): every bridge request settles by
+    position once `SettleBound` passes after it starts, if its own finish hasn't settled it first. The
+    bound lies above the longest platform animation, so it doesn't guess when the scroll ends: MAUI's
+    Android animator runs 1000 ms × the animator duration scale (bound: that + 1 s); UIKit's animated
+    offset write was measured at about 0.3 s (bound: 1.5 s). It covers a finish that never comes (a
+    request MAUI dropped in a way the bridge doesn't mirror, or an animation a touch stops without one)
+    and replaces the first fix's grace period after a stale finish, which zeroed the expected count:
+    a slow animation's late finish was then taken for the next request's. The count is now left as it
+    is, so a late finish is absorbed.
 11. **The nested-layouts fixture doesn't run MAUI's own overload**: its target is a direct view, which
     MAUI's `ScrollToAsync(Element, …)` can't take. The equivalent-trees fixture is the comparison with
     MAUI.
 12. **UIKit readiness is checked, not observed** (§2.6.2 said "through its move to a window"):
     `MovedToWindow` is a `UIView` override, so observing it would need Reactor's own subclass of
     every platform view. iOS and Mac Catalyst check `Window` at doubling intervals up to 1 s, with no
-    cap while the request stands; Android observes `ViewAttachedToWindow` as designed.
+    cap while the request stands; Android observes `ViewAttachedToWindow` as designed. The scheduled
+    check holds the request and the view weakly, so a tree discarded without an unmount, whose view
+    never joins a window, is collected and the checks stop.
+13. **A handler replaced by another cancels** (verification round): MAUI's `SetHandler` swaps a
+    connected handler for another without a `null` in between, so the bridge cancels in
+    `HandlerChanging` whenever there was an old handler.
 
 **Characterization (device, both registries unless noted):**
 
@@ -720,6 +733,8 @@ pr-review fixes after it):
 | `MaxLength` 5 truncating | text `abcde`, then (5, 0); each reported once | same | same |
 | Finishes from two overlapping animated `ScrollToAsync` | 2 | 2 | 2 (so `FinishesAccumulate = true` everywhere) |
 | When an interrupted animation's finish arrives | inside the next request's dispatch (found when the expected finish was counted after it) | same | later (two finishes after the first task completed) |
+| An animated scroll of 1600 DIPs | about 310 ms | about 310 ms | about 1030 ms (duration scale 1) |
+| A scroll interrupted as by a touch (UIKit: non-animated offset write; Android: dispatched drag) | one finish at once, where it stopped: `false` | same | the animator ignores the drag and finishes at the target: `true` |
 | Adjusted top inset in the equivalent-trees gate | ≥ 50 | ≥ 50 | 0 (no content inset to add) |
 | A target inserted in this turn | not laid out | not laid out | not laid out |
 | Cancelled link, script navigation | asked before load, no completion, page kept | same | same |
@@ -727,12 +742,12 @@ pr-review fixes after it):
 | Cancelled declared `Url` | no load | no load | no load (preflight in `LoadUrl`) |
 | A script navigation after a refused `GoBack` | asked as `NewPage` | same | asked as `Back`: MAUI keeps the last command's kind |
 
-**Tests.** Headless `Reactor.Maui.Tests`: 323 (213 before 4c-1), in `ElementRefTests.cs`,
+**Tests.** Headless `Reactor.Maui.Tests`: 327 (213 before 4c-1), in `ElementRefTests.cs`,
 `ControlRefTests.cs`, `ScrollBridgeTests.cs`, including the README's snippets. Engine
-`Reactor.Maui.Engine.Tests`: 80 (73 before), `RefBindingTests.cs`. Device: 26 new fixtures in
+`Reactor.Maui.Engine.Tests`: 80 (73 before), `RefBindingTests.cs`. Device: 28 new fixtures in
 `ControlRefFixtures.cs` (`RefPlatform.cs` reads the platform; `Resources/Raw/page1.html`, `page2.html`).
-Full device suites: Mac Catalyst 112 passed, 7 skipped (no back key, no in-process backgrounding);
-iOS simulator 112 passed, 7 skipped; Android emulator 115 passed, 4 skipped; none failed.
+Full device suites: Mac Catalyst 114 passed, 7 skipped (no back key, no in-process backgrounding);
+iOS simulator 114 passed, 7 skipped; Android emulator 117 passed, 4 skipped; none failed.
 
 **Mutation checks** (each broke the code, ran the named suite, restored): all red — owner check,
 release from the element instead of `BoundRef`, no release on unmount, bind after effects, no hybrid
@@ -747,7 +762,9 @@ per notification, reading the virtual view, posting from inside the apply, clear
 after dispatch, no observation after an input-type change, no posted direct baseline, focusing a
 direct view before it is ready, `IsRefreshing` outside the echo scope, no restore after a refresh, and
 loading the web source on every render. After the pr-review: inline continuations, counting a parked
-request and its replay, no grace settle, keeping a dropped geometry-parked request, not dropping it
+request and its replay, no settle bound, the bound settling `true`, the bound zeroing the expected
+count, cancelling only when the handler goes to `null`, a focus poll holding the request strongly, a
+poll that never rechecks, keeping a dropped geometry-parked request, not dropping it
 for the bridge's own request, counting after dispatch, a throwing dispatch escaping, a foreign finish
 confirming anywhere, no foreign supersession or disconnect, no start clamp, ignoring x, the whole
 apply in the echo scope, no clamp of a negative selection, no wait for a direct view's handler, no
@@ -766,6 +783,13 @@ allocations +0.0–0.2%.
   the end (MAUI's mapping order differs for a Core view). Reported correctly either way.
 - Android reports a script navigation that follows a refused `GoBack` as `Back` (MAUI keeps the
   last command's kind).
+- A real user drag on iOS and Mac Catalyst can't be driven in process; the interruption fixture uses
+  the offset write a touch makes, which UIKit ends with a finish. If a real drag ends an animation
+  without one, the settle bound completes the task.
+- The WebView fixture once waited for a page 1 completion its shared log already held from an
+  earlier show, so on a slow CI simulator it read the title before the new web view had loaded;
+  `ShowPage1` now counts only completions after its own show, and the refused cases wait for the
+  attempt (and Android's late completion) instead of a fixed delay.
 - Android can't keep the previous page when it cancels a reload or a back navigation (§2.7's table);
   MAUI's own overloads can leave a superseded `ScrollToAsync` pending; both are MAUI behaviour to
   file upstream.

@@ -234,7 +234,10 @@ sealed class Search : Component
   scroll ended elsewhere); `false` doesn't mean it didn't move. Call it after layout, from an event or
   a view's `Loaded`. MAUI's own overloads can leave a superseded `await` pending; this one always
   completes, on any `ScrollView`, including one Reactor didn't create, and returns `false` if MAUI's
-  dispatch throws. The `ScrollView` element renders a `ScrollView` subclass, so an implicit style for it
+  dispatch throws or the scroll view's handler is replaced. If the platform never reports the end of
+  the scroll (a touch can stop an animation), the task completes once a bound above the platform's
+  longest scroll animation has passed (1.5 s on iOS and Mac Catalyst; 1 s times the animator duration
+  scale, plus 1 s, on Android): `true` if the scroll view is at the target then, else `false`. The `ScrollView` element renders a `ScrollView` subclass, so an implicit style for it
   needs `ApplyToDerivedTypes`, as for `CollectionView`.
 
 ### Web views
