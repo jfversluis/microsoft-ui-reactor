@@ -244,8 +244,9 @@ internal sealed class SwipeViewHandler : ViewHandler<SwipeViewElement, ReactorSw
         if (a.Length != b.Length) return false;
         for (var i = 0; i < a.Length; i++)
         {
-            if ((a[i].Content is null) != (b[i].Content is null)) return false;
-            if (a[i].Text != b[i].Text || !Equals(a[i].BackgroundColor, b[i].BackgroundColor) || !Props.SameImage(a[i].Icon, b[i].Icon))
+            if ((a[i].Content is null) != (b[i].Content is null) || a[i].Text != b[i].Text) return false;
+            // A content item shows its content, not a color or an icon, so those don't rebuild it.
+            if (b[i].Content is null && (!Equals(a[i].BackgroundColor, b[i].BackgroundColor) || !Props.SameImage(a[i].Icon, b[i].Icon)))
                 return false;
         }
         return true;

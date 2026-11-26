@@ -5,10 +5,12 @@ using Microsoft.UI.Reactor.Maui.Handlers;
 using static Microsoft.UI.Reactor.Maui.Factories;
 using MauiLabel = Microsoft.Maui.Controls.Label;
 using MauiRadioButton = Microsoft.Maui.Controls.RadioButton;
+using System.Runtime.CompilerServices;
 
 namespace Microsoft.UI.Reactor.Maui.Tests;
 
 /// <summary>Spec 070 §3.6: radio buttons with view content.</summary>
+[Collection("RadioDescriptionWarnings")]
 public class RadioContentTests
 {
     private sealed class Card : Component<(string Name, bool Checked)>
@@ -78,6 +80,26 @@ public class RadioContentTests
     }
 }
 
+[Collection("RadioDescriptionWarnings")]
+public class RadioDescriptionTests
+{
+    private static Element Card() => Label("card");
+
+    [Fact]
+    public void RemovingTheDescriptionModifier_KeepsTheTextAsTheName_AndAnEmptyTextClearsIt()
+    {
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render((RadioButton(Card(), false) with { Content = "A" }).Semantics(description: "Declared"));
+        var radio = host.View<MauiRadioButton>();
+        Assert.Equal("Declared", SemanticProperties.GetDescription(radio));
+
+        host.Render(RadioButton(Card(), false) with { Content = "A" });
+        Assert.Equal("A", SemanticProperties.GetDescription(radio));
+
+        host.Render(RadioButton(Card(), false) with { Content = "" });
+        Assert.Null(SemanticProperties.GetDescription(radio));
+    }
+}
+
 /// <summary>Spec 070 §3.6: Reactor-owned radio groups, their scopes and transactions.</summary>
 public class RadioGroupTests
 {
@@ -115,13 +137,17 @@ public class RadioGroupTests
         Assert.Equal(4, log.Count);
     }
 
-    [Fact]
-    public void MauisOwnGrouping_MissesPeersInDirectStacks()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MauisOwnGrouping_MissesPeersInDirectStacks_ButNotInControlsLayouts(bool direct)
     {
-        // The positive witness for Reactor's groups: without them, peers in direct stacks stay checked.
+        // The positive witness for Reactor's groups: without them, peers in direct stacks stay checked,
+        // while MAUI's own search does find them in a Controls layout.
         var log = new List<string>();
         var r = Refs(2);
-        new TestHost(DirectHandlers.CreateRegistry()).Render(VStack(Radio("a", true, log, r[0], "g"), Radio("b", false, log, r[1], "g")));
+        new TestHost(direct ? DirectHandlers.CreateRegistry() : MauiHandlers.CreateRegistry())
+            .Render(VStack(Radio("a", true, log, r[0], "g"), Radio("b", false, log, r[1], "g")));
         foreach (var x in r)
         {
             var radio = (ReactorRadioButton)x.Current!;
@@ -131,7 +157,7 @@ public class RadioGroupTests
 
         Tap(r[1]);
 
-        Assert.True(r[0].Current!.IsChecked);
+        Assert.Equal(direct, r[0].Current!.IsChecked);
     }
 
     [Fact]
@@ -158,11 +184,73 @@ public class RadioGroupTests
         var host = new TestHost(MauiHandlers.CreateRegistry()).Render(Pair("a"));
 
         host.Render(Pair("b"));
+        Assert.Equal((false, true), (r[0].Current!.IsChecked, r[1].Current!.IsChecked));
         host.Render(Pair("a"));
         host.Scheduler.Drain();
 
         Assert.Empty(log);
         Assert.Equal((true, false), (r[0].Current!.IsChecked, r[1].Current!.IsChecked));
+    }
+
+    private sealed class Wrapped : Component<(List<string> Log, ElementRef<MauiRadioButton> Ref)>
+    {
+        public override Element Render() => Radio("wrapped", true, Props.Log, Props.Ref);
+    }
+
+    [Fact]
+    public void AnUnnamedGroup_IncludesAButtonInsideAComponent()
+    {
+        var log = new List<string>();
+        var r = Refs(2);
+        new TestHost(DirectHandlers.CreateRegistry()).Render(VStack(
+            Component<Wrapped, (List<string>, ElementRef<MauiRadioButton>)>((log, r[0])),
+            Radio("plain", false, log, r[1])));
+
+        Tap(r[1]);
+
+        Assert.Equal(["wrapped False", "plain True"], log);
+        Assert.False(r[0].Current!.IsChecked);
+    }
+
+    private sealed class Probe : Component<Action<Action<bool>>>
+    {
+        public override Element Render()
+        {
+            var (show, setShow) = UseState(true);
+            Props(setShow);
+            return show ? VStack(RadioButton("a", true, null), RadioButton("b", false, null)) : Label("gone");
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (TestHost Host, WeakReference Layout, Action<bool> Show, RadioGroups Groups) MountAndCheck()
+    {
+        Action<bool>? show = null;
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(Component<Probe, Action<Action<bool>>>(s => show = s));
+        var layout = host.View<VerticalStackLayout>();
+        var b = (ReactorRadioButton)layout[1];
+        ((IRadioButton)b).IsChecked = true; // a transaction: the unnamed group (scoped to the layout's node) has a generation
+        host.Scheduler.Drain();
+        return (host, new WeakReference(layout), show!, b.Groups!);
+    }
+
+    [Fact]
+    public void ARemovedGroup_DoesNotKeepItsScopeAlive()
+    {
+        var (host, layout, show, groups) = MountAndCheck();
+        Assert.Equal(1, groups.GroupCount);
+
+        show(false);
+        host.Scheduler.Drain();
+        for (var i = 0; i < 3 && layout.IsAlive; i++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+
+        Assert.Equal(0, groups.GroupCount);
+        Assert.False(layout.IsAlive, "the removed layout (the group's scope) was collected");
+        GC.KeepAlive(host);
     }
 
     [Fact]
@@ -314,6 +402,96 @@ public class RadioTransactionTests
         Assert.Equal((false, false, true), (a.Current!.IsChecked, b.Current!.IsChecked, c.Current!.IsChecked));
         // Unsuppressed notifications: the user's tap and the ref's check, nothing else.
         Assert.Equal(before + 2, groups.Transactions);
+    }
+
+    [Fact]
+    public void ARefUncheck_OutsideATransaction_IsReportedOnce_AndRestored()
+    {
+        var log = new List<string>();
+        var a = TypedElementRef.Create<MauiRadioButton>();
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(VStack(
+            RadioButton("a", true, v => log.Add($"a {v}"), "g").Ref(a),
+            RadioButton("b", false, v => log.Add($"b {v}"), "g")));
+        host.Scheduler.Drain();
+
+        ((IRadioButton)a.Current!).IsChecked = false;
+        Assert.Equal(["a False"], log);
+        host.Scheduler.Drain();
+
+        Assert.True(a.Current!.IsChecked);
+        Assert.Equal(["a False"], log);
+    }
+
+    private sealed record QueueProps(List<string> Log, ElementRef<MauiRadioButton> A, ElementRef<MauiRadioButton> B, ElementRef<MauiRadioButton> C, string Mode);
+
+    // A's uncheck callback changes state, then checks C through a ref (queued, since B's transaction is
+    // dispatching). Mode "state": only a state change; "supersede": C is unchecked again through the ref;
+    // "unmount": the state change removes C.
+    private sealed class Queueing : Component<QueueProps>
+    {
+        public override Element Render()
+        {
+            var (count, setCount) = UseState(0);
+            var (showC, setShowC) = UseState(true);
+            var p = Props;
+            return VStack(
+                Label($"count {count}"),
+                RadioButton("a", true, v =>
+                {
+                    p.Log.Add($"a {v}");
+                    if (v) return;
+                    setCount(count + 1);
+                    if (p.Mode == "unmount") setShowC(false);
+                    ((IRadioButton)p.C.Current!).IsChecked = true;
+                    if (p.Mode == "supersede") ((IRadioButton)p.C.Current!).IsChecked = false;
+                }, "g").Ref(p.A),
+                RadioButton("b", false, v => p.Log.Add($"b {v}"), "g").Ref(p.B),
+                showC ? RadioButton("c", false, v => p.Log.Add($"c {v}"), "g").Ref(p.C) : null);
+        }
+    }
+
+    private static (TestHost Host, QueueProps Props) MountQueueing(string mode)
+    {
+        var props = new QueueProps([], TypedElementRef.Create<MauiRadioButton>(), TypedElementRef.Create<MauiRadioButton>(), TypedElementRef.Create<MauiRadioButton>(), mode);
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(Component<Queueing, QueueProps>(props));
+        host.Scheduler.Drain();
+        return (host, props);
+    }
+
+    [Fact]
+    public void AQueuedCheck_IsNotOverwrittenByARenderBeforeItRuns()
+    {
+        var (host, p) = MountQueueing("state");
+
+        Tap(p.B);
+        host.Scheduler.Drain(); // the state change's render is posted before the queued check
+
+        // The render restored a (still declared checked); C's transaction then unchecks it again.
+        Assert.Equal(["a False", "a False", "c True"], p.Log);
+    }
+
+    [Fact]
+    public void AQueuedCheck_SupersededBeforeItRuns_ReportsNothing()
+    {
+        var (host, p) = MountQueueing("supersede");
+
+        Tap(p.B);
+        host.Scheduler.Drain();
+
+        Assert.DoesNotContain("c True", p.Log);
+        Assert.Equal("a False", p.Log[0]);
+    }
+
+    [Fact]
+    public void AQueuedCheck_OnAButtonUnmountedBeforeItRuns_ReportsNothing()
+    {
+        var (host, p) = MountQueueing("unmount");
+
+        Tap(p.B);
+        host.Scheduler.Drain();
+
+        Assert.Equal(["a False"], p.Log);
+        Assert.Null(p.C.Current);
     }
 
     [Fact]

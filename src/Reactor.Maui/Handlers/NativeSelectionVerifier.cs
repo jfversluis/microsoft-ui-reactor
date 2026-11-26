@@ -21,8 +21,10 @@ internal interface ISelectionPort
 /// Verifies a list's native selection against its declaration behind MAUI's pending batches (spec 070
 /// §3.4). MAUI's iOS SelectItem defers its native selection to a batch completion while the list isn't
 /// loaded, and doesn't check there that the item is still the selected one, so an older deferred
-/// selection can overwrite a newer one. Each commit schedules a verification; user input makes pending
-/// work stale. Nothing infers which write caused what: a current completion compares states.
+/// selection can overwrite a newer one. A commit that wrote the selection (or its mode), or any commit
+/// after user input, schedules a verification until one finds the native selection as declared; user
+/// input makes pending work stale. Nothing infers which write caused what: a current completion
+/// compares states. Unrelated commits schedule nothing, since each barrier costs UIKit a relayout.
 /// </summary>
 internal sealed class NativeSelectionVerifier(
     ReactorCollectionView view, Func<CollectionViewElement?> live, Action<Action> writeSuppressed)
@@ -30,6 +32,7 @@ internal sealed class NativeSelectionVerifier(
     private int _generation;
     private bool _outstanding;
     private int _fixedGeneration = -1;
+    private bool _pending;
     private bool _retired;
     private ISelectionPort? _port;
     private bool _portResolved;
@@ -59,16 +62,25 @@ internal sealed class NativeSelectionVerifier(
     /// <summary>Corrections applied (a test witness).</summary>
     public int Corrections { get; private set; }
 
-    /// <summary>A commit happened: verify behind the batches queued so far, invalidating older work.</summary>
-    public void Schedule()
+    /// <summary>
+    /// A commit happened. If it wrote the selection or its mode, or input arrived since the native
+    /// selection was last found as declared, verify behind the batches queued so far, invalidating older
+    /// work; otherwise nothing could have diverged, and nothing is issued.
+    /// </summary>
+    public void Schedule(bool wroteSelection)
     {
-        if (_retired || Port is null) return;
+        if (wroteSelection) _pending = true;
+        if (_retired || !_pending || Port is null) return;
         _generation++;
         if (!_outstanding) Issue();
     }
 
     /// <summary>User input arrived: any pending correction was computed before it and is stale.</summary>
-    public void Invalidate() => _generation++;
+    public void Invalidate()
+    {
+        _generation++;
+        _pending = true;
+    }
 
     public void Retire() => _retired = true;
 
@@ -99,12 +111,14 @@ internal sealed class NativeSelectionVerifier(
         if (wantedSet.SetEquals(native))
         {
             _fixedGeneration = -1;
+            _pending = false;
             return;
         }
         if (_fixedGeneration == generation)
         {
             // Fixed once and still different: stop, so a platform that never converges can't loop.
             _fixedGeneration = -1;
+            _pending = false;
             DiagnosticLog.Warning(LogCategory.Reactor, "CollectionView.NativeSelection",
                 "The native selection still differs from the declared one after a correction; giving up until the next commit.");
             return;

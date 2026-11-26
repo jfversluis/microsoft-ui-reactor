@@ -326,7 +326,11 @@ public sealed record SwipeItemData(string Text, Action? OnInvoked = null)
     public Color? BackgroundColor { get; init; }
     public ImageSource? Icon { get; init; }
 
-    /// <summary>A custom view for the item, re-rendered in place on every render.</summary>
+    /// <summary>
+    /// A custom view for the item. It re-renders in place while its side keeps the same structure (the
+    /// count, each item's kind and text, a text item's color and icon, and the mode); a change there
+    /// rebuilds the side and remounts it.
+    /// </summary>
     public Element? Content { get; init; }
 }
 

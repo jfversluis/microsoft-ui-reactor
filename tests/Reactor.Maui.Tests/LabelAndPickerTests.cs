@@ -88,12 +88,28 @@ public class LabelInlineTests
     }
 
     [Fact]
-    public void AHyperlinksDeclaredDecoration_Wins()
+    public void DecorationModifiers_ToggleOneFlag_FromTheEffectiveDecorations()
     {
-        var host = Host().Render(Label(Hyperlink("x", () => { }).Underline(false), Hyperlink("y", () => { }).Strikethrough()));
+        var host = Host().Render(Label(
+            Hyperlink("a", () => { }).Underline(false),
+            Hyperlink("b", () => { }).Strikethrough(),
+            Hyperlink("c", () => { }).Strikethrough(false),
+            Run("d").Underline().Strikethrough(),
+            Run("e").Underline().Strikethrough().Underline(false)));
         var spans = host.View<MauiLabel>().FormattedText.Spans;
         Assert.Equal(TextDecorations.None, spans[0].TextDecorations);
-        Assert.Equal(TextDecorations.Strikethrough, spans[1].TextDecorations);
+        Assert.Equal(TextDecorations.Underline | TextDecorations.Strikethrough, spans[1].TextDecorations);
+        Assert.Equal(TextDecorations.Underline, spans[2].TextDecorations);
+        Assert.Equal(TextDecorations.Underline | TextDecorations.Strikethrough, spans[3].TextDecorations);
+        Assert.Equal(TextDecorations.Strikethrough, spans[4].TextDecorations);
+    }
+
+    [Fact]
+    public void TheLabelsLineHeightAndTransformModifiers_ReachTheLabel()
+    {
+        var host = Host().Render(Label("x").LineHeight(1.5).TextTransform(TextTransform.Uppercase));
+        var label = host.View<MauiLabel>();
+        Assert.Equal((1.5, TextTransform.Uppercase), (label.LineHeight, label.TextTransform));
     }
 
     [Fact]

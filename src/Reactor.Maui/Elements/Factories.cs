@@ -117,14 +117,14 @@ public static class Factories
 
     public static TimePickerElement TimePicker(TimeSpan time, Action<TimeSpan>? onTimeSelected = null) => new(time, onTimeSelected);
 
-    public static RadioButtonElement RadioButton(string content, bool isChecked, Action<bool>? onCheckedChanged = null, string? groupName = null) =>
-        new(content, isChecked, onCheckedChanged) { GroupName = groupName };
+    public static RadioButtonElement RadioButton(string content, bool isChecked, Action<bool>? onIsCheckedChanged = null, string? groupName = null) =>
+        new(content, isChecked, onIsCheckedChanged) { GroupName = groupName };
 
     /// <summary>A radio button with declarative content (WinUI's shape); set its accessible name with <c>.Semantics(description: …)</c>.</summary>
-    public static RadioButtonElement RadioButton(Element content, bool isChecked, Action<bool>? onCheckedChanged = null, string? groupName = null)
+    public static RadioButtonElement RadioButton(Element content, bool isChecked, Action<bool>? onIsCheckedChanged = null, string? groupName = null)
     {
         ArgumentNullException.ThrowIfNull(content);
-        return new("", isChecked, onCheckedChanged) { GroupName = groupName, ContentElement = content };
+        return new("", isChecked, onIsCheckedChanged) { GroupName = groupName, ContentElement = content };
     }
 
     // ── Layout ──────────────────────────────────────────────────────────────

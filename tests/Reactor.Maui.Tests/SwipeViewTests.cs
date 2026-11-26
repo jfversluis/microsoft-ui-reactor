@@ -118,6 +118,47 @@ public class SwipeViewTests
     }
 
     [Fact]
+    public void AModeOrIconChange_RebuildsTheSide_ButAContentItemsColorDoesNot()
+    {
+        var log = new List<string>();
+        SwipeViewElement Swipe(SwipeMode mode, string icon, Color color) => SwipeView(Label("row")) with
+        {
+            RightItems = [new SwipeItemData("x", () => { }) { Icon = ImageSource.FromFile(icon) }],
+            RightItemsMode = mode,
+            LeftItems = [new SwipeItemData("Done", () => { }) { Content = BadgeOf("badge", log), BackgroundColor = color }],
+        };
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(Swipe(SwipeMode.Reveal, "a.png", Colors.Red));
+        var view = host.View<MauiSwipeView>();
+        var (left, right) = (view.LeftItems, view.RightItems);
+
+        host.Render(Swipe(SwipeMode.Execute, "a.png", Colors.Red));
+        Assert.NotSame(right, view.RightItems);
+        Assert.Equal(SwipeMode.Execute, view.RightItems.Mode);
+        right = view.RightItems;
+
+        host.Render(Swipe(SwipeMode.Execute, "b.png", Colors.Red));
+        Assert.NotSame(right, view.RightItems);
+
+        // A content item shows its content, not a color: no rebuild, no remount.
+        host.Render(Swipe(SwipeMode.Execute, "b.png", Colors.Blue));
+        Assert.Same(left, view.LeftItems);
+        Assert.Empty(log);
+    }
+
+    [Fact]
+    public void UnmountingTheSwipeView_UnmountsItsContentItems()
+    {
+        var log = new List<string>();
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(VStack(
+            SwipeView(Label("row")) with { RightItems = [new SwipeItemData("Done", () => { }) { Content = BadgeOf("badge", log) }] }));
+        Assert.Empty(log);
+
+        host.Render(VStack());
+
+        Assert.Equal(["cleanup badge"], log);
+    }
+
+    [Fact]
     public void Invoking_ReachesTheLiveCallback_AndNothingAfterUnmount()
     {
         var calls = new List<string>();

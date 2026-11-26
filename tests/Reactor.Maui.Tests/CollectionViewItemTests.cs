@@ -464,17 +464,40 @@ public class NativeSelectionVerificationTests
     }
 
     [Fact]
-    public void ACommitWithNoVirtualWrite_IsVerifiedToo()
+    public void AnUnrelatedCommit_AfterAMatchingVerification_IssuesNothing()
     {
         var (host, view, port, _, select, _) = Mount();
+        select("b");
+        host.Scheduler.Drain();
         port.RunAll();
-        // MAUI's late deferred selection left the wrong item selected; the declaration didn't change.
-        port.Native.Clear();
-        port.Native.Add(Cells.Box(view, "c"));
+        Assert.Equal("b", Native(port));
+        var issued = view.Verifier.Issued;
+
+        // A parent re-render that writes nothing: each barrier costs UIKit a relayout, so none is issued.
+        Recommit(host);
+        Recommit(host);
+
+        Assert.Equal(issued, view.Verifier.Issued);
+        Assert.Empty(port.Queue);
+    }
+
+    [Fact]
+    public void ARefusedSelection_IsVerified_EvenWithNoWrite()
+    {
+        var (host, view, port, reports, _, _) = Mount();
         Recommit(host);
         port.RunAll();
+        var issued = view.Verifier.Issued;
+        // The user taps c; the app's refusal is modelled by a list whose callback keeps a.
+        view.Verifier.Invalidate();
+        port.Native.Clear();
+        port.Native.Add(Cells.Box(view, "c"));
+        Recommit(host); // the restore's commit: the virtual selection is still a, so nothing is written
 
+        Assert.Equal(issued + 1, view.Verifier.Issued);
+        port.RunAll();
         Assert.Equal("a", Native(port));
+        Assert.Empty(reports);
     }
 
     [Theory]
@@ -604,12 +627,12 @@ public class CollectionViewFeatureTests
         SlotProbe.Set["header"](3);
         host.Scheduler.Drain();
 
-        host.Render(List(true, ""));
-        Assert.Equal("header 3", Text(view.Header));
+        host.Render(List(true, "2"));
+        Assert.Equal(("header2 3", "footer2", "empty2"), (Text(view.Header), Text(view.Footer), Text(view.EmptyView)));
         Assert.Empty(log);
 
         host.Render(List(false));
-        Assert.Equal(["cleanup header"], log);
+        Assert.Equal(["cleanup header2"], log);
         Assert.Null(view.Header);
         Assert.Null(view.Footer);
         Assert.Null(view.EmptyView);
@@ -673,6 +696,38 @@ public class CollectionViewFeatureTests
 
         Assert.True(view.ScrollToKey("d"));
         Assert.Throws<InvalidOperationException>(() => host.Render(Grouped([new("x", ["a"]), new("y", ["a"])])));
+    }
+
+    private sealed class HeaderProbe : Component<string>
+    {
+        public static readonly Dictionary<string, Action<int>> Set = [];
+
+        public override Element Render()
+        {
+            var (count, setCount) = UseState(0);
+            Set[Props] = setCount;
+            return Label($"header {Props} {count}");
+        }
+    }
+
+    [Theory]
+    [InlineData(false, "header y 0")]
+    [InlineData(true, "header y 4")]
+    public void AGroupHeaderCellRebound_ToAnotherGroup_RemountsUnlessTreesAreReused(bool reuse, string expected)
+    {
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(
+            CollectionView(new[] { new Group("x", ["a"]), new Group("y", ["b"]) }, g => g.Name, g => g.Items, i => i, i => Label(i),
+                g => Component<HeaderProbe, string>(g.Name)) with { ReuseItemTrees = reuse });
+        var view = host.View<CollectionView>();
+        var groups = (ObservableCollection<GroupBox>)view.ItemsSource;
+        var header = Cells.Bind(view.GroupHeaderTemplate, groups[0]);
+        HeaderProbe.Set["x"](4);
+        host.Scheduler.Drain();
+        Assert.Equal("header x 4", Cells.Text(header));
+
+        header.BindingContext = groups[1];
+
+        Assert.Equal(expected, Cells.Text(header));
     }
 
     [Fact]

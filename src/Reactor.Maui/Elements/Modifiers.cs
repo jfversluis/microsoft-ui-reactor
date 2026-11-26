@@ -172,6 +172,11 @@ public static class ViewElementExtensions
     public static LabelElement Padding(this LabelElement element, double horizontal, double vertical) =>
         element with { Padding = new Thickness(horizontal, vertical) };
 
+    /// <summary>The line height, as a multiple of the font's (MAUI's <c>LineHeight</c>).</summary>
+    public static LabelElement LineHeight(this LabelElement element, double multiple) => element with { LineHeight = multiple };
+
+    public static LabelElement TextTransform(this LabelElement element, TextTransform transform) => element with { TextTransform = transform };
+
     public static LabelElement MaxLines(this LabelElement element, int lines) =>
         element with { MaxLines = lines, LineBreakMode = Microsoft.Maui.LineBreakMode.TailTruncation };
 
@@ -229,9 +234,17 @@ public static class RichTextInlineExtensions
     public static T TextTransform<T>(this T inline, TextTransform transform) where T : RichTextInline =>
         (T)(((RichTextInline)inline) with { TextTransform = transform });
 
+    /// <summary>Turns the underline on or off, keeping any other decoration (a hyperlink starts underlined).</summary>
     public static T Underline<T>(this T inline, bool enabled = true) where T : RichTextInline =>
-        (T)(((RichTextInline)inline) with { TextDecorations = enabled ? Microsoft.Maui.TextDecorations.Underline : Microsoft.Maui.TextDecorations.None });
+        Decorate(inline, Microsoft.Maui.TextDecorations.Underline, enabled);
 
+    /// <summary>Turns the strikethrough on or off, keeping any other decoration.</summary>
     public static T Strikethrough<T>(this T inline, bool enabled = true) where T : RichTextInline =>
-        (T)(((RichTextInline)inline) with { TextDecorations = enabled ? Microsoft.Maui.TextDecorations.Strikethrough : Microsoft.Maui.TextDecorations.None });
+        Decorate(inline, Microsoft.Maui.TextDecorations.Strikethrough, enabled);
+
+    private static T Decorate<T>(T inline, TextDecorations flag, bool enabled) where T : RichTextInline
+    {
+        var current = inline.TextDecorations ?? (inline is RichTextHyperlink ? Microsoft.Maui.TextDecorations.Underline : Microsoft.Maui.TextDecorations.None);
+        return (T)(((RichTextInline)inline) with { TextDecorations = enabled ? current | flag : current & ~flag });
+    }
 }

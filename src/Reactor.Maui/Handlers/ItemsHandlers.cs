@@ -427,27 +427,31 @@ internal sealed class CollectionViewHandler : ViewHandler<CollectionViewElement,
                 view.GroupFooterTemplate = next.GroupFooterTemplate is null ? null : host.CreateDataTemplate(CellRole.GroupFooter);
         }
 
+        var wroteSelection = false;
         context.WriteSuppressed(view, () =>
         {
             // MAUI raises SelectionChanged when a mode change changes the effective selection.
-            if (view.SelectionMode != next.SelectionMode) view.SelectionMode = next.SelectionMode;
+            if (view.SelectionMode != next.SelectionMode)
+            {
+                view.SelectionMode = next.SelectionMode;
+                wroteSelection = true;
+            }
             // Restoring a controlled value re-applies the same element; the items did not change then.
             if (!ReferenceEquals(previous, next))
             {
                 if (next.Groups is { } groups) host.SyncGroups(groups, next.ItemKey);
                 else host.Sync(next.Items, next.ItemKey);
             }
-            ApplySelection(view, next);
+            wroteSelection |= ApplySelection(view, next);
         });
 
         view.HeaderSlot.Render(next.Header);
         view.FooterSlot.Render(next.Footer);
         view.EmptySlot.Render(next.EmptyView);
 
-        // Every commit of a list with a selection, accepting or refusing, and entering None, verifies the
-        // native selection behind MAUI's pending batches (spec 070 §3.4).
-        if ((previous?.SelectionMode ?? SelectionMode.None) != SelectionMode.None || next.SelectionMode != SelectionMode.None)
-            view.Verifier.Schedule();
+        // A commit that wrote the selection or its mode, or one after user input, verifies the native
+        // selection behind MAUI's pending batches (spec 070 §3.4).
+        view.Verifier.Schedule(wroteSelection);
     }
 
     public override void Unmount(ReactorCollectionView control)
@@ -459,7 +463,8 @@ internal sealed class CollectionViewHandler : ViewHandler<CollectionViewElement,
         control.EmptySlot.Unmount();
     }
 
-    private static void ApplySelection(ReactorCollectionView view, CollectionViewElement element)
+    /// <summary>Writes the declared selection; returns whether anything was written.</summary>
+    private static bool ApplySelection(ReactorCollectionView view, CollectionViewElement element)
     {
         var wanted = SelectionRules.Effective(element, view.Host);
         switch (element.SelectionMode)
@@ -467,16 +472,20 @@ internal sealed class CollectionViewHandler : ViewHandler<CollectionViewElement,
             case SelectionMode.Single:
             {
                 var box = wanted.Count > 0 ? wanted[0] : null;
-                if (!ReferenceEquals(view.SelectedItem, box)) view.SelectedItem = box;
-                break;
+                if (ReferenceEquals(view.SelectedItem, box)) return false;
+                view.SelectedItem = box;
+                return true;
             }
             case SelectionMode.Multiple:
             {
                 // Compared as sets: a native order that differs from the declared one isn't a change.
                 var current = view.SelectedItems?.OfType<ItemBox>() ?? [];
-                if (!new HashSet<ItemBox>(current, ReferenceEqualityComparer.Instance).SetEquals(wanted)) view.SelectedItems = [.. wanted];
-                break;
+                if (new HashSet<ItemBox>(current, ReferenceEqualityComparer.Instance).SetEquals(wanted)) return false;
+                view.SelectedItems = [.. wanted];
+                return true;
             }
+            default:
+                return false;
         }
     }
 

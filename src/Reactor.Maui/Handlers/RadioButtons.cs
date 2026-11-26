@@ -42,31 +42,29 @@ internal sealed class RadioButtonHandler : ViewHandler<RadioButtonElement, React
         {
             if (previous?.Content != next.Content) view.Content = next.Content;
         }
-        else
-        {
-            ApplyDescription(view, previous, next);
-        }
-        Props.ApplyText(view, previous, next);
-        if (view.IsChecked != next.IsChecked) context.WriteSuppressed(view, () => view.IsChecked = next.IsChecked);
-        RadioGroups.For(context.Node).Register(context, view, next);
-    }
-
-    // With a template, MAUI's description falls back to Content.ToString(), a type name for a view: the
-    // text Content is the description, and a button with neither logs a warning once.
-    private static void ApplyDescription(ReactorRadioButton view, RadioButtonElement? previous, RadioButtonElement next)
-    {
-        if (!string.IsNullOrEmpty(next.Content))
-        {
-            if (previous?.Content != next.Content && next.Modifiers?.SemanticDescription is null)
-                SemanticProperties.SetDescription(view, next.Content);
-            return;
-        }
-        if (next.Modifiers?.SemanticDescription is null && !view.WarnedDescription)
+        else if (string.IsNullOrEmpty(next.Content) && next.Modifiers?.SemanticDescription is null && !view.WarnedDescription)
         {
             view.WarnedDescription = true;
             DiagnosticLog.Warning(LogCategory.Reactor, "RadioButton.Description",
                 "A radio button with view content has no accessible name; set .Semantics(description: ...) on it.");
         }
+        Props.ApplyText(view, previous, next);
+        var groups = RadioGroups.For(context.Node);
+        // A check queued while a transaction dispatched hasn't been reported yet: a render in between
+        // must not overwrite it before it is (the queue restores the declaration if it drops it).
+        if (view.IsChecked != next.IsChecked && !groups.IsQueued(view))
+            context.WriteSuppressed(view, () => view.IsChecked = next.IsChecked);
+        groups.Register(context, view, next);
+    }
+
+    // With a template, MAUI's description falls back to Content.ToString(), a type name for a view. The
+    // effective description is the declared one, else the text Content; it is written after the
+    // modifiers, which would otherwise clear it when a description modifier is removed.
+    protected override void AfterModifiers(HandlerContext<RadioButtonElement> context, ReactorRadioButton view, RadioButtonElement element)
+    {
+        if (element.ContentElement is null) return;
+        var effective = element.Modifiers?.SemanticDescription ?? (string.IsNullOrEmpty(element.Content) ? null : element.Content);
+        if (SemanticProperties.GetDescription(view) != effective) SemanticProperties.SetDescription(view, effective);
     }
 
     public override void Unmount(ReactorRadioButton control) => control.Groups?.Unregister(control);
@@ -92,17 +90,25 @@ internal sealed class RadioGroups
 {
     private readonly record struct GroupKey(object Scope, string? Name);
 
-    private sealed record Entry(ReactorRadioButton View, HandlerContext<RadioButtonElement> Context, GroupKey Key);
+    /// <summary>One group's members and transaction generation. It goes with its last member, and its key
+    /// with it, so a removed page or layout (a key's scope) isn't kept alive.</summary>
+    private sealed class Group(GroupKey key)
+    {
+        public readonly GroupKey Key = key;
+        public readonly List<ReactorRadioButton> Members = [];
+        public int Generation;
+    }
+
+    private sealed record Entry(ReactorRadioButton View, HandlerContext<RadioButtonElement> Context, Group Group);
 
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ReactorRoot, RadioGroups> Tables = new();
 
     private readonly ReactorRoot _root;
     private readonly Dictionary<ReactorRadioButton, Entry> _entries = new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<GroupKey, List<ReactorRadioButton>> _groups = [];
-    private readonly Dictionary<GroupKey, int> _generations = [];
+    private readonly Dictionary<GroupKey, Group> _groups = [];
     private readonly Queue<(ReactorRadioButton View, bool Value)> _queued = new();
-    private readonly HashSet<GroupKey> _dirty = [];
-    private readonly HashSet<GroupKey> _warned = [];
+    private readonly HashSet<Group> _dirty = [];
+    private readonly HashSet<Group> _warned = [];
     private bool _dispatching;
     private bool _drainPosted;
     private bool _checkPosted;
@@ -114,6 +120,9 @@ internal sealed class RadioGroups
     /// <summary>Unsuppressed notifications that started a transaction or were queued (a test witness).</summary>
     internal int Transactions { get; private set; }
 
+    /// <summary>The number of live groups (a test witness).</summary>
+    internal int GroupCount => _groups.Count;
+
     private static GroupKey KeyOf(Node node, string? name)
     {
         if (!string.IsNullOrEmpty(name)) return new(Microsoft.UI.Reactor.Maui.Hosting.SystemBack.PageOf(node) ?? node.Root.TopRoot, name);
@@ -123,23 +132,30 @@ internal sealed class RadioGroups
         return new(node.Root, null);
     }
 
+    public bool IsQueued(ReactorRadioButton view)
+    {
+        foreach (var (queued, _) in _queued)
+            if (ReferenceEquals(queued, view)) return true;
+        return false;
+    }
+
     public void Register(HandlerContext<RadioButtonElement> context, ReactorRadioButton view, RadioButtonElement element)
     {
         view.Groups = this;
         var key = KeyOf(context.Node, element.GroupName);
         if (_entries.TryGetValue(view, out var existing))
         {
-            if (existing.Key.Equals(key))
+            if (existing.Group.Key.Equals(key))
             {
-                MarkDirty(key);
+                MarkDirty(existing.Group);
                 return;
             }
             Remove(existing);
         }
-        _entries[view] = new Entry(view, context, key);
-        if (!_groups.TryGetValue(key, out var members)) _groups[key] = members = [];
-        members.Add(view);
-        MarkDirty(key);
+        if (!_groups.TryGetValue(key, out var group)) _groups[key] = group = new Group(key);
+        group.Members.Add(view);
+        _entries[view] = new Entry(view, context, group);
+        MarkDirty(group);
     }
 
     public void Unregister(ReactorRadioButton view)
@@ -150,15 +166,23 @@ internal sealed class RadioGroups
     private void Remove(Entry entry)
     {
         _entries.Remove(entry.View);
-        if (_groups.TryGetValue(entry.Key, out var members))
+        var group = entry.Group;
+        group.Members.Remove(entry.View);
+        if (group.Members.Count == 0)
         {
-            members.Remove(entry.View);
-            if (members.Count == 0) _groups.Remove(entry.Key);
+            _groups.Remove(group.Key);
+            _warned.Remove(group);
+            _dirty.Remove(group);
+            // A transaction or queued check on it stops: nothing is current in a removed group.
+            group.Generation++;
         }
-        MarkDirty(entry.Key);
+        else
+        {
+            MarkDirty(group);
+        }
     }
 
-    private bool IsMember(Entry entry) => _entries.TryGetValue(entry.View, out var current) && current.Key.Equals(entry.Key);
+    private bool IsMember(Entry entry) => _entries.TryGetValue(entry.View, out var current) && ReferenceEquals(current.Group, entry.Group);
 
     public void OnCheckedChanged(HandlerContext<RadioButtonElement> context, ReactorRadioButton view, bool value)
     {
@@ -169,7 +193,7 @@ internal sealed class RadioGroups
             // Never reentrant: a callback's own radio writes run after this transaction and MAUI's
             // setters have unwound. Queueing a check supersedes a same-group transaction.
             _queued.Enqueue((view, value));
-            if (value && _entries.TryGetValue(view, out var queued)) Bump(queued.Key);
+            if (value && _entries.TryGetValue(view, out var queued)) queued.Group.Generation++;
             if (!_drainPosted)
             {
                 _drainPosted = true;
@@ -180,54 +204,50 @@ internal sealed class RadioGroups
         Process(view, value);
     }
 
-    private int Bump(GroupKey key)
-    {
-        var next = _generations.TryGetValue(key, out var current) ? current + 1 : 1;
-        _generations[key] = next;
-        return next;
-    }
-
     private void Drain()
     {
         _drainPosted = false;
         while (_queued.Count > 0 && !_dispatching)
         {
             var (view, value) = _queued.Dequeue();
-            if (!_entries.ContainsKey(view)) continue;
-            // Re-read the native state: a later write superseded an entry that no longer holds.
+            if (!_entries.TryGetValue(view, out var entry)) continue;
+            // Re-read the native state: an entry a later write superseded is dropped, and the declaration
+            // the render skipped while it was queued is restored.
             if (view.IsChecked == value) Process(view, value);
+            else if (entry.Context.IsMounted) entry.Context.RestoreAfterEvent();
         }
     }
 
     private void Process(ReactorRadioButton view, bool value)
     {
         if (!_entries.TryGetValue(view, out var entry)) return;
+        var group = entry.Group;
+        var generation = ++group.Generation;
         if (!value)
         {
             // An uncheck outside a write (a ref): reported and restored, as any input.
-            Run([entry], [(entry, false)], entry.Key, Bump(entry.Key));
+            Run([entry], [(entry, false)], group, generation);
             return;
         }
-        var generation = Bump(entry.Key);
         var peers = new List<Entry>();
-        foreach (var member in _groups[entry.Key])
+        foreach (var member in group.Members)
             if (!ReferenceEquals(member, view) && member.IsChecked && _entries.TryGetValue(member, out var peer)) peers.Add(peer);
         // The native group is settled before any callback, in MAUI's order: peers unchecked first.
         foreach (var peer in peers) peer.Context.WriteSuppressed(peer.View, () => peer.View.IsChecked = false);
         var reports = new List<(Entry, bool)>(peers.Count + 1);
         foreach (var peer in peers) reports.Add((peer, false));
         reports.Add((entry, true));
-        Run([.. peers, entry], reports, entry.Key, generation);
+        Run([.. peers, entry], reports, group, generation);
     }
 
-    private void Run(List<Entry> participants, List<(Entry Entry, bool Value)> reports, GroupKey key, int generation)
+    private void Run(List<Entry> participants, List<(Entry Entry, bool Value)> reports, Group group, int generation)
     {
         _dispatching = true;
         try
         {
             foreach (var (target, value) in reports)
             {
-                if (_generations[key] != generation) break;
+                if (group.Generation != generation) break;
                 if (target.Context.Live is not { } live || !IsMember(target)) continue;
                 try
                 {
@@ -247,9 +267,9 @@ internal sealed class RadioGroups
         }
     }
 
-    private void MarkDirty(GroupKey key)
+    private void MarkDirty(Group group)
     {
-        _dirty.Add(key);
+        _dirty.Add(group);
         if (_checkPosted) return;
         _checkPosted = true;
         // After the pass: a replacement mounts before the old button unmounts.
@@ -259,20 +279,19 @@ internal sealed class RadioGroups
     private void CheckConflicts()
     {
         _checkPosted = false;
-        foreach (var key in _dirty)
+        foreach (var group in _dirty)
         {
             var declared = 0;
-            if (_groups.TryGetValue(key, out var members))
-                foreach (var member in members)
-                    if (_entries.TryGetValue(member, out var entry) && entry.Context.Live is { IsChecked: true }) declared++;
+            foreach (var member in group.Members)
+                if (_entries.TryGetValue(member, out var entry) && entry.Context.Live is { IsChecked: true }) declared++;
             if (declared < 2)
             {
-                _warned.Remove(key);
+                _warned.Remove(group);
             }
-            else if (_warned.Add(key))
+            else if (_warned.Add(group))
             {
                 DiagnosticLog.Warning(LogCategory.Reactor, "RadioButton.Group",
-                    $"{declared} radio buttons in the group '{key.Name ?? "(unnamed)"}' are declared checked; all are shown checked.");
+                    $"{declared} radio buttons in the group '{group.Key.Name ?? "(unnamed)"}' are declared checked; all are shown checked.");
             }
         }
         _dirty.Clear();
