@@ -67,6 +67,97 @@ public static class Factories
 
     public static GraphicsViewElement GraphicsView(IDrawable drawable) => new(drawable);
 
+    /// <summary>A plain container for one child (MAUI's <c>ContentView</c>).</summary>
+    public static ContentViewElement ContentView(Element? content) => new(content);
+
+    /// <summary>
+    /// An image read from a stream, identified by <paramref name="key"/>: a new <c>StreamImage</c> with the
+    /// same key on a later render is the same image, so it isn't loaded again and <paramref name="open"/>
+    /// isn't called. Use a new key for a different image.
+    /// </summary>
+    public static ImageSource StreamImage(string key, Func<Stream> open)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(open);
+        return Handlers.ImageSources.Keyed(key, ImageSource.FromStream(open));
+    }
+
+    /// <inheritdoc cref="StreamImage(string, Func{Stream})"/>
+    public static ImageSource StreamImage(string key, Func<CancellationToken, Task<Stream>> open)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(open);
+        return Handlers.ImageSources.Keyed(key, ImageSource.FromStream(open));
+    }
+
+    // ── Shapes (spec 070 §4.3; WinUI's names, MAUI's for the shapes WinUI Reactor lacks) ─────────
+
+    public static RectangleElement Rectangle() => new();
+
+    public static EllipseElement Ellipse() => new();
+
+    /// <summary>A rectangle with a radius per corner; a number gives every corner that radius.</summary>
+    public static RoundRectangleElement RoundRectangle(CornerRadius cornerRadius) => new(cornerRadius);
+
+    public static LineElement Line(double x1, double y1, double x2, double y2) => new() { X1 = x1, Y1 = y1, X2 = x2, Y2 = y2 };
+
+    /// <summary>A closed shape through <paramref name="points"/> (copied).</summary>
+    public static PolygonElement Polygon(params Point[] points) => new() { Points = points };
+
+    /// <summary>An open line through <paramref name="points"/> (copied).</summary>
+    public static PolylineElement Polyline(params Point[] points) => new() { Points = points };
+
+    /// <summary>A path (named <c>Path2D</c>, as on WinUI, so it doesn't collide with <c>System.IO.Path</c>).</summary>
+    public static PathElement Path2D() => new();
+
+    /// <summary>A path drawn from path markup, such as <c>"M 0,0 L 10,0 L 0,10 Z"</c>.</summary>
+    public static PathElement Path2D(string pathData) => new() { PathDataString = pathData };
+
+    /// <summary>A path drawn from a MAUI geometry, compared by reference: create it once.</summary>
+    public static PathElement Path2D(Microsoft.Maui.Controls.Shapes.Geometry data) => new() { Data = data };
+
+    // ── Brushes (spec 070 §4.4): named after their type, as WinUI's AcrylicBrush is ────────────
+
+    /// <summary>
+    /// A linear gradient from <paramref name="startPoint"/> to <paramref name="endPoint"/>, relative to the
+    /// element's bounds (0 to 1), through <paramref name="stops"/>, each a color and its offset (0 to 1).
+    /// Brushes are compared by value and immutable once rendered: render a new one to change it.
+    /// </summary>
+    public static Microsoft.Maui.Controls.LinearGradientBrush LinearGradientBrush(Point startPoint, Point endPoint, params (Color Color, double Offset)[] stops) =>
+        new(GradientStops(stops), startPoint, endPoint);
+
+    /// <summary>A linear gradient through <paramref name="colors"/>, spaced evenly.</summary>
+    public static Microsoft.Maui.Controls.LinearGradientBrush LinearGradientBrush(Point startPoint, Point endPoint, params Color[] colors) =>
+        new(GradientStops(Evenly(colors)), startPoint, endPoint);
+
+    /// <summary>
+    /// A radial gradient around <paramref name="center"/> with <paramref name="radius"/>, relative to the
+    /// element's bounds, through <paramref name="stops"/>, each a color and its offset (0 to 1).
+    /// </summary>
+    public static Microsoft.Maui.Controls.RadialGradientBrush RadialGradientBrush(Point center, double radius, params (Color Color, double Offset)[] stops) =>
+        new(GradientStops(stops), center, radius);
+
+    /// <summary>A radial gradient through <paramref name="colors"/>, spaced evenly.</summary>
+    public static Microsoft.Maui.Controls.RadialGradientBrush RadialGradientBrush(Point center, double radius, params Color[] colors) =>
+        new(GradientStops(Evenly(colors)), center, radius);
+
+    private static (Color Color, double Offset)[] Evenly(Color[] colors)
+    {
+        ArgumentNullException.ThrowIfNull(colors);
+        var stops = new (Color, double)[colors.Length];
+        for (var i = 0; i < colors.Length; i++) stops[i] = (colors[i], colors.Length == 1 ? 0 : (double)i / (colors.Length - 1));
+        return stops;
+    }
+
+    // New stops: the app's array is never retained.
+    private static GradientStopCollection GradientStops((Color Color, double Offset)[] stops)
+    {
+        ArgumentNullException.ThrowIfNull(stops);
+        var collection = new GradientStopCollection();
+        foreach (var (color, offset) in stops) collection.Add(new GradientStop(color, (float)offset));
+        return collection;
+    }
+
     public static WebViewElement WebView(string url) => new(url);
 
     public static WebViewElement HtmlView(string html) => new(null, html);

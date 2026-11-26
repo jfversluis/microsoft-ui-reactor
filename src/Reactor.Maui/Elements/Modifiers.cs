@@ -190,10 +190,61 @@ public static class ViewElementExtensions
     public static BorderElement Padding(this BorderElement element, double horizontal, double vertical) =>
         element with { Padding = new Thickness(horizontal, vertical) };
 
+    /// <summary>A solid border; <c>null</c> removes the stroke.</summary>
     public static BorderElement Stroke(this BorderElement element, Color? color, double thickness = 1) =>
-        element with { Stroke = color, StrokeThickness = thickness };
+        element with { Stroke = color is null ? null : (Brush)color, StrokeThickness = thickness };
+
+    /// <summary>A border painted with <paramref name="brush"/>, compared by value; <c>null</c> removes the stroke.</summary>
+    public static BorderElement Stroke(this BorderElement element, Brush? brush, double thickness = 1) =>
+        element with { Stroke = brush, StrokeThickness = thickness };
 
     public static BorderElement CornerRadius(this BorderElement element, double radius) => element with { CornerRadius = new CornerRadius(radius) };
+
+    // ── Content view ────────────────────────────────────────────────────────
+
+    public static ContentViewElement Padding(this ContentViewElement element, double uniform) => element with { Padding = new Thickness(uniform) };
+
+    public static ContentViewElement Padding(this ContentViewElement element, double horizontal, double vertical) =>
+        element with { Padding = new Thickness(horizontal, vertical) };
+
+    // ── Shapes (spec 070 §4.3) ──────────────────────────────────────────────
+
+    /// <summary>Fills the shape with <paramref name="brush"/>, compared by value; <c>null</c> removes the fill.</summary>
+    public static T Fill<T>(this T shape, Brush? brush) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { Fill = brush });
+
+    /// <summary>Fills the shape with <paramref name="color"/>; <c>null</c> removes the fill.</summary>
+    public static T Fill<T>(this T shape, Color? color) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { Fill = color is null ? null : (Brush)color });
+
+    /// <summary>Strokes the shape with <paramref name="brush"/>, compared by value; <c>null</c> removes the stroke. A <c>null</c> thickness keeps the current one.</summary>
+    public static T Stroke<T>(this T shape, Brush? brush, double? thickness = null) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { Stroke = brush, StrokeThickness = thickness ?? shape.StrokeThickness });
+
+    /// <summary>Strokes the shape with <paramref name="color"/>; <c>null</c> removes the stroke. A <c>null</c> thickness keeps the current one.</summary>
+    public static T Stroke<T>(this T shape, Color? color, double? thickness = null) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { Stroke = color is null ? null : (Brush)color, StrokeThickness = thickness ?? shape.StrokeThickness });
+
+    public static T StrokeThickness<T>(this T shape, double thickness) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { StrokeThickness = thickness });
+
+    /// <summary>Dash and gap lengths, in multiples of the stroke thickness (copied).</summary>
+    public static T StrokeDashArray<T>(this T shape, params double[] dashes) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { StrokeDashArray = dashes });
+
+    public static T StrokeLineCap<T>(this T shape, PenLineCap cap) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { StrokeLineCap = cap });
+
+    public static T StrokeLineJoin<T>(this T shape, PenLineJoin join) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { StrokeLineJoin = join });
+
+    /// <summary>How the geometry stretches into the shape's box.</summary>
+    public static T Aspect<T>(this T shape, Stretch aspect) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { Aspect = aspect });
+
+    /// <summary>Rounds the rectangle's corners; <paramref name="y"/> defaults to <paramref name="x"/>.</summary>
+    public static RectangleElement Radius(this RectangleElement rectangle, double x, double? y = null) =>
+        rectangle with { RadiusX = x, RadiusY = y ?? x };
 
     // ── Layout containers ───────────────────────────────────────────────────
 
