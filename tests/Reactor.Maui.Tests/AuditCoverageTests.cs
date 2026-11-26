@@ -199,6 +199,19 @@ public class AuditCoverageTests
         Assert.Equal(["b True"], log);
         Assert.Equal(nativeName, r[1].Current!.GroupName);
     }
+}
+
+/// <summary>
+/// A radio button's indicator (spec 070 §4.14.2). View content without a description warns, so this
+/// shares the collection of the tests that listen for that warning.
+/// </summary>
+[Collection("RadioDescriptionWarnings")]
+public class RadioIndicatorTests
+{
+    public static TheoryData<string> Registries() => ["controls", "direct"];
+
+    private static TestHost Host(string registry) =>
+        new(PropertyMatrixTests.Registries.Single(r => r.Name == registry).Create());
 
     [Theory]
     [MemberData(nameof(Registries))]

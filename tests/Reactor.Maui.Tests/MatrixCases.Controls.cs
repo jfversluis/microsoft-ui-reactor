@@ -482,5 +482,57 @@ public static partial class MatrixCases
 
 public static partial class MatrixCases
 {
-    private static IEnumerable<CoveredClaim> ControlCovered() => [];
+    // Each claim's mutation was run against its test (spec 070 §4.15, C1 to C25).
+    private static IEnumerable<CoveredClaim> ControlCovered()
+    {
+        const string layoutFacets = "set, reorder by key keeping the views, add, remove, clear; both registries";
+        const string layoutEvidence = "the Controls layouts' list sync removed (C4) and the direct layouts' insert appending (C5): red";
+        foreach (var layout in new[] { typeof(VStackElement), typeof(HStackElement), typeof(GridElement), typeof(FlexLayoutElement), typeof(AbsoluteLayoutElement) })
+            yield return new(layout, nameof(LayoutElement.Children), typeof(AuditCoverageTests), nameof(AuditCoverageTests.LayoutChildren_AreAddedReorderedRemovedAndCleared_KeepingKeyedViews),
+                layoutFacets, layoutEvidence);
+
+        yield return new(typeof(GridElement), nameof(GridElement.Rows), typeof(AuditCoverageTests), nameof(AuditCoverageTests.GridDefinitions_AreSetUpdatedKeptWhenEqual_AndCleared),
+            "set, update, equal render keeps the definitions, clear; both registries", "rows rebuilt on every render, Controls (C6) and direct (C8): red");
+        yield return new(typeof(GridElement), nameof(GridElement.Columns), typeof(AuditCoverageTests), nameof(AuditCoverageTests.GridDefinitions_AreSetUpdatedKeptWhenEqual_AndCleared),
+            "set, update, equal render keeps the definitions, clear; both registries", "columns rebuilt on every render, Controls (C7) and direct (C9): red");
+        yield return new(typeof(GraphicsViewElement), nameof(GraphicsViewElement.Drawable), typeof(AuditCoverageTests), nameof(AuditCoverageTests.GraphicsView_ANewDrawableIsAssigned_TheSameOneIsInvalidatedOnEveryUpdate),
+            "set, a new drawable assigned, the same one invalidated on each update; Controls on both registries", "invalidated only when the drawable changes (C10): red");
+        yield return new(typeof(ScrollViewElement), nameof(ScrollViewElement.Content), typeof(AuditCoverageTests), nameof(AuditCoverageTests.ScrollView_Content_IsSetReplacedAndCleared),
+            "set, update in place, replace, clear; both registries", "content not cleared on null (C11): red");
+        yield return new(typeof(RefreshViewElement), nameof(RefreshViewElement.Content), typeof(ScrollAndRefreshTests), nameof(ScrollAndRefreshTests.RefreshView_Content_IsSetReplacedAndCleared),
+            "set (a direct child hosted), replace, clear; both registries", "content not cleared on null (C12): red");
+        yield return new(typeof(FlyoutElement), nameof(FlyoutElement.Flyout), typeof(PageTests), nameof(PageTests.Flyout_SwappingTheTwoPages_MovesThemBetweenSlots),
+            "set, the two pages swapped between slots", "the flyout slot written only when empty (C14): red");
+        yield return new(typeof(FlyoutElement), nameof(FlyoutElement.Detail), typeof(AuditCoverageTests), nameof(AuditCoverageTests.Flyout_Pages_AreSetUpdatedInPlaceReplacedAndSwapped),
+            "set, updated in place, replaced by another kind of page; both registries", "the detail slot written only when empty (C13): red");
+        yield return new(typeof(LabelElement), nameof(LabelElement.Inlines), typeof(LabelInlineTests), nameof(LabelInlineTests.AnUnchangedCount_UpdatesTheSpansInPlace_AndClearsRemovedProperties),
+            "set, updated in place (the same spans), a removed property cleared (the rebuild and text swap: the class's other tests)", "spans rebuilt on every render (C15): red");
+        yield return new(typeof(RadioButtonElement), nameof(RadioButtonElement.ContentElement), typeof(RadioContentTests), nameof(RadioContentTests.ViewContent_IsTheContent_WithTheTemplateItAsksFor),
+            "set, updated in place (the content component's state kept), replaced by text; both registries", "view content never set (C16): red");
+        yield return new(typeof(RadioButtonElement), nameof(RadioButtonElement.GroupName), typeof(AuditCoverageTests), nameof(AuditCoverageTests.RadioGroupName_JoinsNamedGroups_ChangesGroup_AndClearsToTheUnnamedScope_KeepingItsNativeName),
+            "a named group joined (its peer unchecked), changed to another name (the new peers, not the old), cleared to the unnamed scope, the native GUID name kept; both registries",
+            "the group name ignored (C17): red");
+        yield return new(typeof(RadioButtonElement), nameof(RadioButtonElement.IsIndicatorVisible), typeof(RadioIndicatorTests), nameof(RadioIndicatorTests.RadioIndicator_IsShownAndHiddenByARender_ForViewContent_AndTextKeepsTheNativeTemplate),
+            "shown, hidden and shown again by a render with view content (a remount each time), no effect on text content; both registries",
+            "the indicator always shown (C18) and the change applied in place (C19): red");
+        yield return new(typeof(EntryElement), nameof(EntryElement.CursorPosition), typeof(EntrySelectionTests), nameof(EntrySelectionTests.ADeclaredSelection_IsWrittenAtMountAndWhenItChanges_NeverRestored),
+            "set at mount, updated when it changes, never restored; the class covers echo, clamping and unmount on both registries", "the cursor never written (C1): red");
+        yield return new(typeof(EntryElement), nameof(EntryElement.SelectionLength), typeof(EntrySelectionTests), nameof(EntrySelectionTests.ADeclaredSelection_IsWrittenAtMountAndWhenItChanges_NeverRestored),
+            "set at mount, updated when it changes, never restored; the class covers echo, clamping and unmount on both registries", "the length never written (C2): red");
+        yield return new(typeof(EntryElement), nameof(EntryElement.OnSelectionChanged), typeof(EntrySelectionTests), nameof(EntrySelectionTests.SplitNotifications_GiveOneReport_WithBothFinalValues),
+            "one report per burst with the final values; programmatic writes unreported and nothing after unmount (the class's other tests)", "the report removed (C3): red");
+
+        yield return new(typeof(PageElement), nameof(PageElement.ToolbarItems), typeof(ToolbarTests), nameof(ToolbarTests.AStructureChange_Rebuilds_InDeclaredOrder_AndTheOldItemsInvokeNothing),
+            "set in declared order, rebuilt on a structure change, kept on a callback-only render (the class's other tests); both registries", "never rebuilt (C20): red");
+        yield return new(typeof(ToolbarAction), nameof(ToolbarAction.Text), typeof(ToolbarTests), nameof(ToolbarTests.AStructureChange_Rebuilds_InDeclaredOrder_AndTheOldItemsInvokeNothing),
+            "a changed text rebuilds the items with it", "the text ignored by the comparison (C21): red");
+        yield return new(typeof(ToolbarAction), nameof(ToolbarAction.Order), typeof(ToolbarTests), nameof(ToolbarTests.AStructureChange_Rebuilds_InDeclaredOrder_AndTheOldItemsInvokeNothing),
+            "an order-only change rebuilds, each item's order on the native", "the order ignored (C22): red");
+        yield return new(typeof(ToolbarAction), nameof(ToolbarAction.Priority), typeof(ToolbarTests), nameof(ToolbarTests.AStructureChange_Rebuilds_InDeclaredOrder_AndTheOldItemsInvokeNothing),
+            "a priority-only change rebuilds, each item's priority on the native", "the priority ignored (C23): red");
+        yield return new(typeof(ToolbarAction), nameof(ToolbarAction.Icon), typeof(ToolbarTests), nameof(ToolbarTests.AStructureChange_Rebuilds_InDeclaredOrder_AndTheOldItemsInvokeNothing),
+            "an icon change rebuilds (an equal icon doesn't: VisualsTests' image consumers)", "the icon ignored (C24): red");
+        yield return new(typeof(ToolbarAction), nameof(ToolbarAction.OnClick), typeof(ToolbarTests), nameof(ToolbarTests.ACallbackOnlyRender_KeepsTheItems_WhichInvokeTheCurrentCallback_AndNothingAfterUnmount),
+            "the current render's callback, nothing after unmount, a retired item nothing (the class's other tests); both registries", "the first callback captured (C25): red");
+    }
 }
