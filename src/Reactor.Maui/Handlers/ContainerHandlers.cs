@@ -143,51 +143,126 @@ internal sealed class RefreshViewHandler : ViewHandler<RefreshViewElement, MauiR
             e => e.Content, (refreshView, content) => refreshView.Content = content is null ? null : Props.AsView(content));
 }
 
-internal sealed class SwipeViewHandler : ViewHandler<SwipeViewElement, MauiSwipeView>
+/// <summary>The swipe view Reactor renders: per side, the items it shows and their content trees.</summary>
+internal sealed class ReactorSwipeView : MauiSwipeView
 {
-    protected override MauiSwipeView Create(HandlerContext<SwipeViewElement> context, SwipeViewElement element) => new();
+    public readonly SwipeSide[] Sides = [new(), new(), new(), new()];
+}
 
-    protected override void Apply(HandlerContext<SwipeViewElement> context, MauiSwipeView view, SwipeViewElement? previous, SwipeViewElement next)
+internal sealed class SwipeSide
+{
+    public SwipeItems? Items;
+    public readonly List<ReactorRoot?> Roots = [];
+}
+
+internal sealed class SwipeViewHandler : ViewHandler<SwipeViewElement, ReactorSwipeView>
+{
+    private static readonly Func<SwipeViewElement, SwipeItemData[]>[] Data =
+        [static e => e.LeftItems, static e => e.RightItems, static e => e.TopItems, static e => e.BottomItems];
+
+    private static readonly Func<SwipeViewElement, SwipeMode>[] Modes =
+        [static e => e.LeftItemsMode, static e => e.RightItemsMode, static e => e.TopItemsMode, static e => e.BottomItemsMode];
+
+    private static readonly BindableProperty[] Properties =
+        [MauiSwipeView.LeftItemsProperty, MauiSwipeView.RightItemsProperty, MauiSwipeView.TopItemsProperty, MauiSwipeView.BottomItemsProperty];
+
+    protected override ReactorSwipeView Create(HandlerContext<SwipeViewElement> context, SwipeViewElement element)
     {
-        if (previous is null || !SameItems(previous.LeftItems, next.LeftItems))
-            view.LeftItems = CreateItems(context, next.LeftItems, static e => e.LeftItems);
-        if (previous is null || !SameItems(previous.RightItems, next.RightItems))
-            view.RightItems = CreateItems(context, next.RightItems, static e => e.RightItems);
+        var view = new ReactorSwipeView();
+        view.SwipeStarted += (_, e) => context.Live?.OnSwipeStarted?.Invoke(e.SwipeDirection);
+        view.SwipeChanging += (_, e) => context.Live?.OnSwipeChanging?.Invoke(e.SwipeDirection, e.Offset);
+        view.SwipeEnded += (_, e) => context.Live?.OnSwipeEnded?.Invoke(e.SwipeDirection, e.IsOpen);
+        return view;
     }
 
-    // Items are rebuilt only when what they show changes; their callbacks read the current element.
-    private static SwipeItems CreateItems(HandlerContext<SwipeViewElement> context, SwipeAction[] actions, Func<SwipeViewElement, SwipeAction[]> select)
+    protected override void Apply(HandlerContext<SwipeViewElement> context, ReactorSwipeView view, SwipeViewElement? previous, SwipeViewElement next)
     {
-        var items = new SwipeItems();
-        for (var i = 0; i < actions.Length; i++)
+        Props.Set(view, MauiSwipeView.ThresholdProperty, previous?.Threshold, next.Threshold);
+        for (var side = 0; side < 4; side++)
+        {
+            var items = Data[side](next);
+            var state = view.Sides[side];
+            if (previous is null || Modes[side](previous) != Modes[side](next) || !SameStructure(Data[side](previous), items))
+            {
+                Rebuild(context, view, side, items, Modes[side](next));
+                continue;
+            }
+            // Same structure: only content trees re-render, so what MAUI shows (an open swipe) stays.
+            for (var i = 0; i < items.Length; i++)
+                if (items[i].Content is { } content) state.Roots[i]?.Render(content);
+        }
+    }
+
+    private static void Rebuild(HandlerContext<SwipeViewElement> context, ReactorSwipeView view, int side, SwipeItemData[] data, SwipeMode mode)
+    {
+        var state = view.Sides[side];
+        UnmountRoots(state);
+        var items = new SwipeItems { Mode = mode };
+        for (var i = 0; i < data.Length; i++)
         {
             var index = i;
-            var action = actions[i];
-            var item = new SwipeItem { Text = action.Text, IconImageSource = action.Icon };
-            if (action.BackgroundColor is { } color) item.BackgroundColor = color;
-            item.Invoked += (_, _) =>
+            var item = data[i];
+            Microsoft.Maui.Controls.ISwipeItem created;
+            if (item.Content is { } content)
             {
-                if (context.Live is not { } live) return;
-                var current = select(live);
-                if (index < current.Length) current[index].OnInvoked();
-            };
-            items.Add(item);
+                var itemView = new SwipeItemView();
+                SemanticProperties.SetDescription(itemView, item.Text);
+                var root = context.CreateChildRoot(native => itemView.Content = native is null ? null : Props.AsView(native));
+                state.Roots.Add(root);
+                root.Render(content);
+                itemView.Invoked += (_, _) => Invoke(context, view, side, index, itemView);
+                created = itemView;
+            }
+            else
+            {
+                var swipeItem = new SwipeItem { Text = item.Text, IconImageSource = item.Icon };
+                if (item.BackgroundColor is { } color) swipeItem.BackgroundColor = color;
+                swipeItem.Invoked += (_, _) => Invoke(context, view, side, index, swipeItem);
+                state.Roots.Add(null);
+                created = swipeItem;
+            }
+            items.Add(created);
         }
-        return items;
+        state.Items = items;
+        view.SetValue(Properties[side], items);
     }
 
-    private static bool SameItems(SwipeAction[] a, SwipeAction[] b)
+    // An item invokes only while it is the one at its index on its side of what the view shows, and the
+    // element is mounted (spec 070 §3.5): an item a rebuild replaced may still be held by the platform.
+    private static void Invoke(HandlerContext<SwipeViewElement> context, ReactorSwipeView view, int side, int index, Microsoft.Maui.Controls.ISwipeItem item)
+    {
+        if (context.Live is not { } live) return;
+        var state = view.Sides[side];
+        if (state.Items is not { } items || !ReferenceEquals(view.GetValue(Properties[side]), items)) return;
+        if (index >= items.Count || !ReferenceEquals(items[index], item)) return;
+        var current = Data[side](live);
+        if (index < current.Length) current[index].OnInvoked?.Invoke();
+    }
+
+    private static bool SameStructure(SwipeItemData[] a, SwipeItemData[] b)
     {
         if (a.Length != b.Length) return false;
         for (var i = 0; i < a.Length; i++)
         {
+            if ((a[i].Content is null) != (b[i].Content is null)) return false;
             if (a[i].Text != b[i].Text || !Equals(a[i].BackgroundColor, b[i].BackgroundColor) || !Props.SameImage(a[i].Icon, b[i].Icon))
                 return false;
         }
         return true;
     }
 
-    public override IChildrenStrategy<SwipeViewElement, MauiSwipeView> Children { get; } =
-        ChildrenStrategy.Single<SwipeViewElement, MauiSwipeView, object>(
+    private static void UnmountRoots(SwipeSide state)
+    {
+        foreach (var root in state.Roots) root?.Unmount();
+        state.Roots.Clear();
+    }
+
+    public override void Unmount(ReactorSwipeView control)
+    {
+        foreach (var side in control.Sides) UnmountRoots(side);
+    }
+
+    public override IChildrenStrategy<SwipeViewElement, ReactorSwipeView> Children { get; } =
+        ChildrenStrategy.Single<SwipeViewElement, ReactorSwipeView, object>(
             e => e.Content, (swipeView, content) => swipeView.Content = content is null ? null : Props.AsView(content));
 }

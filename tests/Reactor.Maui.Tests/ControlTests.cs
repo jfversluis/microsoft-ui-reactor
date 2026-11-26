@@ -171,7 +171,7 @@ public class ControlledControlTests
     {
         var reported = new List<string>();
         var host = new TestHost(MauiHandlers.CreateRegistry()).Render(
-            Page("p", SwipeView(Label("row")) with { RightItems = [new SwipeAction("Delete", () => reported.Add("swipe"))] })
+            Page("p", SwipeView(Label("row")) with { RightItems = [new SwipeItemData("Delete", () => reported.Add("swipe"))] })
                 with { ToolbarItems = [new ToolbarAction("Save", () => reported.Add("toolbar"))] });
         var page = (Microsoft.Maui.Controls.ContentPage)host.RootView!;
         var toolbar = (IMenuItemController)page.ToolbarItems[0];

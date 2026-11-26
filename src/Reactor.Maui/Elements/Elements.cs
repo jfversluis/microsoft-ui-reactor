@@ -299,17 +299,46 @@ public sealed record RefreshViewElement(Element? Content, bool IsRefreshing, Act
     public Color? RefreshColor { get; init; }
 }
 
-/// <summary>An action revealed by swiping a <c>SwipeView</c>.</summary>
-public sealed record SwipeAction(string Text, Action OnInvoked)
+/// <summary>
+/// An item revealed by swiping a <c>SwipeView</c> (WinUI's name). With <see cref="Content"/> it shows
+/// that element (MAUI's <c>SwipeItemView</c>) and <see cref="Text"/> becomes its accessible name;
+/// otherwise it shows <see cref="Text"/>, <see cref="Icon"/> and <see cref="BackgroundColor"/>.
+/// </summary>
+public sealed record SwipeItemData(string Text, Action? OnInvoked = null)
 {
     public Color? BackgroundColor { get; init; }
     public ImageSource? Icon { get; init; }
+
+    /// <summary>A custom view for the item, re-rendered in place on every render.</summary>
+    public Element? Content { get; init; }
 }
 
+/// <summary>
+/// Swipe actions around one child. Open and close it from code through a ref to MAUI's
+/// <c>SwipeView</c>: <c>swipe.Current?.Open(OpenSwipeItem.RightItems)</c>, <c>swipe.Current?.Close()</c>.
+/// Items are rebuilt only when their text, color, icon, kind, count or mode changes.
+/// </summary>
 public sealed record SwipeViewElement(Element? Content) : ViewElement
 {
-    public SwipeAction[] LeftItems { get; init; } = [];
-    public SwipeAction[] RightItems { get; init; } = [];
+    public SwipeItemData[] LeftItems { get; init; } = [];
+    public SwipeItemData[] RightItems { get; init; } = [];
+    public SwipeItemData[] TopItems { get; init; } = [];
+    public SwipeItemData[] BottomItems { get; init; } = [];
+    public SwipeMode LeftItemsMode { get; init; } = SwipeMode.Reveal;
+    public SwipeMode RightItemsMode { get; init; } = SwipeMode.Reveal;
+    public SwipeMode TopItemsMode { get; init; } = SwipeMode.Reveal;
+    public SwipeMode BottomItemsMode { get; init; } = SwipeMode.Reveal;
+
+    /// <summary>How far the content must be swiped to reveal or execute the items; <c>null</c> keeps MAUI's default.</summary>
+    public double? Threshold { get; init; }
+
+    public Action<SwipeDirection>? OnSwipeStarted { get; init; }
+
+    /// <summary>The swipe moved: its direction and offset.</summary>
+    public Action<SwipeDirection, double>? OnSwipeChanging { get; init; }
+
+    /// <summary>The swipe ended: its direction and whether the items were left open.</summary>
+    public Action<SwipeDirection, bool>? OnSwipeEnded { get; init; }
 }
 
 // ── Virtualized collections ─────────────────────────────────────────────────
