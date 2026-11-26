@@ -1798,9 +1798,12 @@ also treat `Brush.Default` as unset, so `with { Fill = nullColor }` clears too.
   updates the drawable's matrix only when the transform is non-null, so clearing the property leaves
   the old transform drawn. Reactor clears it by first writing an identity `MatrixTransform` (which the
   mapper installs) and then clearing the value (which the mapper ignores, leaving the identity). It runs
-  after the shared modifiers whenever the path showed a transform and now shows none, so a transform a
-  removed style provided is reset too, and one a remaining style provides is left alone (review of
-  `566796fa`). Verified
+  after the shared modifiers whenever the path showed a transform when the apply started and shows none
+  after it, so a transform a removed style provided is reset too, and one a remaining style provides is
+  left alone (review of `566796fa`). The observation is taken at the start of each apply, not kept from
+  the last one, since a class or implicit style resolves only once the path is attached (after its
+  mount's apply) and a ref or a visual state can set a transform between renders (verification of
+  `aa16b547`). Verified
   on devices with an asymmetric path, set then cleared; if it can't be made to work, `RenderTransform`
   is left out rather than advertised as clearable.
 - **Size.** MAUI sizes `Line`, `Polyline`, `Polygon` and `Path` from their geometry when the layout
@@ -2279,7 +2282,7 @@ pixel samples at a per-channel tolerance with the raw values logged. No question
   projected entry, on `OneWay`) and `ShapeProperties`, a descriptor per shape and for `ContentView`,
   `PathData` (markup conversion with its fallback and warning, and the identity-then-clear
   transform reset, run after the modifiers through an internal `ControlDescriptor.WithAfterModifiers`
-  hook), and `ImageSources` (value equality and `StreamImage` keys in a `ConditionalWeakTable`).
+  hook that observes the view before each apply's entries and can be set once), and `ImageSources` (value equality and `StreamImage` keys in a `ConditionalWeakTable`).
   `Props.SetBrush` serves `.Background` and the border stroke; `Props.SameImage` forwards to
   `ImageSources.Same`; a page's back button compares its icon with it.
 - **Factories and modifiers**: the shapes, `ContentView`, `StreamImage`, the gradient factories;
@@ -2384,6 +2387,15 @@ list with a same-size swap, the original list edited, the ceiling raised, `.Stro
 resetting the border's thickness to 1, the back button ignoring its text, and `NeedsControls` on any
 background (the `null`-color label stayed Controls). Full device suites afterwards: Mac Catalyst 174
 passed, 7 skipped; iOS 174 passed, 7 skipped; Android 176 passed, 5 skipped.
+
+Verification of `aa16b547` (both reviewers reproduced it): the reset compared with the transform
+recorded at the end of the last apply, so a class style that resolved on attachment after mount, or a
+transform set through a ref between renders, wasn't seen, and swapping the class on the first update
+left the rotation drawn. Now observed at the start of each apply. Mutation checks (all red): the
+previous design restored (the class-swap test on both registries, the ref test, and on Mac Catalyst
+`Shapes_UpdateInPlace`'s class-swapped path stayed rotated), the observation taken after the modifiers
+(also the declared and style clears), and the hook silently replaced. Headless 683; the visual device
+fixtures on all three platforms passed again.
 
 **Benchmark** (Mac Catalyst, one pair against `7281bf4d`, base first): total time within noise or
 lower in every scenario on both renderers (−4% to +0.03%, and −13% and −35% on the 40-ms `UpdateOne`),
