@@ -606,6 +606,7 @@ public static partial class Fixtures
         public List<string> Calls { get; } = [];
         public Action<(string Text, int? Cursor, int? Length)>? Set { get; set; }
         public (int, int)? AtCommit { get; set; }
+        public Action<(Keyboard? Keyboard, bool? Password, int? MaxLength)>? SetExtras { get; set; }
     }
 
     private sealed record SelectionProps(SelectionLog Log, bool Refuse);
@@ -616,6 +617,8 @@ public static partial class Fixtures
         {
             var (state, setState) = UseState<(string Text, int? Cursor, int? Length)>(("0123456789", null, null));
             Props.Log.Set = setState;
+            var (extras, setExtras) = UseState<(Keyboard? Keyboard, bool? Password, int? MaxLength)>((null, null, null));
+            Props.Log.SetExtras = setExtras;
             var entry = UseElementRef<IView>();
             // What the platform shows right after the render committed, before anything deferred runs.
             UseEffect(() => Props.Log.AtCommit = entry.Current is { } view && PlatformSelection.Read(view) is { } s ? (s.Cursor, s.Length) : null, state);
@@ -629,6 +632,9 @@ public static partial class Fixtures
                     CursorPosition = state.Cursor,
                     SelectionLength = state.Length,
                     OnSelectionChanged = (_, cursor, length) => Props.Log.Calls.Add($"selection {cursor},{length}"),
+                    Keyboard = extras.Keyboard,
+                    IsPassword = extras.Password,
+                    MaxLength = extras.MaxLength,
                 }).Ref(entry),
                 Label("other"));
         }
@@ -691,6 +697,35 @@ public static partial class Fixtures
             await Settled(c);
             Equal((6, 0), RefPlatform.Selection(entry), $"focused={focused} consecutive renders: platform selection");
             Equal("", string.Join("; ", props.Log.Calls.Where(x => x.StartsWith("selection", StringComparison.Ordinal))), $"focused={focused} consecutive renders report nothing");
+
+            // Input-type and MaxLength changes while the selection is (12, 2) in a 16-character text. A
+            // keyboard or password change keeps the selection; a MaxLength that truncates the text moves it,
+            // which is reported as the resulting selection.
+            props.Log.Set!(("abcdefghijklmnop", 12, 2));
+            await Settled(c);
+            foreach (var (name, extras) in new (string, (Keyboard?, bool?, int?))[]
+            {
+                ("keyboard", (Keyboard.Numeric, null, null)),
+                ("password", (Keyboard.Numeric, true, null)),
+                ("max length", (Keyboard.Numeric, true, 5)),
+            })
+            {
+                props.Log.Calls.Clear();
+                props.Log.SetExtras!(extras);
+                await Settled(c);
+                var after = RefPlatform.Selection(entry);
+                var reported = props.Log.Calls.Where(x => x.StartsWith("selection", StringComparison.Ordinal)).ToList();
+                Note($"{renderer} focused={focused} {name}: selection {after}, calls [{string.Join("; ", props.Log.Calls)}]");
+                // What each platform does is recorded (§2.15); the reports must follow what it shows.
+                if (after == (12, 2)) Equal("", string.Join("; ", reported), $"focused={focused} {name}: an unchanged selection reports nothing");
+                else Equal($"selection {after.Item1},{after.Item2}", reported.LastOrDefault(), $"focused={focused} {name}: the moved selection is reported as it is");
+                props.Log.Set!(("abcdefghijklmnop", 12, 3));
+                await Settled(c);
+                props.Log.Set!(("abcdefghijklmnop", 12, 2));
+                await Settled(c);
+            }
+            props.Log.SetExtras!((null, null, null));
+            await Settled(c);
 
             // Text changing between a write and its execution: the user's text replaces the declared one
             // right after the render (Android runs a focused SetSelection later, clamped to the text then).

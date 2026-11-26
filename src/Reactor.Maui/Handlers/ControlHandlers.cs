@@ -184,7 +184,9 @@ internal sealed class EntryHandler : ViewHandler<EntryElement, MauiEntry>
         {
             context.WriteSuppressed(view, () =>
             {
-                wrote = ApplyProperties(context, view, previous, next);
+                // An input-type or MaxLength change can move the selection on its own (Android restores
+                // only the cursor; UIKit can select all), so it is observed like a text write.
+                wrote = ApplyProperties(context, view, previous, next) | SelectionTracker.InputChanged(previous, next);
                 if (next.CursorPosition != previous?.CursorPosition || next.SelectionLength != previous?.SelectionLength)
                 {
                     if (next.CursorPosition is { } cursor) view.CursorPosition = cursor;

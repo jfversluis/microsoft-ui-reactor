@@ -138,6 +138,7 @@ public static class DirectHandlers
                 context.WriteSuppressed(view, () =>
                 {
                     view.Apply(next);
+                    wrote = SelectionTracker.InputChanged(previous, next);
                     if (view.Text != next.Text)
                     {
                         view.SetText(next.Text);

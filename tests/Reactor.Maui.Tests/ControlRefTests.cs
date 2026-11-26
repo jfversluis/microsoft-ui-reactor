@@ -222,6 +222,25 @@ public class EntrySelectionTests
 
     [Theory]
     [MemberData(nameof(Registries))]
+    public void AnInputTypeChangeThatMovesTheSelectionSilently_IsObservedAfterTheApply(string registry)
+    {
+        var platform = new FakeSelection { Text = "hello world" };
+        using var _ = platform.Install();
+        var reports = new List<string>();
+        var host = Host(registry).Render(Field("hello world", reports, 6, 5));
+        platform.Set(6, 5);
+        host.Scheduler.Drain();
+
+        // UIKit selects everything when the password mode changes, without a notification MAUI forwards.
+        host.Render(Field("hello world", reports, 6, 5) with { IsPassword = true });
+        platform.Set(0, 11);
+        host.Scheduler.Drain();
+
+        Assert.Equal(["hello world|0|11"], reports);
+    }
+
+    [Theory]
+    [MemberData(nameof(Registries))]
     public void NothingIsReportedAfterUnmount(string registry)
     {
         var platform = new FakeSelection { Text = "hello" };

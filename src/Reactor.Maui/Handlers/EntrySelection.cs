@@ -96,6 +96,11 @@ internal sealed class SelectionTracker
         _baseline = new PlatformSelectionState(c, Math.Clamp(length, 0, text.Length - c), text);
     }
 
+    /// <summary>Whether a keyboard, password or MaxLength change, which can move the platform's selection, is in this apply.</summary>
+    public static bool InputChanged(EntryElement? previous, EntryElement next) =>
+        previous is not null
+        && (!Equals(previous.Keyboard, next.Keyboard) || previous.IsPassword != next.IsPassword || previous.MaxLength != next.MaxLength);
+
     public void BeginApply() => _applyDepth++;
 
     /// <summary>
