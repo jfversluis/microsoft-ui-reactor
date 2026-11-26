@@ -229,7 +229,7 @@ internal static class VisualDescriptors
             .ShapeProperties()
             .OneWay<(string? Markup, Geometry? Data)>(static e => (e.PathDataString, e.Data), static (v, data) => PathData.Write(v, data.Markup, data.Data), PathData.Comparer)
             .OneWay<Transform?>(static e => e.RenderTransform, static (v, transform) => PathData.WriteTransform(v, transform), ReferenceEqualityComparer.Instance)
-            .WithAfterModifiers(PathData.ResetClearedTransform);
+            .WithAfterModifiers(static v => v.RenderTransform is not null, PathData.ResetClearedTransform);
 
     public static ControlDescriptor<ContentViewElement, MauiContentView> ContentView() =>
         ControlDescriptor.Create<ContentViewElement, MauiContentView>()
@@ -276,25 +276,18 @@ internal static class PathData
         else view.ClearValue(MauiPath.RenderTransformProperty);
     }
 
-    // Whether the path showed a transform after its last apply.
-    private static readonly ConditionalWeakTable<MauiPath, StrongBox<bool>> HadTransform = new();
-
     /// <summary>
     /// After the element's own transform and its modifiers (a style can provide one) are applied: if the
-    /// path showed a transform and now shows none, reset the drawn one by writing an identity transform
-    /// and clearing it. MAUI's iOS and Android path handlers update the drawn matrix only for a non-null
-    /// transform, so a plain clear keeps the old one drawn (characterized on all three platforms, spec
-    /// 070 §4.13). A transform that remains (from a style) is left alone.
+    /// path showed a transform when this apply started and now shows none, reset the drawn one by writing
+    /// an identity transform and clearing it. MAUI's iOS and Android path handlers update the drawn matrix
+    /// only for a non-null transform, so a plain clear keeps the old one drawn (characterized on all three
+    /// platforms, spec 070 §4.13). A transform that remains (from a style) is left alone.
     /// </summary>
-    public static void ResetClearedTransform(MauiPath view)
+    public static void ResetClearedTransform(MauiPath view, bool hadTransform)
     {
-        var had = HadTransform.GetOrCreateValue(view);
-        if (had.Value && view.RenderTransform is null)
-        {
-            view.RenderTransform = new MatrixTransform();
-            view.ClearValue(MauiPath.RenderTransformProperty);
-        }
-        had.Value = view.RenderTransform is not null;
+        if (!hadTransform || view.RenderTransform is not null) return;
+        view.RenderTransform = new MatrixTransform();
+        view.ClearValue(MauiPath.RenderTransformProperty);
     }
 
     private sealed class DataComparer : IEqualityComparer<(string? Markup, Geometry? Data)>

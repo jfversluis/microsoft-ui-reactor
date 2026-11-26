@@ -307,6 +307,59 @@ public class VisualsTests
         Assert.False(path.IsSet(MauiPath.RenderTransformProperty));
     }
 
+    private static Element ClassedPath(string styleClass) =>
+        ContentView(Path2D("M 0,0 L 100,0 L 0,100 Z").StyleClass(styleClass))
+            .Set<ContentViewElement, MauiContentView>(view =>
+            {
+                if (view.Resources.ContainsKey("spin-style")) return;
+                var spin = new Style(typeof(MauiPath)) { Class = "spin" };
+                spin.Setters.Add(new Setter { Property = MauiPath.RenderTransformProperty, Value = new Shapes.RotateTransform(90, 50, 50) });
+                // MAUI re-resolves class styles only when the new class has one: "calm" sets no transform.
+                var calm = new Style(typeof(MauiPath)) { Class = "calm" };
+                calm.Setters.Add(new Setter { Property = Shape.FillProperty, Value = Colors.Black });
+                view.Resources.Add("spin-style", spin);
+                view.Resources.Add(spin);
+                view.Resources.Add(calm);
+            });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AClassStyleTransform_ResolvedOnAttachment_IsResetWhenTheClassChanges(bool direct)
+    {
+        // The class style resolves only once the path is attached, after its mount's apply.
+        var host = Host(direct).Render(ClassedPath("spin"));
+        var path = (MauiPath)((MauiContentView)host.RootView!).Content;
+        Assert.IsType<Shapes.RotateTransform>(path.RenderTransform);
+        var seen = WatchTransform(path);
+
+        host.Render(ClassedPath("calm"));
+        Assert.Equal(["unset", "identity", "unset"], seen);
+        Assert.Null(path.RenderTransform);
+    }
+
+    [Fact]
+    public void ATransformWrittenThroughARef_IsResetWhenARenderClearsIt()
+    {
+        var reference = Microsoft.UI.Reactor.Input.TypedElementRef.Create<MauiPath>();
+        var host = Host().Render(Path2D("M 0,0 L 100,0 L 0,100 Z").Ref(reference));
+        var path = reference.Current!;
+        path.RenderTransform = new Shapes.RotateTransform(90, 50, 50);
+        var seen = WatchTransform(path);
+
+        host.Render(Path2D("M 0,0 L 100,0 L 0,100 Z").Ref(reference)
+            .Set<PathElement, MauiPath>(p => { if (p.RenderTransform is Shapes.RotateTransform) p.ClearValue(MauiPath.RenderTransformProperty); }));
+        Assert.Equal(["unset", "identity", "unset"], seen);
+        Assert.Null(path.RenderTransform);
+    }
+
+    [Fact]
+    public void AfterModifiersHook_CanBeSetOnce()
+    {
+        var descriptor = ControlDescriptor.Create<EllipseElement, MauiEllipse>().WithAfterModifiers(static _ => 0, static (_, _) => { });
+        Assert.Throws<InvalidOperationException>(() => descriptor.WithAfterModifiers(static _ => 0, static (_, _) => { }));
+    }
+
     [Fact]
     public void ATransformAStyleStillProvides_IsLeftAlone()
     {
