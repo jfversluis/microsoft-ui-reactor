@@ -13,6 +13,8 @@
     <ReactorSkipAotAnalysis>true</ReactorSkipAotAnalysis>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
+    <!-- NativeDialogs runs a UIAlertAction's handler block through its invoke pointer. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <SingleProject>true</SingleProject>
 
     <ApplicationTitle>Reactor Device Tests</ApplicationTitle>
