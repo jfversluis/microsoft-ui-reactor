@@ -63,18 +63,27 @@ public static class MauiHooks
     public static Dialogs UseDialogs(this RenderContext context) => Dialogs.Use(context);
 
     /// <summary>
-    /// Registers a handler for the system back key (Android's, and Windows' back button) while this
-    /// component is mounted (spec 069 §5.2). Return true when the handler handled the back. Only the
-    /// handlers of the page the user sees, and of components above every page, are asked: deepest
+    /// Registers a handler for Android's back key while this component is mounted (spec 069 §5.2;
+    /// Windows' back button in 4g; iOS and Mac Catalyst have no back key). Return true when the
+    /// handler handled the back. Only the handlers of the page the user sees, and of components that
+    /// render the tree's root page, are asked: deepest
     /// first, then the most recently mounted. When none handles it, the back goes on to the
     /// navigation stack, Shell, and the platform. The latest handler is used on every render.
     /// </summary>
     public static void UseSystemBackButton(this RenderContext context, Func<bool> onBack)
     {
         var node = HookNodes.Current(context, nameof(UseSystemBackButton));
+        var window = context.UseContext(MauiContexts.Window);
+        var page = context.UseContext(MauiContexts.Page);
         var latest = context.UseRef(onBack);
         latest.Current = onBack;
-        context.UseEffect(() => SystemBack.Register(node, () => latest.Current()), Array.Empty<object>());
+        var registration = context.UseRef<SystemBack.Registration?>(null);
+        registration.Current ??= SystemBack.Create(node, () => latest.Current());
+        context.UseEffect(() =>
+        {
+            var handler = registration.Current;
+            return WindowTracking.Watch(window, page, w => SystemBack.Join(handler, w), w => SystemBack.Leave(handler, w));
+        }, window, page);
     }
 
     /// <summary>
@@ -93,8 +102,11 @@ public static class MauiHooks
     /// <summary>
     /// Subscribes to the lifecycle of the window the tree is shown in (spec 069 §5.4): MAUI's
     /// <c>Activated</c>, <c>Deactivated</c>, <c>Stopped</c>, <c>Resumed</c> and <c>Destroying</c>. The
-    /// callbacks are refreshed every render and unsubscribed at unmount. A <c>ReactorWindow</c> runs
-    /// <paramref name="onDestroying"/> before it unmounts its tree.
+    /// callbacks are refreshed every render and unsubscribed at unmount. An error in a callback goes to
+    /// the component's error boundary, except in <paramref name="onDestroying"/> under a
+    /// <c>ReactorWindow</c>: that window runs <paramref name="onDestroying"/> before it unmounts its tree,
+    /// so such an error bypasses the boundaries and goes to the window's <c>UnhandledException</c> once
+    /// the tree has been unmounted (rethrown when nothing handles it).
     /// </summary>
     public static void UseWindowLifecycle(
         this RenderContext context,

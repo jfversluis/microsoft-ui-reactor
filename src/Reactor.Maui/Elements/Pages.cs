@@ -62,7 +62,8 @@ public sealed record PageElement(string? Title, Element? Content) : Element
     /// <summary>
     /// How iOS presents this page when it is shown as a modal (a <c>NavigationStack</c>'s or
     /// <c>NavigationHost</c>'s modals, or a Shell's): <c>PageSheet</c>, <c>FormSheet</c>,
-    /// <c>OverFullScreen</c>, … Set before the page is presented. Other platforms ignore it.
+    /// <c>OverFullScreen</c>, … Set before the page is presented. iOS only: it is not applied on Mac
+    /// Catalyst, where MAUI can't dismiss a sheet-style modal, and Android ignores it.
     /// </summary>
     public Microsoft.Maui.Controls.PlatformConfiguration.iOSSpecific.UIModalPresentationStyle? ModalPresentationStyle { get; init; }
 }

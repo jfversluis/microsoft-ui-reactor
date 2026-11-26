@@ -910,6 +910,12 @@ public sealed class ReactorRoot
         else System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
     }
 
+    /// <summary>The root native control this tree last handed to its host (a window's page, for example).</summary>
+    internal object? RootNative => _rootNative;
+
+    /// <summary>The <c>ReactorPage</c> that hosts this tree, if one does: the page of its top-level components.</summary>
+    internal Microsoft.Maui.Controls.Page? HostPage { get; set; }
+
     /// <summary>The root this tree belongs to: a child root's (a list cell's) is its owner's.</summary>
     internal ReactorRoot TopRoot => ContextParent is { } owner ? owner.Root.TopRoot : this;
 

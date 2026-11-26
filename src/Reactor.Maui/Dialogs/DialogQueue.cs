@@ -6,8 +6,9 @@ namespace Microsoft.UI.Reactor.Maui;
 /// A window's dialogs, shown one at a time (spec 069 §5.1). Every operation runs on the window's
 /// dispatcher. The presenter is resolved when a dialog is dequeued: the window's top modal, else its
 /// page. The next dialog waits until the previous one's native UI has gone (MAUI completes the answer
-/// before the platform has finished dismissing it) and while a navigation transition runs; both are
-/// checked once per frame. Destroying the window cancels every dialog it holds.
+/// before the platform has finished dismissing it) and while one of Reactor's navigators runs.
+/// Destroying the window settles every dialog it holds, and every one requested afterwards, until
+/// MAUI creates the window again (an Android activity recreated).
 /// </summary>
 internal sealed class DialogQueue
 {
@@ -15,9 +16,10 @@ internal sealed class DialogQueue
 
     private readonly Window _window;
     private readonly List<DialogRequest> _waiting = [];
+    private IDispatcher? _dispatcher;
     private DialogRequest? _showing;
-    private bool _afterOwnDialog;
     private bool _frameScheduled;
+    private bool _waitingForNavigation;
     private bool _destroyed;
 
     private DialogQueue(Window window)
@@ -32,6 +34,13 @@ internal sealed class DialogQueue
     /// <summary>The platform the dialogs are shown on; headless tests replace it.</summary>
     internal IDialogPlatform Platform { get; set; } = MauiDialogPlatform.Instance;
 
+    /// <summary>The dispatcher the queue runs on: the window's; tests replace it.</summary>
+    internal IDispatcher? Dispatcher
+    {
+        get => _dispatcher ?? _window.Dispatcher;
+        set => _dispatcher = value;
+    }
+
     /// <summary>The dialog being shown (its answer not yet given).</summary>
     internal DialogRequest? Showing => _showing;
 
@@ -40,6 +49,9 @@ internal sealed class DialogQueue
 
     /// <summary>Whether the queue is waiting for a frame to check again.</summary>
     internal bool WaitingForFrame => _frameScheduled;
+
+    /// <summary>Whether the window was destroyed (and not created again).</summary>
+    internal bool IsDestroyed => _destroyed;
 
     public void Enqueue(DialogRequest request) => OnDispatcher(() =>
     {
@@ -50,28 +62,42 @@ internal sealed class DialogQueue
         }
         _waiting.Add(request);
         Pump();
-    });
+    }, request.Cancel);
 
-    private void OnDispatcher(Action work)
+    /// <summary>
+    /// Runs <paramref name="work"/> on the dispatcher, or <paramref name="refused"/> on this thread when
+    /// the dispatcher refuses it (the app is shutting down), so no request is left unsettled.
+    /// </summary>
+    private void OnDispatcher(Action work, Action refused)
     {
-        if (_window.Dispatcher is { IsDispatchRequired: true } dispatcher) dispatcher.Dispatch(work);
-        else work();
+        if (Dispatcher is { IsDispatchRequired: true } dispatcher)
+        {
+            if (!dispatcher.Dispatch(work)) refused();
+        }
+        else
+        {
+            work();
+        }
     }
 
     private void Pump()
     {
-        while (!_destroyed && _showing is null)
+        while (!_destroyed && _showing is null && !_frameScheduled && !_waitingForNavigation)
         {
             // A declarative dialog made stale before it was shown is dropped without a word.
             _waiting.RemoveAll(static r => r.IsStale);
-            if (_waiting.Count == 0 || _frameScheduled) return;
-            if (Platform.IsDialogShown(_window, _afterOwnDialog) || Platform.IsNavigating(_window))
+            if (_waiting.Count == 0) return;
+            if (Platform.IsDialogShown(_window))
             {
                 _frameScheduled = true;
-                Platform.ScheduleFrame(_window, OnFrame);
+                if (!Platform.ScheduleFrame(_window, OnFrame)) CancelAll();
                 return;
             }
-            _afterOwnDialog = false;
+            if (Platform.WaitForNavigation(_window, OnNavigationFinished))
+            {
+                _waitingForNavigation = true;
+                return;
+            }
 
             var request = _waiting[0];
             _waiting.RemoveAt(0);
@@ -88,8 +114,7 @@ internal sealed class DialogQueue
                 continue;
             }
             _showing = request;
-            // Synchronously when the answer arrives on the dispatcher, so the barrier is checked at once.
-            answer.ContinueWith(t => OnDispatcher(() => Answered(request, t)), CancellationToken.None,
+            answer.ContinueWith(t => OnDispatcher(() => Answered(request, t), () => Settle(request, t)), CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
     }
@@ -98,6 +123,19 @@ internal sealed class DialogQueue
     {
         _frameScheduled = false;
         Pump();
+    }
+
+    // Raised as the navigator finishes; posted, so the dialog isn't presented from inside its loop.
+    private void OnNavigationFinished()
+    {
+        if (Dispatcher is not { } dispatcher || !dispatcher.Dispatch(() =>
+            {
+                _waitingForNavigation = false;
+                Pump();
+            }))
+        {
+            CancelAll();
+        }
     }
 
     private Page? Presenter()
@@ -109,25 +147,46 @@ internal sealed class DialogQueue
     private void Answered(DialogRequest request, Task<object?> answer)
     {
         if (!ReferenceEquals(_showing, request)) return;
-        _showing = null;
-        _afterOwnDialog = true;
+        Settle(request, answer);
+        // The next dialog waits until this one has been dismissed: the platform's turn after the answer
+        // (Android), then no dialog left in the presentation chain (iOS and Mac Catalyst).
+        Platform.AfterAnswer(_window, () =>
+        {
+            if (ReferenceEquals(_showing, request)) _showing = null;
+            Pump();
+        });
+    }
+
+    private static void Settle(DialogRequest request, Task<object?> answer)
+    {
         if (answer.IsFaulted) request.Fail(answer.Exception!.InnerExceptions.Count == 1 ? answer.Exception.InnerException! : answer.Exception);
         else if (answer.IsCanceled) request.Cancel();
         else request.Answer(answer.Result);
-        Pump();
     }
 
-    private void OnDestroying(object? sender, EventArgs e)
+    private void CancelAll()
     {
-        _window.Destroying -= OnDestroying;
-        _destroyed = true;
-        // A window MAUI brings back (an Android activity recreated) gets a new queue.
-        Queues.Remove(_window);
         var cancelled = new List<DialogRequest>(_waiting.Count + 1);
         if (_showing is { } showing) cancelled.Add(showing);
         cancelled.AddRange(_waiting);
         _showing = null;
         _waiting.Clear();
         foreach (var request in cancelled) request.Cancel();
+    }
+
+    private void OnDestroying(object? sender, EventArgs e)
+    {
+        _destroyed = true;
+        CancelAll();
+        // Kept as the window's queue, so a request made later (even by a later Destroying handler) is
+        // settled at once rather than shown on a dead window. MAUI may create the window again.
+        _window.Destroying -= OnDestroying;
+        _window.Created += OnCreated;
+    }
+
+    private void OnCreated(object? sender, EventArgs e)
+    {
+        _window.Created -= OnCreated;
+        Queues.Remove(_window);
     }
 }

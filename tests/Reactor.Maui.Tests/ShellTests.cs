@@ -129,6 +129,8 @@ internal sealed class FakeTransitions : IShellTransitions
     }
 }
 
+// MAUI's Shell routes (Routing) are process-wide and not thread-safe: classes that build Shells share a collection.
+[Collection("MauiShell")]
 public class ShellTests
 {
     // A page appears (and Shell raises Navigated) only in a window that belongs to an app.
@@ -268,7 +270,7 @@ public class ShellTests
         var section = shell.CurrentItem.CurrentItem;
         Assert.Equal("home", ShellNatives.GetKey(section));
         Assert.Equal(FlyoutBehavior.Disabled, shell.FlyoutBehavior);
-        var home = Assert.IsType<ContentPage>(section.CurrentItem.Content, exactMatch: false);
+        var home = Assert.IsType<ContentPage>(section.CurrentItem.Content);
         ((IButtonController)Assert.IsType<Button>(home.Content)).SendClicked();
         host.Scheduler.Drain();
 

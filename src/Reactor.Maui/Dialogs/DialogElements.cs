@@ -108,11 +108,14 @@ internal sealed class DialogElementComponent : Component<DialogElementProps>
 {
     public override Element? Render()
     {
-        var node = HookNodes.Current(Context, "A dialog element");
-        var dialogs = Dialogs.Use(Context);
         var latest = UseRef(Props);
         latest.Current = Props;
         var current = UseRef<object?>(null);
+        // A closed element's open is stale from this render on, before the window attach below can hand
+        // a request still waiting for the window to the queue (and before the effect's cleanup runs).
+        if (!Props.IsOpen) current.Current = null;
+        var node = HookNodes.Current(Context, "A dialog element");
+        var dialogs = Dialogs.Use(Context);
 
         UseEffect(() =>
         {
@@ -120,8 +123,11 @@ internal sealed class DialogElementComponent : Component<DialogElementProps>
             var open = new object();
             current.Current = open;
             bool IsCurrent() => ReferenceEquals(current.Current, open);
+            // What the user is shown, read when the dialog is dequeued: its answer goes to that render's
+            // OnClosed, so a dialog showing "Delete A?" never runs a later render's callback for B.
+            DialogElementProps? shown = null;
             dialogs.Enqueue(new DialogRequest(
-                () => latest.Current.Content,
+                () => (shown = latest.Current).Content,
                 answer =>
                 {
                     if (!IsCurrent()) return;
@@ -129,7 +135,7 @@ internal sealed class DialogElementComponent : Component<DialogElementProps>
                     current.Current = null;
                     try
                     {
-                        switch (latest.Current.OnClosed)
+                        switch (shown?.OnClosed)
                         {
                             case Action<bool> onBool:
                                 onBool(answer is true);

@@ -31,6 +31,9 @@ public class ReactorWindow : Window
         Page = new ContentPage();
         _root = new ReactorRoot(registry ?? MauiHandlers.CreateRegistry(), new MauiRenderScheduler(Dispatcher), SetRootNative);
         _pages = new WindowPageSetter(this, _root.ReportHostError);
+        // Its queue subscribes to Destroying before the tree does, so a dialog a later Destroying
+        // handler requests is settled at once instead of being shown on the dying window.
+        DialogQueue.For(this);
         Render(root);
     }
 
@@ -90,7 +93,7 @@ public class ReactorWindow : Window
             _pages.Set(page);
             return;
         }
-        _viewHost ??= new ReactorContentPage { BackRoot = _root };
+        _viewHost ??= new ContentPage();
         _viewHost.Content = native is null ? null : Props.AsView(native);
         _pages.Set(_viewHost);
     }
@@ -115,6 +118,8 @@ public class ReactorPage : ContentPage
                     throw new InvalidOperationException("A ReactorPage hosts a view. Use ReactorWindow to host pages and navigation.");
                 Content = native is null ? null : Props.AsView(native);
             });
+        // A back handler above every view of this tree belongs to this page (spec 069 §5.2).
+        _root.HostPage = this;
         Render(root);
     }
 
@@ -131,9 +136,6 @@ public class ReactorPage : ContentPage
 
     /// <summary>Re-renders the page with a new root element, keeping the state of everything that still matches.</summary>
     public void Render(Element root) => _root.Render(MauiContexts.Page.Provide(this, root));
-
-    /// <summary>The system back key asks the tree's <c>UseSystemBackButton</c> handlers first (spec 069 §5.2).</summary>
-    protected override bool OnBackButtonPressed() => SystemBack.Handle(this, _root, base.OnBackButtonPressed);
 
     /// <summary>
     /// Unmounts the tree and runs every effect cleanup. Call it when the page is discarded for good,

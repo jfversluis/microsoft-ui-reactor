@@ -42,6 +42,20 @@ public sealed class ReadmeAutosave : Component<Action>
     }
 }
 
+// The README's modal presentation snippet.
+public sealed class ReadmeNotes : Component<bool>
+{
+    public override Element Render()
+    {
+        var editing = Props;
+        Element list = Label("list"), editor = Label("editor");
+        return NavigationStack([Page("Notes", list)]) with
+        {
+            Modals = editing ? [Page("Edit", editor) with { ModalPresentationStyle = UIModalPresentationStyle.PageSheet }] : [],
+        };
+    }
+}
+
 public class WindowLifecycleTests
 {
     private static Element Probe(List<string> log, string tag = "", string? throws = null) =>
@@ -95,6 +109,25 @@ public class WindowLifecycleTests
         window.Page = page;
         Raise(window, "deactivated");
         Assert.Equal(["deactivated"], log);
+    }
+
+    [Fact]
+    public void AHostedPageRemovedFromItsWindow_StopsFollowingIt_AndFollowsItsNextOne()
+    {
+        var log = new List<string>();
+        var page = new ReactorPage(Probe(log));
+        var first = new Window { Parent = DialogTests.App };
+        first.Page = page;
+        Raise(first, "activated");
+        first.Page = new ContentPage();
+        Raise(first, "deactivated");
+        Assert.Equal(["activated"], log);
+
+        var second = new Window { Parent = DialogTests.App };
+        second.Page = page;
+        Raise(second, "stopped");
+        Raise(first, "resumed");
+        Assert.Equal(["activated", "stopped"], log);
     }
 
     [Fact]
@@ -152,6 +185,21 @@ public class WindowLifecycleTests
     }
 
     // ── Modal presentation style ────────────────────────────────────────────
+
+    [Fact]
+    public void TheReadmeSnippet_PresentsTheEditorAsASheet()
+    {
+        var host = new TestHost(MauiHandlers.CreateRegistry());
+        host.Render(Component<ReadmeNotes, bool>(true));
+        var window = new Window { Parent = DialogTests.App };
+        window.Page = host.View<ReactorNavigationPage>();
+        for (var i = 0; i < 200 && window.Navigation.ModalStack.Count == 0; i++)
+        {
+            host.Scheduler.Drain();
+            Thread.Sleep(5);
+        }
+        Assert.Equal(UIModalPresentationStyle.PageSheet, iOSPage.GetModalPresentationStyle(Assert.Single(window.Navigation.ModalStack)));
+    }
 
     [Fact]
     public void ModalPresentationStyle_IsWrittenBeforeTheModalIsPresented()

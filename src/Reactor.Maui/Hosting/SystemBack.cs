@@ -1,33 +1,22 @@
-using System.Runtime.CompilerServices;
 using Microsoft.UI.Reactor.Hosting;
 
 namespace Microsoft.UI.Reactor.Maui.Hosting;
 
 /// <summary>
-/// The <c>UseSystemBackButton</c> handlers of each tree and their dispatch (spec 069 §5.2). MAUI sends
-/// the window's back request to its top modal, or else its page, through
-/// <see cref="Page.SendBackButtonPressed"/>; every page Reactor creates calls <see cref="Handle"/> from
-/// its <c>OnBackButtonPressed</c>. The first Reactor page of a tree that the request reaches asks the
-/// handlers of the pages the user sees (and those above every page), deepest first, then the most
-/// recently mounted; pages nested in it pass the request on without asking them again.
+/// The <c>UseSystemBackButton</c> handlers and their dispatch (spec 069 §5.2). Handlers are kept per
+/// window: a handler joins the window its tree is shown in (found as the window hooks find it). On
+/// Android, a window with handlers gets one AndroidX <c>OnBackPressedCallback</c>, added after MAUI's
+/// so it is asked first and enabled only while a handler is registered: it asks the handlers of the page
+/// the user sees and, if none handles the back, passes the key on to MAUI (the navigation stack's or
+/// Shell's guarded back, then the platform's default). Pages don't override <c>OnBackButtonPressed</c>
+/// for this, so MAUI keeps the predictive back-to-home preview of a root without handlers.
 /// </summary>
 internal static class SystemBack
 {
-    private static readonly ConditionalWeakTable<ReactorRoot, List<Registration>> Registries = new();
     private static long s_sequence;
 
-    // The trees whose handlers the back request being dispatched on this thread has asked.
-    [ThreadStatic] private static HashSet<ReactorRoot>? t_asked;
-
-    /// <summary>Tests turn the handlers on or off for their own flow; otherwise Android and Windows only.</summary>
-    internal static readonly AsyncLocal<bool?> EnabledOverride = new();
-
-    /// <summary>
-    /// Whether the handlers run: for the system back key, which Android (and Windows, from 4g) send.
-    /// iOS and Mac Catalyst have no back key; MAUI calls <c>SendBackButtonPressed</c> there only for
-    /// Shell's navigation-bar back, which goes through the stack's guards instead.
-    /// </summary>
-    internal static bool Enabled => EnabledOverride.Value ?? (OperatingSystem.IsAndroid() || OperatingSystem.IsWindows());
+    private static readonly BindableProperty StateProperty =
+        BindableProperty.CreateAttached("ReactorSystemBack", typeof(WindowBack), typeof(SystemBack), null);
 
     internal sealed class Registration(Node node, Func<bool> handler, long sequence)
     {
@@ -37,48 +26,51 @@ internal static class SystemBack
         public bool Removed { get; set; }
     }
 
-    /// <summary>Registers <paramref name="handler"/> for <paramref name="node"/>'s component; returns its removal.</summary>
-    public static Action Register(Node node, Func<bool> handler)
-    {
-        var registry = Registries.GetValue(node.Root.TopRoot, static _ => []);
-        var registration = new Registration(node, handler, Interlocked.Increment(ref s_sequence));
-        registry.Add(registration);
-        return () =>
-        {
-            registration.Removed = true;
-            registry.Remove(registration);
-        };
-    }
+    /// <summary>A handler for <paramref name="node"/>'s component; it is asked once it joins a window.</summary>
+    public static Registration Create(Node node, Func<bool> handler) =>
+        new(node, handler, Interlocked.Increment(ref s_sequence));
+
+    public static void Join(Registration registration, Window window) => StateOf(window, create: true)!.Add(registration);
+
+    public static void Leave(Registration registration, Window window) => StateOf(window, create: false)?.Remove(registration);
 
     /// <summary>
-    /// A Reactor page of <paramref name="root"/>'s tree received the back request: asks the eligible
-    /// handlers once, then, if none handled it, runs <paramref name="passOn"/>, the page's own back
-    /// handling (pages it reaches don't ask the handlers again).
+    /// The system back key in <paramref name="window"/>: the handlers first, then
+    /// <paramref name="passOn"/> (MAUI's back handling) if none handled it.
     /// </summary>
-    public static bool Handle(Page receiver, ReactorRoot? root, Func<bool> passOn)
+    public static bool HandleBackKey(Window window, Func<bool> passOn) => Ask(window) || passOn();
+
+    /// <summary>Whether the window's Android back callback is enabled (tests).</summary>
+    internal static bool HasEnabledCallback(Window window) => StateOf(window, create: false)?.CallbackEnabled == true;
+
+#if ANDROID
+    /// <summary>The window's Android back callback, if it has one (device tests reorder callbacks).</summary>
+    internal static AndroidX.Activity.OnBackPressedCallback? CallbackOf(Window window) => StateOf(window, create: false)?.Callback;
+#endif
+
+    private static WindowBack? StateOf(Window window, bool create)
     {
-        if (!Enabled || root is null) return passOn();
-        var top = root.TopRoot;
-        var asked = t_asked ??= [];
-        if (!asked.Add(top)) return passOn();
-        try
+        var state = (WindowBack?)window.GetValue(StateProperty);
+        if (state is null && create)
         {
-            return Ask(receiver, top) || passOn();
+            state = new WindowBack(window);
+            window.SetValue(StateProperty, state);
         }
-        finally
-        {
-            asked.Remove(top);
-        }
+        return state;
     }
 
-    private static bool Ask(Page receiver, ReactorRoot root)
+    /// <summary>Asks the eligible handlers once each; true when one handled the back.</summary>
+    internal static bool Ask(Window window)
     {
-        if (!Registries.TryGetValue(root, out var registry) || registry.Count == 0) return false;
+        if (StateOf(window, create: false) is not { Count: > 0 } state) return false;
+        // As MAUI routes the back: to the top modal, else the window's page.
+        var modals = window.Navigation.ModalStack;
+        var receiver = modals.Count > 0 ? modals[^1] : window.Page;
         var visible = new HashSet<object>(ReferenceEqualityComparer.Instance);
         AddVisible(receiver, visible);
         // A snapshot: each handler runs at most once, even if handlers mount or unmount others.
-        var eligible = registry
-            .Where(r => !r.Node.Unmounted && (PageOf(r.Node) is not { } page || visible.Contains(page)))
+        var eligible = state.Registrations
+            .Where(r => !r.Removed && !r.Node.Unmounted && (PageOf(r.Node) is not { } page || visible.Contains(page)))
             .OrderByDescending(r => Depth(r.Node))
             .ThenByDescending(r => r.Sequence)
             .ToList();
@@ -134,24 +126,114 @@ internal static class SystemBack
     /// <summary>
     /// The page a component belongs to: the page it renders (a route's component that returns
     /// <c>Page(…)</c>, or one that returns a <c>NavigationHost</c>), else the nearest page (or Shell
-    /// item, tab or content) above it, across list cells. <see langword="null"/> above every page.
+    /// item, tab or content) above it, across list cells, else the <c>ReactorPage</c> hosting its tree.
+    /// A component that renders the tree's root page is above every page: <see langword="null"/> in a
+    /// <c>ReactorWindow</c>'s tree (always asked, even while a modal is shown).
     /// </summary>
     internal static object? PageOf(Node node)
     {
+        var top = node.Root.TopRoot;
         var rendered = node;
         while (rendered.Kind != NodeKind.Host && rendered.Children.Count == 1) rendered = rendered.Children[0];
-        if (rendered.Kind == NodeKind.Host && rendered.Native is Page or BaseShellItem) return rendered.Native;
-        return NearestPage(node);
-    }
-
-    private static object? NearestPage(Node node)
-    {
+        if (rendered.Kind == NodeKind.Host && rendered.Native is Page or BaseShellItem)
+            return ReferenceEquals(rendered.Native, top.RootNative) ? top.HostPage : rendered.Native;
         for (var n = Up(node); n is not null; n = Up(n))
             if (n.Kind == NodeKind.Host && n.Native is Page or BaseShellItem) return n.Native;
-        return null;
+        return top.HostPage;
     }
 
     private static Node? Up(Node node) => node.Parent ?? node.Root.ContextParent;
 
     private static int Depth(Node node) => node.Depth + (node.Root.ContextParent is { } owner ? Depth(owner) + 1 : 0);
+
+    /// <summary>The handlers of one window, and on Android its back callback.</summary>
+    private sealed class WindowBack
+    {
+        private readonly Window _window;
+        private readonly List<Registration> _registrations = [];
+
+        public WindowBack(Window window)
+        {
+            _window = window;
+#if ANDROID
+            // An activity recreated: the callback goes to the new one, after MAUI's (which MAUI adds at
+            // the end of OnCreate, after the window's handler changes), so the add is posted.
+            window.HandlerChanged += (_, _) =>
+            {
+                if (window.Dispatcher is not { } dispatcher || !dispatcher.Dispatch(Update)) Update();
+            };
+#endif
+        }
+
+        public int Count => _registrations.Count;
+
+        public IReadOnlyList<Registration> Registrations => _registrations;
+
+        public void Add(Registration registration)
+        {
+            if (!_registrations.Contains(registration)) _registrations.Add(registration);
+            Update();
+        }
+
+        public void Remove(Registration registration)
+        {
+            _registrations.Remove(registration);
+            Update();
+        }
+
+#if ANDROID
+        private AndroidX.Activity.ComponentActivity? _activity;
+        private BackCallback? _callback;
+        private bool _passingOn;
+
+        public AndroidX.Activity.OnBackPressedCallback? Callback => _callback;
+
+        public bool CallbackEnabled => _callback?.Enabled == true;
+
+        private void Update()
+        {
+            var activity = _window.Handler?.PlatformView as AndroidX.Activity.ComponentActivity;
+            if (!ReferenceEquals(activity, _activity))
+            {
+                _callback?.Remove();
+                _callback = null;
+                _activity = activity;
+            }
+            if (_registrations.Count > 0 && _callback is null && activity is not null)
+            {
+                _callback = new BackCallback(this);
+                activity.OnBackPressedDispatcher.AddCallback(activity, _callback);
+            }
+            if (_callback is not null && !_passingOn) _callback.Enabled = _registrations.Count > 0;
+        }
+
+        private void OnBack()
+        {
+            if (Ask(_window) || _activity is not { } activity || _callback is not { } callback) return;
+            // Nothing handled it: MAUI's callback (or the platform's default) gets the key, as without Reactor.
+            _passingOn = true;
+            callback.Enabled = false;
+            try
+            {
+                activity.OnBackPressedDispatcher.OnBackPressed();
+            }
+            finally
+            {
+                _passingOn = false;
+                Update();
+            }
+        }
+
+        private sealed class BackCallback(WindowBack owner) : AndroidX.Activity.OnBackPressedCallback(true)
+        {
+            public override void HandleOnBackPressed() => owner.OnBack();
+        }
+#else
+        public bool CallbackEnabled => false;
+
+        private static void Update()
+        {
+        }
+#endif
+    }
 }

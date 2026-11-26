@@ -34,11 +34,49 @@ internal sealed class FakeDialogPlatform : IDialogPlatform
         return answer.Task;
     }
 
-    public bool IsDialogShown(Window window, bool afterOwnDialog) => NativeShown;
+    public bool IsDialogShown(Window window) => NativeShown;
 
-    public bool IsNavigating(Window window) => Navigating;
+    private Action? _resume;
 
-    public void ScheduleFrame(Window window, Action check) => Frames.Add(check);
+    public bool WaitForNavigation(Window window, Action resume)
+    {
+        if (!Navigating) return false;
+        _resume = resume;
+        return true;
+    }
+
+    /// <summary>The navigation finishes: the queue's wait ends once (as a navigator's BecameIdle).</summary>
+    public void FinishNavigation()
+    {
+        Navigating = false;
+        var resume = _resume;
+        _resume = null;
+        resume?.Invoke();
+    }
+
+    public bool ScheduleFrame(Window window, Action check)
+    {
+        Frames.Add(check);
+        return true;
+    }
+
+    /// <summary>As on Android: the turn after an answer is posted (see <see cref="RunPosted"/>).</summary>
+    public bool PostAfterAnswer { get; set; }
+
+    public List<Action> Posted { get; } = [];
+
+    public void AfterAnswer(Window window, Action next)
+    {
+        if (PostAfterAnswer) Posted.Add(next);
+        else next();
+    }
+
+    public void RunPosted()
+    {
+        var posted = Posted.ToList();
+        Posted.Clear();
+        foreach (var next in posted) next();
+    }
 
     /// <summary>The user answers the dialog shown last; the native UI is still dismissing.</summary>
     public void Answer(object? result) => Presented[^1].Answer.SetResult(result);
@@ -82,16 +120,20 @@ public sealed record DeclarativeProps(bool IsOpen, List<string> Closed, string T
 
 public sealed class DeclarativeAlert : Component<DeclarativeProps>
 {
-    public override Element Render() =>
-        Alert(Props.Title, "Sure?", "Yes", "No") with
+    public override Element Render()
+    {
+        // The callback captures this render's values, as an app's "delete this item" does.
+        var (title, closed, throws) = (Props.Title, Props.Closed, Props.Throw);
+        return Alert(title, "Sure?", "Yes", "No") with
         {
             IsOpen = Props.IsOpen,
             OnClosed = ok =>
             {
-                Props.Closed.Add($"{Props.Title}:{ok}");
-                if (Props.Throw) throw new InvalidOperationException("closed boom");
+                closed.Add($"{title}:{ok}");
+                if (throws) throw new InvalidOperationException("closed boom");
             },
         };
+    }
 }
 
 /// <summary>The README's dialog snippets.</summary>
@@ -129,7 +171,8 @@ public sealed class ReadmeRename : Component<Action<string>>
 
 public class DialogTests
 {
-    internal static readonly Application App = new();
+    // One Application for the suite: a second would replace Application.Current, which the navigators read.
+    internal static Application App => ShellTests.App;
 
     private sealed class Harness
     {
@@ -227,20 +270,36 @@ public class DialogTests
     }
 
     [Fact]
-    public async Task AFailedPresentation_FaultsTheTask_AndTheQueueMovesOn()
+    public async Task AFailedPresentation_CompletesWithTheCancelAnswer_AndTheQueueMovesOn()
     {
         var h = new Harness();
         var dialogs = h.Dialogs();
         h.Platform.Throw = new InvalidOperationException("no alerts here");
-        var failed = dialogs.Alert("fails", null, "OK");
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Soon(failed));
-        Assert.Equal("no alerts here", error.Message);
+        // Safe in an async void handler: never faults.
+        Assert.False(await Soon(dialogs.Alert("fails", null, "Yes", "No")));
+        h.Platform.Throw = new InvalidOperationException("no sheets here");
+        Assert.Null(await Soon(dialogs.ActionSheet("fails", "Cancel", null, "A")));
+        // No boundary above the component: logged only, the tree stays mounted.
+        h.Host.Scheduler.Drain();
+        Assert.Empty(h.Errors);
+        Assert.IsType<Label>(h.Host.RootView);
 
-        h.Platform.Throw = null;
         var next = dialogs.Alert("next", null, "Yes", "No");
         Assert.Equal("next", h.Platform.Titles);
-        h.Platform.Answer(false);
-        Assert.False(await Soon(next));
+        h.Platform.Answer(true);
+        Assert.True(await Soon(next));
+    }
+
+    [Fact]
+    public async Task AFailedPresentation_IsReportedToTheCallersBoundary_WhenItHasOne()
+    {
+        var h = new Harness();
+        Dialogs? dialogs = null;
+        h.Show(ErrorBoundary(Component<DialogsProbe, DialogsProbeProps>(new(d => dialogs = d)), e => Label($"caught: {e.Message}")));
+        h.Platform.Throw = new InvalidOperationException("no alerts here");
+        Assert.Null(await Soon(dialogs!.Prompt("fails", null)));
+        h.Host.Scheduler.Drain();
+        Assert.Equal("caught: no alerts here", Assert.IsType<Label>(h.Host.RootView).Text);
     }
 
     [Fact]
@@ -249,13 +308,13 @@ public class DialogTests
         var h = new Harness();
         var dialogs = h.Dialogs();
         var first = dialogs.Alert("first", null, "OK");
-        var second = dialogs.Alert("second", null, "OK");
+        var second = dialogs.Alert("second", null, "Yes", "No");
         var third = dialogs.Alert("third", null, "OK");
         h.Platform.Answer(false);
         h.Platform.Throw = new InvalidOperationException("second fails");
         h.Platform.Dismiss();
         await Soon(first);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => Soon(second));
+        Assert.False(await Soon(second));
         Assert.Equal("first,third", h.Platform.Titles);
         Assert.False(third.IsCompleted);
     }
@@ -265,24 +324,81 @@ public class DialogTests
     {
         var window = new Window { Parent = App };
         var h = new Harness(window);
-        var failed = h.Dialogs().Alert("nowhere", null, "OK");
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Soon(failed));
-        Assert.Contains("no page", error.Message);
+        Assert.False(await Soon(h.Dialogs().Alert("nowhere", null, "Yes", "No")));
     }
 
     [Fact]
-    public async Task DestroyingTheWindow_CancelsTheShownAndQueuedDialogs()
+    public async Task DestroyingTheWindow_CompletesTheShownAndQueuedDialogs_WithTheCancelAnswer()
     {
         var h = new Harness();
         var dialogs = h.Dialogs();
         var shown = dialogs.Alert("shown", null, "OK");
         var queued = dialogs.Alert("queued", null, "Yes", "No");
+        var sheet = dialogs.ActionSheet("sheet", "Cancel", null, "A");
         Destroy(h.Window);
-        await Assert.ThrowsAsync<TaskCanceledException>(() => Soon(shown));
-        await Assert.ThrowsAsync<TaskCanceledException>(() => Soon(queued));
+        await Soon(shown);
+        Assert.False(await Soon(queued));
+        Assert.Null(await Soon(sheet));
         // The late answer of the dialog that was on screen changes nothing.
-        h.Platform.Answer(false);
-        Assert.True(shown.IsCanceled);
+        h.Platform.Answer(true);
+        Assert.True(shown.IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public async Task ARequestAfterDestroying_IsSettledAtOnce_UntilTheWindowIsCreatedAgain()
+    {
+        var h = new Harness();
+        var dialogs = h.Dialogs();
+        Destroy(h.Window);
+        Assert.False(await Soon(dialogs.Alert("too late", null, "Yes", "No")));
+        Assert.Empty(h.Platform.Presented);
+        Assert.True(DialogQueue.For(h.Window).IsDestroyed);
+
+        // MAUI creates the window again (an Android activity recreated): it gets a new queue.
+        ((IWindow)h.Window).Created();
+        var fresh = DialogQueue.For(h.Window);
+        Assert.False(fresh.IsDestroyed);
+        fresh.Platform = h.Platform;
+        var again = dialogs.Alert("again", null, "Yes", "No");
+        Assert.Equal("again", h.Platform.Titles);
+        h.Platform.Answer(true);
+        Assert.True(await Soon(again));
+    }
+
+    [Fact]
+    public async Task ARequestFromALaterDestroyingHandler_IsSettledAtOnce()
+    {
+        var h = new Harness();
+        var dialogs = h.Dialogs();
+        Task<bool>? requested = null;
+        h.Window.Destroying += (_, _) => requested = dialogs.Alert("while destroying", null, "Yes", "No");
+        Destroy(h.Window);
+        Assert.False(await Soon(requested!));
+        Assert.Empty(h.Platform.Presented);
+    }
+
+    private sealed class RefusingDispatcher : IDispatcher
+    {
+        public bool IsDispatchRequired => true;
+        public bool Dispatch(Action action) => false;
+        public bool DispatchDelayed(TimeSpan delay, Action action) => false;
+        public IDispatcherTimer CreateTimer() => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public async Task ARefusedDispatch_SettlesTheRequest_InsteadOfStrandingIt()
+    {
+        var h = new Harness();
+        var dialogs = h.Dialogs();
+        var shown = dialogs.Alert("shown", null, "Yes", "No");
+        Assert.Equal("shown", h.Platform.Titles);
+        // The app is shutting down: the dispatcher refuses work.
+        h.Queue.Dispatcher = new RefusingDispatcher();
+        var refused = dialogs.Alert("refused", null, "Yes", "No");
+        Assert.False(await Soon(refused));
+        // The answer can't be dispatched either: it is delivered where it arrived.
+        h.Platform.Answer(true);
+        Assert.True(await Soon(shown));
     }
 
     [Fact]
@@ -303,38 +419,57 @@ public class DialogTests
     }
 
     [Fact]
-    public void ADialog_IsHeldWhileANavigationRuns()
+    public void ADialog_IsHeldWhileANavigationRuns_AndShownWhenItFinishes()
     {
         var h = new Harness();
         h.Platform.Navigating = true;
         _ = h.Dialogs().Alert("held", null, "OK");
         Assert.Empty(h.Platform.Presented);
-        h.Platform.RunFrame();
-        Assert.Empty(h.Platform.Presented);
-        h.Platform.Navigating = false;
-        h.Platform.RunFrame();
+        Assert.Empty(h.Platform.Frames);
+        h.Platform.FinishNavigation();
         Assert.Equal("held", h.Platform.Titles);
     }
 
     [Fact]
-    public void ARunningReactorNavigation_InThePageOrAModal_HoldsDialogs()
+    public void OnAndroid_TheNextDialog_WaitsForThePlatformsTurnAfterTheAnswer()
+    {
+        var h = new Harness();
+        h.Platform.PostAfterAnswer = true;
+        var dialogs = h.Dialogs();
+        var first = dialogs.Alert("first", null, "OK");
+        _ = dialogs.Alert("second", null, "OK");
+        h.Platform.Answer(false);
+        // Android reports no dialog in a presentation chain; the dismissal happens in the posted turn.
+        h.Platform.NativeShown = false;
+        Assert.True(first.IsCompleted);
+        Assert.Equal("first", h.Platform.Titles);
+        h.Platform.RunPosted();
+        Assert.Equal("first,second", h.Platform.Titles);
+    }
+
+    [Fact]
+    public void ARunningReactorNavigation_InThePageOrAModal_HoldsDialogsUntilItIsIdle()
     {
         var (stack, root) = SettledStack();
         var window = new Window(stack) { Parent = App };
-        Assert.False(MauiDialogPlatform.Instance.IsNavigating(window));
+        var resumed = 0;
+        Assert.False(MauiDialogPlatform.Instance.WaitForNavigation(window, () => resumed++));
         // A pop the platform made keeps the navigator running while MAUI's stack catches up.
         stack.Navigator.NotePlatformPop(root);
         stack.Navigator.Run();
         Assert.False(stack.Navigator.IsIdle);
-        Assert.True(MauiDialogPlatform.Instance.IsNavigating(window));
+        Assert.True(MauiDialogPlatform.Instance.WaitForNavigation(window, () => resumed++));
+        for (var i = 0; i < 400 && resumed == 0; i++) Thread.Sleep(5);
+        Assert.True(stack.Navigator.IsIdle);
+        Assert.Equal(1, resumed);
 
         var (modal, modalRoot) = SettledStack();
         var other = new Window(new ContentPage()) { Parent = App };
         _ = other.Navigation.PushModalAsync(modal, false);
-        Assert.False(MauiDialogPlatform.Instance.IsNavigating(other));
+        Assert.False(MauiDialogPlatform.Instance.WaitForNavigation(other, () => resumed++));
         modal.Navigator.NotePlatformPop(modalRoot);
         modal.Navigator.Run();
-        Assert.True(MauiDialogPlatform.Instance.IsNavigating(other));
+        Assert.True(MauiDialogPlatform.Instance.WaitForNavigation(other, () => resumed++));
 
         static (Handlers.ReactorNavigationPage, Page) SettledStack()
         {
@@ -349,7 +484,7 @@ public class DialogTests
     }
 
     [Fact]
-    public async Task ALateWindow_IsFoundWhenTheHostedPageLoads()
+    public async Task ALateWindow_IsFoundWhenTheHostedPageGetsOne()
     {
         Dialogs? dialogs = null;
         var page = new ReactorPage(Component<DialogsProbe, DialogsProbeProps>(new(d => dialogs = d)));
@@ -360,9 +495,7 @@ public class DialogTests
         var window = new Window { Parent = App };
         DialogQueue.For(window).Platform = platform;
         Assert.Empty(platform.Presented);
-        // Headless, a page is loaded when it gets a window.
         window.Page = page;
-        Assert.True(page.IsLoaded);
         Assert.Equal("early", platform.Titles);
         Assert.Same(page, platform.Presented[0].Presenter);
         platform.Answer(true);
@@ -370,13 +503,35 @@ public class DialogTests
     }
 
     [Fact]
-    public async Task UnmountingBeforeTheWindowIsKnown_CancelsTheWaitingRequests()
+    public async Task AHostedPageThatLeavesItsWindow_SendsLaterDialogsToItsNextWindow()
     {
         Dialogs? dialogs = null;
         var page = new ReactorPage(Component<DialogsProbe, DialogsProbeProps>(new(d => dialogs = d)));
-        var requested = dialogs!.Alert("early", null, "OK");
+        var first = new Window { Parent = App };
+        var firstPlatform = new FakeDialogPlatform();
+        DialogQueue.For(first).Platform = firstPlatform;
+        first.Page = page;
+        first.Page = new ContentPage();
+        var requested = dialogs!.Alert("after leaving", null, "Yes", "No");
+        Assert.Empty(firstPlatform.Presented);
+
+        var second = new Window { Parent = App };
+        var secondPlatform = new FakeDialogPlatform();
+        DialogQueue.For(second).Platform = secondPlatform;
+        second.Page = page;
+        Assert.Equal("after leaving", secondPlatform.Titles);
+        secondPlatform.Answer(true);
+        Assert.True(await Soon(requested));
+    }
+
+    [Fact]
+    public async Task UnmountingBeforeTheWindowIsKnown_CompletesTheWaitingRequests()
+    {
+        Dialogs? dialogs = null;
+        var page = new ReactorPage(Component<DialogsProbe, DialogsProbeProps>(new(d => dialogs = d)));
+        var requested = dialogs!.Alert("early", null, "Yes", "No");
         page.Unmount();
-        await Assert.ThrowsAsync<TaskCanceledException>(() => Soon(requested));
+        Assert.False(await Soon(requested));
     }
 
     [Fact]
@@ -511,6 +666,36 @@ public class DialogTests
         h.Host.Scheduler.Drain();
         Assert.Empty(closed);
         Assert.Empty(h.Errors);
+    }
+
+    [Fact]
+    public void ADeclarativeDialog_OpenBeforeItsWindowIsKnown_AndClosedWhenItArrives_IsNeverShown()
+    {
+        var h = new Harness();
+        var closed = new List<string>();
+        Element Tree(Window? window, bool open) =>
+            MauiContexts.Window.Provide(window, Component<DeclarativeAlert, DeclarativeProps>(new(open, closed)));
+        h.Host.Render(Tree(null, true));
+        h.Host.Scheduler.Drain();
+        // The window arrives in the same render that closes the dialog.
+        h.Host.Render(Tree(h.Window, false));
+        h.Host.Scheduler.Drain();
+        Assert.Empty(h.Platform.Presented);
+        Assert.Equal(0, h.Queue.WaitingCount);
+        Assert.Empty(closed);
+    }
+
+    [Fact]
+    public void ADeclarativeDialogsAnswer_GoesToTheOnClosedOfTheContentShown()
+    {
+        var h = new Harness();
+        var closed = new List<string>();
+        h.Show(Component<DeclarativeAlert, DeclarativeProps>(new(true, closed, "Delete A?")));
+        Assert.Equal("Delete A?", h.Platform.Titles);
+        // The app re-renders the open dialog for another item while "Delete A?" is on screen.
+        h.Show(Component<DeclarativeAlert, DeclarativeProps>(new(true, closed, "Delete B?")));
+        h.Platform.Answer(true);
+        Assert.Equal(["Delete A?:True"], closed);
     }
 
     // ── The README's snippets ───────────────────────────────────────────────

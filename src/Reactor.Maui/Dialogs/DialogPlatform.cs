@@ -57,17 +57,20 @@ internal interface IDialogPlatform
     /// <summary>Shows <paramref name="content"/> on <paramref name="presenter"/>; the task completes with the answer.</summary>
     Task<object?> Present(Page presenter, DialogContent content);
 
+    /// <summary>Whether a native dialog is still on screen in <paramref name="window"/> (iOS and Mac Catalyst).</summary>
+    bool IsDialogShown(Window window);
+
     /// <summary>
-    /// Whether a native dialog is still on screen in <paramref name="window"/>.
-    /// <paramref name="afterOwnDialog"/> is true while one of the queue's dialogs may still be dismissing.
+    /// Whether the window's page or one of its modals is in a navigation transition. When it is,
+    /// <paramref name="resume"/> runs once, when that navigation has finished.
     /// </summary>
-    bool IsDialogShown(Window window, bool afterOwnDialog);
+    bool WaitForNavigation(Window window, Action resume);
 
-    /// <summary>Whether the window's page or one of its modals is in a navigation transition.</summary>
-    bool IsNavigating(Window window);
+    /// <summary>Runs <paramref name="check"/> on the next frame; false when the dispatcher refused it.</summary>
+    bool ScheduleFrame(Window window, Action check);
 
-    /// <summary>Runs <paramref name="check"/> on the next frame.</summary>
-    void ScheduleFrame(Window window, Action check);
+    /// <summary>Runs <paramref name="next"/> once the answered dialog has been dismissed, as far as the platform tells.</summary>
+    void AfterAnswer(Window window, Action next);
 }
 
 /// <summary>MAUI's page dialogs, and the platform's view of what is on screen (spec 069 §5.1).</summary>
@@ -77,27 +80,32 @@ internal sealed class MauiDialogPlatform : IDialogPlatform
 
     private static readonly TimeSpan Frame = TimeSpan.FromMilliseconds(16);
 
-    public async Task<object?> Present(Page presenter, DialogContent content)
+    // The answer is passed on inside the platform's button callback (a synchronous continuation, which
+    // an await would not give on a thread with a SynchronizationContext), so AfterAnswer alone decides
+    // when the next dialog may be shown.
+    public Task<object?> Present(Page presenter, DialogContent content) => content switch
     {
-        switch (content)
-        {
-            case AlertContent { Accept: null } alert:
-                await presenter.DisplayAlertAsync(alert.Title, alert.Message, alert.Cancel);
-                return false;
-            case AlertContent alert:
-                return await presenter.DisplayAlertAsync(alert.Title, alert.Message, alert.Accept, alert.Cancel);
-            case ActionSheetContent sheet:
-                return await presenter.DisplayActionSheetAsync(sheet.Title, sheet.Cancel, sheet.Destruction, sheet.Buttons);
-            case PromptContent prompt:
-                return await presenter.DisplayPromptAsync(
-                    prompt.Title, prompt.Message, prompt.Accept, prompt.Cancel, prompt.Placeholder, prompt.MaxLength,
-                    prompt.Keyboard ?? Keyboard.Default, prompt.InitialValue ?? "");
-            default:
-                throw new ArgumentOutOfRangeException(nameof(content));
-        }
-    }
+        AlertContent { Accept: null } alert => Map(presenter.DisplayAlertAsync(alert.Title, alert.Message, alert.Cancel), static () => false),
+        AlertContent alert => Map(presenter.DisplayAlertAsync(alert.Title, alert.Message, alert.Accept, alert.Cancel)),
+        ActionSheetContent sheet => Map(presenter.DisplayActionSheetAsync(sheet.Title, sheet.Cancel, sheet.Destruction, sheet.Buttons)),
+        PromptContent prompt => Map(presenter.DisplayPromptAsync(
+            prompt.Title, prompt.Message, prompt.Accept, prompt.Cancel, prompt.Placeholder, prompt.MaxLength,
+            prompt.Keyboard ?? Keyboard.Default, prompt.InitialValue ?? "")),
+        _ => throw new ArgumentOutOfRangeException(nameof(content)),
+    };
 
-    public bool IsDialogShown(Window window, bool afterOwnDialog)
+    private static Task<object?> Map<T>(Task<T> task) =>
+        task.ContinueWith(static t => (object?)t.GetAwaiter().GetResult(), CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+    private static Task<object?> Map(Task task, Func<object?> result) =>
+        task.ContinueWith(t =>
+        {
+            t.GetAwaiter().GetResult();
+            return result();
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+    public bool IsDialogShown(Window window)
     {
 #if IOS || MACCATALYST
         // MAUI presents a dialog on the top view controller of the window's chain; until UIKit has
@@ -107,28 +115,39 @@ internal sealed class MauiDialogPlatform : IDialogPlatform
             for (var controller = root; controller is not null; controller = controller.PresentedViewController)
                 if (controller is UIKit.UIAlertController) return true;
         }
-        return false;
-#elif ANDROID
-        // An AlertDialog takes the window focus while it is shown and gives it back to the activity
-        // once it is dismissed. Checked only after one of the queue's own dialogs: the activity can
-        // lack focus for other reasons (another app's window beside it) while none of ours is shown.
-        return afterOwnDialog && window.Handler?.PlatformView is global::Android.App.Activity { HasWindowFocus: false };
-#else
-        return false;
 #endif
-    }
-
-    public bool IsNavigating(Window window)
-    {
-        if (WindowPageSetter.FindRunning(window.Page) is not null) return true;
-        foreach (var modal in window.Navigation.ModalStack)
-            if (WindowPageSetter.FindRunning(modal) is not null) return true;
         return false;
     }
 
-    public void ScheduleFrame(Window window, Action check)
+    public void AfterAnswer(Window window, Action next)
     {
-        if (window.Dispatcher is not { } dispatcher || !dispatcher.DispatchDelayed(Frame, check))
-            throw new InvalidOperationException("The window's dispatcher refused the dialog queue's work; the app is probably shutting down.");
+#if ANDROID
+        // AppCompat's AlertDialog runs a button's callback from one posted message and posts its
+        // dismissal right after (a list row's click dismisses synchronously after its callback), so a
+        // turn posted from the callback runs once the dialog has been dismissed.
+        if (window.Dispatcher is { } dispatcher && dispatcher.Dispatch(next)) return;
+#endif
+        next();
     }
+
+    public bool WaitForNavigation(Window window, Action resume)
+    {
+        var running = WindowPageSetter.FindRunning(window.Page);
+        if (running is null)
+        {
+            foreach (var modal in window.Navigation.ModalStack)
+                if ((running = WindowPageSetter.FindRunning(modal)) is not null) break;
+        }
+        if (running is null) return false;
+        void Idle()
+        {
+            running.BecameIdle -= Idle;
+            resume();
+        }
+        running.BecameIdle += Idle;
+        return true;
+    }
+
+    public bool ScheduleFrame(Window window, Action check) =>
+        window.Dispatcher is { } dispatcher && dispatcher.DispatchDelayed(Frame, check);
 }
