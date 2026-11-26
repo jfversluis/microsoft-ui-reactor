@@ -164,8 +164,12 @@ internal static class VisualEntries
             else view.SetValue(property, project(list));
         }, SequenceComparer<T>.Instance);
 
-    /// <summary>The entries every shape shares.</summary>
-    public static ControlDescriptor<TElement, TView> ShapeProperties<TElement, TView>(this ControlDescriptor<TElement, TView> descriptor)
+    /// <summary>
+    /// The entries every shape shares. <paramref name="constructedAspect"/> is the <c>Aspect</c> the shape's
+    /// constructor sets (MAUI's rectangles and ellipse set <c>Fill</c>): unsetting it writes that value
+    /// back, since clearing would fall to the property's default (<c>None</c>) instead.
+    /// </summary>
+    public static ControlDescriptor<TElement, TView> ShapeProperties<TElement, TView>(this ControlDescriptor<TElement, TView> descriptor, Stretch? constructedAspect = null)
         where TElement : ShapeElement where TView : Shape =>
         descriptor
             .BrushProperty(Shape.FillProperty, static e => e.Fill)
@@ -176,7 +180,11 @@ internal static class VisualEntries
             .Property(Shape.StrokeLineCapProperty, static e => e.StrokeLineCap)
             .Property(Shape.StrokeLineJoinProperty, static e => e.StrokeLineJoin)
             .Property(Shape.StrokeMiterLimitProperty, static e => e.StrokeMiterLimit)
-            .Property(Shape.AspectProperty, static e => e.Aspect);
+            .OneWay(static e => e.Aspect, (view, aspect) =>
+            {
+                if ((aspect ?? constructedAspect) is { } value) view.Aspect = value;
+                else view.ClearValue(Shape.AspectProperty);
+            });
 }
 
 /// <summary>The shapes and the content view, as descriptors (spec 070 §4.3, §4.5).</summary>
@@ -184,16 +192,16 @@ internal static class VisualDescriptors
 {
     public static ControlDescriptor<RectangleElement, Rectangle> Rectangle() =>
         ControlDescriptor.Create<RectangleElement, Rectangle>()
-            .ShapeProperties()
+            .ShapeProperties(constructedAspect: Stretch.Fill)
             .Property(Microsoft.Maui.Controls.Shapes.Rectangle.RadiusXProperty, static e => e.RadiusX)
             .Property(Microsoft.Maui.Controls.Shapes.Rectangle.RadiusYProperty, static e => e.RadiusY);
 
     public static ControlDescriptor<EllipseElement, Ellipse> Ellipse() =>
-        ControlDescriptor.Create<EllipseElement, Ellipse>().ShapeProperties();
+        ControlDescriptor.Create<EllipseElement, Ellipse>().ShapeProperties(constructedAspect: Stretch.Fill);
 
     public static ControlDescriptor<RoundRectangleElement, RoundRectangle> RoundRectangle() =>
         ControlDescriptor.Create<RoundRectangleElement, RoundRectangle>()
-            .ShapeProperties()
+            .ShapeProperties(constructedAspect: Stretch.Fill)
             .OneWay(static e => e.CornerRadius, static (v, radius) => v.CornerRadius = radius);
 
     public static ControlDescriptor<LineElement, Line> Line() =>

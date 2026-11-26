@@ -370,6 +370,7 @@ public class VisualsTests
             { "fonts, another color", Font(), Font(color: Colors.Red), false },
             { "fonts, auto scaling", Font(), Font(autoScaling: true), false },
             { "a file and a font", ImageSource.FromFile("A"), Font(), false },
+            { "a font source subclass and its base, same values", new DerivedFont { Glyph = "A", Size = 20, Color = Colors.Black }, Font(), false },
             { "stream images, same key", StreamImage("k", () => new MemoryStream()), StreamImage("k", () => new MemoryStream()), true },
             { "stream images, other keys", StreamImage("k", () => new MemoryStream()), StreamImage("j", () => new MemoryStream()), false },
             { "a stream image and an unkeyed stream", StreamImage("k", () => new MemoryStream()), ImageSource.FromStream(() => new MemoryStream()), false },
@@ -377,6 +378,8 @@ public class VisualsTests
             { "an unkeyed stream, itself", shared, shared, true },
         };
     }
+
+    private sealed class DerivedFont : FontImageSource;
 
     [Theory]
     [MemberData(nameof(ImageRules))]
