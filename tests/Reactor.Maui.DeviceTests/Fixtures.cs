@@ -38,6 +38,7 @@ public static partial class Fixtures
         .. ItemsFixtures(),
         .. VisualsCharacterizationFixtures(),
         .. VisualsFixtures(),
+        .. AuditCharacterizationFixtures(),
         new("NavigationStack_PushReachesThePlatform_AndBackIsReported", NavigationBack),
         new("NavigationStack_BackDuringThePushAnimation_IsReported", NavigationBackDuringPush),
         new("NavigationStack_BackTheAppRefuses_PushesThePageBack", NavigationRefusedBack),
