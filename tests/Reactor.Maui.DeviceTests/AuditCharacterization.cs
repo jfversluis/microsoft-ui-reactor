@@ -598,6 +598,23 @@ public static partial class Fixtures
         {
             foreach (var button in navigationItem.RightBarButtonItems ?? [])
             {
+                // Secondary items: the actions of the menu a bar button carries.
+                if (button.Menu is { } menu)
+                {
+                    foreach (var child in menu.Children)
+                    {
+                        if (child is not UIKit.UIAction action) continue;
+                        // UIAction's performWithSender:target: (iOS 16) has no binding.
+                        var perform = new ObjCRuntime.Selector("performWithSender:target:");
+                        items.Add(new(action.Title, () =>
+                        {
+                            if (!action.RespondsToSelector(perform)) return "no performWithSender:target:";
+                            action.PerformSelector(perform, button, null!);
+                            return "performed";
+                        }));
+                    }
+                    continue;
+                }
                 var captured = button;
                 items.Add(new(button.Title ?? "", () =>
                 {
