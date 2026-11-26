@@ -223,12 +223,12 @@ Design choices that differ from today's WinUI Reactor, and why:
   finds its node through the root's render owner while it renders. Dialogs go through one queue per
   window (`DialogQueue`), on the window's dispatcher, over an `IDialogPlatform` that shows MAUI's page
   dialogs and tells when the native dialog has gone; the declarative dialogs are `ComponentElement`
-  records over a component that renders nothing. Every page Reactor creates (`ReactorContentPage` for
-  `Page(…)`, the navigation, tabs, flyout and Shell pages, `ReactorPage`) runs the tree's
-  `UseSystemBackButton` handlers from `OnBackButtonPressed` on Android before its own back handling.
-  `UseWindowSize`, `UseDialogs` and `UseWindowLifecycle` find a hosted page's window through one
-  resolver (`WindowTracking`), and `ReactorWindow` unmounts its tree in `OnDestroying`, after the
-  `Destroying` event's handlers.
+  records over a component that renders nothing. `UseSystemBackButton` handlers join their window;
+  on Android a window with handlers gets one AndroidX back callback, added after MAUI's and enabled
+  only while a handler is registered, which asks the visible page's handlers and otherwise passes the
+  key on to MAUI. `UseWindowSize`, `UseDialogs`, `UseWindowLifecycle` and `UseSystemBackButton` find a
+  hosted page's window through one resolver (`WindowTracking`, following the page's `Window`), and
+  `ReactorWindow` unmounts its tree in `OnDestroying`, after the `Destroying` event's handlers.
 
 ## 6. What has been proven
 
@@ -248,7 +248,7 @@ shared navigation model (spec 069): the stack's operations and guard order, `Pop
 state restored without guards, the lifecycle hook's order and lookup, and a handle over an injected
 scheduler (including one that refuses).
 
-**Renderer, headless** (`tests/Reactor.Maui.Tests`, 195 tests). Real Controls objects and direct
+**Renderer, headless** (`tests/Reactor.Maui.Tests`, 209 tests). Real Controls objects and direct
 views, no platform handlers: modifiers, every control's props and echo-free events, the hybrid
 fallback and mixed trees, `CollectionView` cells as child roots, pages, toolbar items, the
 navigation stack's reconcile, the user-pop rule (below), tabs and flyout (including swapping the
@@ -285,20 +285,25 @@ back-key presses (a level each, each guard once, also when later pops complete a
 that throws (reported, the navigator idle and usable), a Shell mounted over a handle with a history,
 a nested host in a tab's page, conditional tabs, the pages' Shell properties, the flyout, and the
 README snippet. Dialogs, the back key and the lifecycle (spec 069 §5): the dialog queue's order, one
-dialog at a time per window, the dismissal barrier and the hold during a navigation (with Reactor's
-navigators detected in the page and in a modal), a failed presentation faulting its task while the
-queue moves on, a destroyed window cancelling its dialogs, the presenter resolved at dequeue (the top
-modal) and a late window; declarative dialogs queued once per open, their stale answers dropped
-(unmounted, closed, re-opened), a stale dialog never shown, and `OnClosed` or presentation errors
-reaching the element's boundary; back handlers asked only on the visible page (not a page below the
-top, a deselected tab, a deselected Shell tab or a `NavigationHost` in a deselected tab), deepest
-first, then the most recent, each once, falling through to the host's guarded back, the handle
-overload consuming a refused back, a throwing handler, and nothing asked on iOS; the window's
-lifecycle subscribed, refreshed and unsubscribed, found late, and `onDestroying` running before the
-teardown, with its errors held until after it; `ModalPresentationStyle` written before the modal is
-presented; and the README snippets.
+dialog at a time per window, the dismissal barrier (and Android's posted turn) and the hold during a
+navigation until the navigator is idle (in the page and in a modal), a failed presentation completing
+with the cancel answer (reported to the caller's boundary when it has one) while the queue moves on,
+a destroyed window completing its dialogs and settling later requests until it is created again, a
+refused dispatch settling the request, the presenter resolved at dequeue (the top modal), a late
+window and a hosted page leaving its window; declarative dialogs queued once per open, their stale
+answers dropped (unmounted, closed, re-opened, closed in the render that brings the window), a stale
+dialog never shown, the answer going to the `OnClosed` of the content shown, and `OnClosed` or
+presentation errors reaching the element's boundary; back handlers asked only on the visible page
+(not a page below the top, a deselected tab, a deselected Shell tab, a `NavigationHost` in a
+deselected tab, a covered `ReactorPage` or a list cell in a deselected tab), deepest first, then the
+most recent, each once, across two trees, with the root's handlers asked over a modal, falling
+through to MAUI and the host's guarded back, the handle overload consuming a refused back, a throwing
+handler, and a page's own `SendBackButtonPressed` asking none; the window's lifecycle subscribed,
+refreshed and unsubscribed, found late, left when a hosted page leaves its window, and `onDestroying`
+running before the teardown, with its errors held until after it; `ModalPresentationStyle` written
+before the modal is presented; and the README snippets.
 
-**Device tier** (`tests/Reactor.Maui.DeviceTests`, 83 fixtures). All pass on Mac Catalyst (macOS 26,
+**Device tier** (`tests/Reactor.Maui.DeviceTests`, 86 fixtures; platform no-ops report TAP's `# SKIP`). All pass on Mac Catalyst (macOS 26,
 Apple silicon), an iPhone 18 Pro simulator (iOS 27) and the Android API 37 emulator; the 25 earlier
 ones also ran on a Pixel 10 (Android 16). They check what the
 native views show, not the virtual tree:
@@ -348,11 +353,14 @@ native views show, not the virtual tree:
 - Dialogs and the back key (spec 069 §5): an alert with one and two buttons, an action sheet, a
   prompt and a declarative alert, each answered through its native button (clicked in process on
   Android; on iOS and Mac Catalyst the chosen action's own handler runs as the alert dismisses), with
-  the native dialog gone afterwards; two queued dialogs never on screen at once; a dialog requested
-  during a push shown only once it has finished. On Android: the back key reaching a
-  `UseSystemBackButton` handler before a `NavigationHost`, at the root (handled, and unhandled reaching
-  the platform's default), and the handle overload consuming a back the guard refuses; the window's
-  `Stopped` and `Resumed` while another activity covers the app's. A `PageSheet` modal on iOS (full
+  the native dialog gone afterwards; two queued dialogs never on screen at once (none left on screen
+  when the next is presented); a dialog requested during a push shown only once it has finished; a
+  dialog on a modal opened after an earlier dialog shown on it at once; a dialog requested from a
+  background thread. On Android: the back key reaching a `UseSystemBackButton` handler before a
+  `NavigationHost`, at the root (handled, and unhandled reaching the platform's default), the handle
+  overload consuming a back the guard refuses, and Reactor's callback enabled only with a handler on
+  a `Page` and a `Tabs` root (MAUI's off, so the predictive preview stays); the window's `Stopped` and
+  `Resumed` while another activity covers the app's. A `PageSheet` modal on iOS (full
   screen on Mac Catalyst), dismissed by the app and at unmount.
 
 The device tier found two bugs the headless tiers could not. Both are fixed:
@@ -426,12 +434,12 @@ and the direct-renderer todos page were checked on the iPhone simulator.
   during a pop; that variant hasn't been reproduced since, with or without Reactor. Still worth
   filing in dotnet/maui. The wait covers navigation Reactor's navigator runs, not a platform back
   gesture in flight at the moment of the swap.
-- **Android loses the predictive back-to-home preview at the root.** MAUI keeps its back callback
-  enabled for any page that overrides `OnBackButtonPressed`, and every page Reactor creates does, so
-  `UseSystemBackButton` handlers get the key even at the root (spec 069 §5.2). When nothing handles
-  it there, MAUI passes it to Android's default (the task moves to the back), but Android shows the
-  preview animation of leaving the app only while no callback is enabled, so a Reactor app's root
-  never shows it.
+- **Android's predictive back-to-home preview at the root.** Android shows it only while no back
+  callback is enabled. Reactor's callback is enabled only while a `UseSystemBackButton` handler is
+  registered in the window (spec 069 §5.2), so the preview is lost then, and only then, for a `Page`
+  or `Tabs` root. MAUI keeps its own callback enabled for a page that overrides `OnBackButtonPressed`,
+  which `NavigationHost`'s navigation page and Reactor's Shell do (since 4b-1 and 4b-2), so a root
+  of either never shows the preview.
 - **MAUI bug on Mac Catalyst: a sheet-style modal can't be dismissed.** With
   `ModalPresentationStyle.PageSheet`, MAUI's `PopModalAsync` never completes on Mac Catalyst 26.7
   (`DismissViewControllerAsync` doesn't return), and every later modal of the window then waits. So

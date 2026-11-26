@@ -336,11 +336,15 @@ public sealed class Rename : Component<Action<string>>
 ```
 
 A window shows one dialog at a time, in the order they were requested, on its top modal or else its
-page; the next waits until the previous one has left the screen, and while a navigation runs. When
-the window is destroyed, the awaited dialogs end with `TaskCanceledException`. An element's answer
-reaches `OnClosed` once, and only if the element is still open: closing, re-opening or unmounting it
-first drops that answer (a dialog already on screen stays until the user answers it; MAUI can't close
-one from code).
+page; the next waits until the previous one has left the screen, and while a navigation runs. The
+awaited dialogs never throw, so an `async` handler like the one above is safe: a dialog the user
+can't answer (its window was destroyed, or it couldn't be shown) completes with the cancel answer,
+`false` or `null`. One that couldn't be shown is also logged and reported to the component's
+`ErrorBoundary`, if it has one. An element's answer reaches `OnClosed` once, and only if the element
+is still open: closing, re-opening or unmounting it first drops that answer (a dialog already on
+screen stays until the user answers it; MAUI can't close one from code). The answer goes to the
+`OnClosed` of the render whose title and buttons the user saw, so a dialog showing "Delete A?" never
+runs a later render's callback for B.
 
 ## The back key
 
@@ -372,9 +376,11 @@ public sealed class Editor : Component<Action>
 Only the page on screen is asked (not the pages below it, nor other tabs), along with components
 above every page: the deepest first. When no handler takes the back, it goes on to the
 `NavigationHost` or Shell (a guarded back), then to Android. `UseSystemBackButton(nav)` is WinUI's
-shape: the key goes back in `nav` whenever `nav.CanGoBack`, even if a guard refuses. iOS has no back
-key; its back button and swipe go through the stack's guards. At the root, Android doesn't show its
-"back to home" preview animation in a Reactor app, because Reactor's pages always take the key.
+shape: the key goes back in `nav` whenever `nav.CanGoBack`, even if a guard refuses. It is Android
+only (Windows' back button comes later); iOS has no back key, and its back button and swipe go
+through the stack's guards. While a handler is registered, Android doesn't show its "back to home"
+preview animation at the root, because Reactor takes the key first; without one, a `Page` or `Tabs`
+root keeps it.
 
 ## Window lifecycle
 
@@ -393,10 +399,24 @@ public sealed class Autosave : Component<Action>
 }
 ```
 
-A `ReactorWindow` calls `onDestroying` before it unmounts its tree.
+A `ReactorWindow` calls `onDestroying` before it unmounts its tree. An error thrown there skips the
+error boundaries (the tree is about to go): it reaches the window's `UnhandledException` once the
+tree has been unmounted.
 
-`PageElement.ModalPresentationStyle` (`PageSheet`, `FormSheet`, …) sets how iOS presents a page shown
-as a modal.
+`PageElement.ModalPresentationStyle` sets how iOS presents a page shown as a modal. Import the enum
+with an alias; importing the whole `iOSSpecific` namespace brings its own `Page`, `Entry` and others,
+which clash with MAUI's:
+
+```csharp
+using UIModalPresentationStyle = Microsoft.Maui.Controls.PlatformConfiguration.iOSSpecific.UIModalPresentationStyle;
+
+NavigationStack([Page("Notes", list)]) with
+{
+    Modals = editing ? [Page("Edit", editor) with { ModalPresentationStyle = UIModalPresentationStyle.PageSheet }] : [],
+}
+```
+
+It isn't applied on Mac Catalyst, where MAUI can't dismiss a sheet; modals stay full screen there.
 
 ## Hosting
 

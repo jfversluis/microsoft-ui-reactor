@@ -66,12 +66,14 @@ Conventions for contributors:
   appearance colors, and the pages' Shell properties (`NavBarIsVisible`, `TabBarIsVisible`,
   `TitleView`, `SearchHandler`, `PresentationMode`, `BackButtonBehavior`) are declarative too.
   Page dialogs, the back key and the window's lifecycle (spec 069 §5): `UseDialogs()` returns a
-  stable `Dialogs` whose `Alert`, `ActionSheet` and `Prompt` are awaitable, and the `Alert`,
-  `ActionSheet` and `Prompt` elements open with `IsOpen` and report to `OnClosed`; a window shows one
-  dialog at a time, after the previous one has left the screen and while no navigation runs, and
-  cancels them when it is destroyed. `UseSystemBackButton(onBack)` and `UseSystemBackButton(nav)`
-  handle Android's back key on the page on screen, before a `NavigationHost`'s or Shell's guarded
-  back (Android's back-to-home preview is lost at the root, spec 065 §7).
+  stable `Dialogs` whose `Alert`, `ActionSheet` and `Prompt` are awaitable and never throw (a dialog
+  that can't be answered completes with the cancel answer), and the `Alert`, `ActionSheet` and
+  `Prompt` elements open with `IsOpen` and report to `OnClosed` for the content shown; a window shows
+  one dialog at a time, after the previous one has left the screen and while no navigation runs, and
+  settles them when it is destroyed. `UseSystemBackButton(onBack)` and `UseSystemBackButton(nav)`
+  handle Android's back key on the page on screen, through an AndroidX back callback enabled only
+  while a handler is registered, before a `NavigationHost`'s or Shell's guarded back (Android's
+  back-to-home preview is lost at the root only then, spec 065 §7).
   `UseWindowLifecycle(onActivated, onDeactivated, onStopped, onResumed, onDestroying)` follows the
   window; a `ReactorWindow` now unmounts its tree in `OnDestroying`, after the `Destroying` event's
   handlers. `PageElement.ModalPresentationStyle` sets an iOS modal's presentation (not on Mac
