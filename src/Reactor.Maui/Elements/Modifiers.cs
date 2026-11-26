@@ -190,10 +190,78 @@ public static class ViewElementExtensions
     public static BorderElement Padding(this BorderElement element, double horizontal, double vertical) =>
         element with { Padding = new Thickness(horizontal, vertical) };
 
+    /// <summary>A solid border, 1 unit thick unless given; <c>null</c> removes the stroke.</summary>
     public static BorderElement Stroke(this BorderElement element, Color? color, double thickness = 1) =>
-        element with { Stroke = color, StrokeThickness = thickness };
+        element with { Stroke = color is null ? null : (Brush)color, StrokeThickness = thickness };
+
+    /// <summary>
+    /// A border painted with <paramref name="brush"/>, compared by value; <c>null</c> removes the stroke.
+    /// A <c>null</c> thickness keeps the current one, as for shapes.
+    /// </summary>
+    public static BorderElement Stroke(this BorderElement element, Brush? brush, double? thickness = null) =>
+        element with { Stroke = brush, StrokeThickness = thickness ?? element.StrokeThickness };
 
     public static BorderElement CornerRadius(this BorderElement element, double radius) => element with { CornerRadius = new CornerRadius(radius) };
+
+    // ── Content view ────────────────────────────────────────────────────────
+
+    public static ContentViewElement Padding(this ContentViewElement element, double uniform) => element with { Padding = new Thickness(uniform) };
+
+    public static ContentViewElement Padding(this ContentViewElement element, double horizontal, double vertical) =>
+        element with { Padding = new Thickness(horizontal, vertical) };
+
+    // ── Shapes (spec 070 §4.3) ──────────────────────────────────────────────
+
+    /// <summary>Fills the shape with <paramref name="brush"/>, compared by value; <c>null</c> removes the fill.</summary>
+    public static T Fill<T>(this T shape, Brush? brush) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { Fill = brush });
+
+    /// <summary>Fills the shape with <paramref name="color"/>; <c>null</c> removes the fill.</summary>
+    public static T Fill<T>(this T shape, Color? color) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { Fill = color is null ? null : (Brush)color });
+
+    /// <summary>Strokes the shape with <paramref name="brush"/>, compared by value; <c>null</c> removes the stroke. A <c>null</c> thickness keeps the current one.</summary>
+    public static T Stroke<T>(this T shape, Brush? brush, double? thickness = null) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { Stroke = brush, StrokeThickness = thickness ?? shape.StrokeThickness });
+
+    /// <summary>Strokes the shape with <paramref name="color"/>; <c>null</c> removes the stroke. A <c>null</c> thickness keeps the current one.</summary>
+    public static T Stroke<T>(this T shape, Color? color, double? thickness = null) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { Stroke = color is null ? null : (Brush)color, StrokeThickness = thickness ?? shape.StrokeThickness });
+
+    public static T StrokeThickness<T>(this T shape, double thickness) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { StrokeThickness = thickness });
+
+    /// <summary>Dash and gap lengths, in multiples of the stroke thickness (copied).</summary>
+    public static T StrokeDashArray<T>(this T shape, params double[] dashes) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { StrokeDashArray = dashes });
+
+    /// <summary>Where the dash pattern starts, in multiples of the stroke thickness.</summary>
+    public static T StrokeDashOffset<T>(this T shape, double offset) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { StrokeDashOffset = offset });
+
+    /// <summary>How far a miter join may extend, relative to half the stroke thickness.</summary>
+    public static T StrokeMiterLimit<T>(this T shape, double limit) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { StrokeMiterLimit = limit });
+
+    /// <summary>How the polygon's interior is determined for its fill.</summary>
+    public static PolygonElement FillRule(this PolygonElement polygon, FillRule rule) => polygon with { FillRule = rule };
+
+    /// <summary>How the polyline's interior is determined for its fill.</summary>
+    public static PolylineElement FillRule(this PolylineElement polyline, FillRule rule) => polyline with { FillRule = rule };
+
+    public static T StrokeLineCap<T>(this T shape, PenLineCap cap) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { StrokeLineCap = cap });
+
+    public static T StrokeLineJoin<T>(this T shape, PenLineJoin join) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { StrokeLineJoin = join });
+
+    /// <summary>How the geometry stretches into the shape's box.</summary>
+    public static T Aspect<T>(this T shape, Stretch aspect) where T : ShapeElement =>
+        (T)(((ShapeElement)shape) with { Aspect = aspect });
+
+    /// <summary>Rounds the rectangle's corners; <paramref name="y"/> defaults to <paramref name="x"/>.</summary>
+    public static RectangleElement Radius(this RectangleElement rectangle, double x, double? y = null) =>
+        rectangle with { RadiusX = x, RadiusY = y ?? x };
 
     // ── Layout containers ───────────────────────────────────────────────────
 

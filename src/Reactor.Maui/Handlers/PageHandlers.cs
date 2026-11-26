@@ -45,7 +45,7 @@ internal sealed class PageHandler : Reactor.Hosting.IElementHandler<PageElement,
             Props.Set(page, Microsoft.Maui.Controls.PlatformConfiguration.iOSSpecific.Page.ModalPresentationStyleProperty,
                 previous?.ModalPresentationStyle, next.ModalPresentationStyle);
         }
-        if (!Equals(previous?.BackButtonBehavior, next.BackButtonBehavior))
+        if (!SameBackButton(previous?.BackButtonBehavior, next.BackButtonBehavior))
         {
             if (next.BackButtonBehavior is { } back)
             {
@@ -80,6 +80,11 @@ internal sealed class PageHandler : Reactor.Hosting.IElementHandler<PageElement,
             }
         }
     }
+
+    // The record's own equality compares the icon by reference (spec 070 §4.6).
+    private static bool SameBackButton(ShellBackButton? a, ShellBackButton? b) =>
+        a is null ? b is null
+        : b is not null && a.Text == b.Text && a.IsVisible == b.IsVisible && a.IsEnabled == b.IsEnabled && Props.SameImage(a.Icon, b.Icon);
 
     private static bool SameToolbar(ToolbarAction[] a, ToolbarAction[] b)
     {

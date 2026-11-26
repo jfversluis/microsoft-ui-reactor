@@ -73,7 +73,8 @@ differs.
   `DirectHandlers.CreateRegistry()` to `ReactorPage`.
 
 The direct renderer covers Label, Button, Entry, CheckBox, Switch, Slider, ProgressBar,
-ActivityIndicator, Image, the two stacks and Grid. Every other element, and any element that uses
+ActivityIndicator, Image, the two stacks and Grid. Every other element (shapes and `ContentView` included,
+spec 070 §4.3 and §4.5), and any element that uses
 a setting only Controls implements (styles, gestures, shadows, clipping, brushes, Flex/Absolute
 placement, `.Set()`, a ref typed to a Controls type such as `ElementRef<Entry>`; per element, for
 example Label `MaxLines` or formatted `Inlines`), falls back to the Controls renderer in the same

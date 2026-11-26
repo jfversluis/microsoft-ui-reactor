@@ -85,7 +85,8 @@ public sealed record ProgressBarElement(double Progress) : ViewElement
 /// <summary>A container that draws a border, background and rounded corners around one child.</summary>
 public sealed record BorderElement(Element? Content) : ViewElement
 {
-    public Color? Stroke { get; init; }
+    /// <summary>The border's brush, compared by value; a <see cref="Color"/> converts to one.</summary>
+    public Brush? Stroke { get; init; }
     public double? StrokeThickness { get; init; }
     public CornerRadius? CornerRadius { get; init; }
     public Thickness? Padding { get; init; }

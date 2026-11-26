@@ -76,16 +76,24 @@ internal static class Props
     }
 
     /// <summary>
-    /// Whether two image sources show the same image. Factories create a new source on every
-    /// render, so reference equality would reload the image each time.
+    /// Whether two image sources show the same image (spec 070 §4.6). Factories create a new source on
+    /// every render, so reference equality would reload the image each time.
     /// </summary>
-    public static bool SameImage(ImageSource? a, ImageSource? b) => (a, b) switch
+    public static bool SameImage(ImageSource? a, ImageSource? b) => ImageSources.Same(a, b);
+
+    /// <summary>Writes a changed brush (compared by value), or clears the property when there is none.</summary>
+    public static void SetBrush(BindableObject target, BindableProperty property, Brush? previous, Brush? next)
     {
-        (null, null) => true,
-        (FileImageSource fa, FileImageSource fb) => fa.File == fb.File,
-        (UriImageSource ua, UriImageSource ub) => ua.Uri == ub.Uri,
-        _ => ReferenceEquals(a, b),
-    };
+        if (BrushComparer.Instance.Equals(previous, next)) return;
+        WriteBrush(target, property, next);
+    }
+
+    /// <summary>Writes a brush, or clears the property for <c>null</c> and <see cref="Brush.Default"/>.</summary>
+    public static void WriteBrush(BindableObject target, BindableProperty property, Brush? brush)
+    {
+        if (BrushComparer.Normalize(brush) is { } value) target.SetValue(property, value);
+        else target.ClearValue(property);
+    }
 
     public static void SetImage(BindableObject target, BindableProperty property, ImageSource? previous, ImageSource? next, bool mounting)
     {
@@ -153,7 +161,7 @@ internal static class ViewApplier
             Props.Set(view, Microsoft.Maui.Controls.AbsoluteLayout.LayoutFlagsProperty, p.AbsoluteFlags, n.AbsoluteFlags);
 
             Props.SetRef(view, VisualElement.BackgroundColorProperty, p.BackgroundColor, n.BackgroundColor);
-            Props.SetRef(view, VisualElement.BackgroundProperty, p.Background, n.Background);
+            Props.SetBrush(view, VisualElement.BackgroundProperty, p.Background, n.Background);
             Props.Set(view, VisualElement.OpacityProperty, p.Opacity, n.Opacity);
             Props.Set(view, VisualElement.IsVisibleProperty, p.IsVisible, n.IsVisible);
             Props.Set(view, VisualElement.IsEnabledProperty, p.IsEnabled, n.IsEnabled);

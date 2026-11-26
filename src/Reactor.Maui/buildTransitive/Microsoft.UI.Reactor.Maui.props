@@ -9,6 +9,8 @@
       own Element type, so a bare `Element` would be ambiguous. An alias outranks namespace imports.
     - a NavigationMode alias, for the same reason: Microsoft.Maui.ApplicationModel (also an implicit
       using) declares one, so a file importing Microsoft.UI.Reactor.Navigation would be ambiguous.
+    - PenLineCap, PenLineJoin and FillRule aliases for shapes' settings (spec 070 §4.3): they live in
+      Microsoft.Maui.Controls.Shapes, whose Path and Rectangle types a namespace import would bring in.
     Opt out with <ReactorImplicitUsings>false</ReactorImplicitUsings>.
   -->
   <ItemGroup Condition="'$(ReactorImplicitUsings)' != 'false'">
@@ -19,5 +21,8 @@
     <Using Include="Microsoft.UI.Reactor.Input" />
     <Using Include="Microsoft.UI.Reactor.Core.Element" Alias="Element" />
     <Using Include="Microsoft.UI.Reactor.Navigation.NavigationMode" Alias="NavigationMode" />
+    <Using Include="Microsoft.Maui.Controls.Shapes.PenLineCap" Alias="PenLineCap" />
+    <Using Include="Microsoft.Maui.Controls.Shapes.PenLineJoin" Alias="PenLineJoin" />
+    <Using Include="Microsoft.Maui.Controls.Shapes.FillRule" Alias="FillRule" />
   </ItemGroup>
 </Project>

@@ -22,13 +22,13 @@
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <Using Include="Xunit" />
-    <Using Include="Microsoft.UI.Reactor.Core.Element" Alias="Element" />
-    <!-- As the package's buildTransitive props declare for apps. -->
-    <Using Include="Microsoft.UI.Reactor.Navigation.NavigationMode" Alias="NavigationMode" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Reactor.Maui\Reactor.Maui.csproj" />
   </ItemGroup>
+
+  <!-- The shipped global usings (the package's buildTransitive props), so drift in that file is compiled here. -->
+  <Import Project="$(MSBuildThisFileDirectory)../../src/Reactor.Maui/buildTransitive/Microsoft.UI.Reactor.Maui.props" />
 
 </Project>

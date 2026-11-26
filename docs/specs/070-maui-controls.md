@@ -9,8 +9,8 @@ Phase 4c closes the controls rows of spec 068's inventory. It lands in four gate
 | 4c-3 | Shapes, gradient brushes, ContentView, image source equality, tests for every remaining 🧪 control and layout, and the §1 audit of every ✅ row of spec 068 |
 | 4c-4 | CarouselView and IndicatorView (moved out of 4c-2 in its design review) |
 
-This spec details 4c-1 (§2) and 4c-2 (§3). §4 and §5 are written when 4c-3 and 4c-4 start. The bar for each item
-is spec 068 §1.
+This spec details 4c-1 (§2), 4c-2 (§3) and 4c-3 (§4, two PRs: 4c-3a and 4c-3b). §5 is
+written when 4c-4 starts. The bar for each item is spec 068 §1.
 
 ## 1. Scope
 
@@ -23,7 +23,9 @@ is spec 068 §1.
   WebView.
 - **4c-2, collections and items** (§3). It reuses 4c-1's refs for `CollectionView.ScrollTo` and
   `SwipeView.Open`/`Close`.
-- **4c-3, shapes, brushes, ContentView, image equality, tests and the audit** (§4, later).
+- **4c-3, shapes, brushes, ContentView, image equality, tests and the audit** (§4): split into
+  4c-3a (the new elements, brush and image source equality, and a property census that becomes the
+  audit's measure) and 4c-3b (the remaining 🧪 rows and the audit of every ✅ row through that census).
 - **4c-4, CarouselView and IndicatorView** (§5). Moved out of 4c-2 in its design review: the
   carousel's position echo must never write or report during a drag and must not guess an
   operation's provenance (§5 lists the requirements).
@@ -1658,7 +1660,778 @@ item (`CollectionView_SelectionInItems_Recycling`, Android: native `0:0`).
 
 ## 4. 4c-3: shapes, brushes, ContentView, image equality, tests and the audit
 
-To be written when 4c-3 starts.
+### 4.1 Scope, and a proposed split
+
+4c-3 closes the last controls rows of spec 068 that aren't CarouselView or IndicatorView: the new
+items (shapes, gradient brushes, ContentView), image source equality, tests for every remaining 🧪
+control and layout, and the §1 audit of every ✅ row. Modifiers (fonts, opacity, shadow, clip,
+transforms, accessibility, swipe and pan) stay in 4d and 4e (spec 068 §4).
+
+**Two gated PRs** (proposed here, accepted in design review round 1):
+
+| PR | Scope | Rows it closes |
+|---|---|---|
+| 4c-3a | Shapes, gradient brushes (and `Border.Stroke` as a brush), ContentView, image source equality with Image and ImageButton fully tested, Border fully tested, and the property census (§4.8) with its matrix runner | Shapes, Brushes, ContentView, Image/ImageButton, GraphicsView/Border (Border half) |
+| 4c-3b | The remaining 🧪 rows (BoxView, CheckBox, SearchBar, Switch, ActivityIndicator, ProgressBar, DatePicker, TimePicker, GraphicsView, FlexLayout, AbsoluteLayout, FlyoutPage, ToolbarItems) and the §1 audit of every ✅ row, through the census, plus whatever the audit finds | the rest of the 🧪 rows; each ✅ row re-confirmed or reopened |
+
+Why two:
+
+- **Size.** 4c-2 landed about 100 headless tests and 42 device fixtures and needed three review
+  rounds. 4c-3 in one PR is larger: seven shape elements, brushes, ContentView and image keys
+  (new public API, about 60 headless cases and 7 device fixtures, most on both registries), plus
+  about 250 element properties to census: about 50 in ✅ rows have no test found by name (§4.8) and
+  about 40 more in the 🧪 rows, which also need about 9 device fixtures.
+- **Different reviews.** 4c-3a is new API and semantics. 4c-3b is almost all tests, whose review is of
+  oracles and mutations.
+- **Unknown outcome.** The audit may find bugs; reading MAUI for this design already found one (the
+  flyout's split mode, §4.7). A fix needs its own characterization and shouldn't hold the API that
+  WeatherTwentyOne needs (`Ellipse`, `FontImageSource` in images).
+- **One mechanism, two steps.** The census gate lands in 4c-3a, with every existing property that
+  has no test claimed as *pending 4c-3b*; 4c-3b's gate is an empty pending list. So 4c-3a's new
+  elements are covered from the start and nothing can be added later without a test.
+
+
+**MAUI sources.** Behavior claims cite MAUI 11.0.0 (commit `4e6582f`): `Brush`, `SolidColorBrush`,
+`ImmutableBrush`, `GradientBrush`, `LinearGradientBrush`, `RadialGradientBrush`, `GradientStop`,
+`Shapes/Shape` and its subclasses, `Border`, `ContentView`, `ImageSource`, `FontImageSource`,
+`StreamImageSource`, `UriImageSource`, `FlyoutPage`, `FlexLayout` and `VisualElement`. Device
+characterizations confirm or correct them before anything is built on them.
+
+### 4.2 What WinUI has (the source of truth for names)
+
+Checked in `src/Reactor` (greps for shape, gradient and brush-factory names, with positive controls:
+the same probes find `EllipseElement` in `Core/Element.cs` and `AcrylicBrush` in `Elements/Dsl.cs`):
+
+| Need | WinUI Reactor | Used for MAUI |
+|---|---|---|
+| Shapes | `Rectangle()`, `Ellipse()`, `Line(x1, y1, x2, y2)`, `Path2D()` (not `Path`, which collides with `System.IO.Path`), records `RectangleElement` (`Fill`, `Stroke`, `StrokeThickness`, `RadiusX`, `RadiusY`), `EllipseElement`, `LineElement` (`X1`…`Y2`), `PathElement` (`Data` as a `Geometry`, `PathDataString` converted only when it changes, falling back to `Data` when the markup is rejected, `StrokeDashArray`, `StrokeDashOffset`, `StrokeLineJoin`, `StrokeMiterLimit`, `FillRule`, `RenderTransform`, and start, end and dash caps); modifiers `.Fill(Brush)` (rectangle, ellipse, path), `.Stroke(Brush)`, `.StrokeThickness(double)` (line, path) | the four names, records and property names; MAUI-only shapes (`Polygon`, `Polyline`, `RoundRectangle`) and properties (`StrokeLineCap`, `Aspect`) keep MAUI's names (§4.3) |
+| Brushes | native WinUI `Brush` objects; one factory, `AcrylicBrush(tint, …)`, named after its type; `BrushHelper.Parse(color)`; `ThemeResource.Brush(key)`. No gradient factory | MAUI's brush types; factories named after their type, as `AcrylicBrush` is (§4.4) |
+| A single-child container | `Border` (and `Viewbox`); no plain content container | MAUI's `ContentView` (§4.5) |
+| Images | `Image(string source)`: a string, compared by value | no WinUI shape for a non-string source; MAUI's `ImageSource`s, compared by value where they have one (§4.6) |
+
+### 4.3 Shapes
+
+```csharp
+// WeatherTwentyOne's settings radio indicator, as Reactor renders it.
+static Element Indicator(bool selected) =>
+    Grid("Auto", "Auto",
+        Ellipse().Stroke(Palette.DarkGray, 0.5).Fill(Colors.White).Size(16, 16).Center(),
+        selected ? Ellipse().Stroke(Palette.Primary).Fill(Palette.Primary).Size(8, 8).Center() : null);
+
+static Element Sparkline(IReadOnlyList<double> values) =>
+    Polyline([.. values.Select((v, i) => new Point(i * 8, 40 - v * 40))])
+        .Stroke(LinearGradientBrush(new(0, 0), new(1, 0), Colors.SkyBlue, Colors.Navy), 2)
+        .StrokeLineJoin(PenLineJoin.Round);
+
+static Element Badge() =>
+    Path2D("M 0,10 L 10,0 L 20,10 L 10,20 Z").Fill(Palette.Accent).Aspect(Stretch.Uniform).Size(24, 24);
+```
+
+**Elements.** A base record carries what every MAUI shape has; each shape adds its own:
+
+```csharp
+public abstract record ShapeElement : ViewElement
+{
+    public Brush? Fill { get; init; }
+    public Brush? Stroke { get; init; }
+    public double? StrokeThickness { get; init; }
+    public IReadOnlyList<double>? StrokeDashArray { get; init; }   // copied on init
+    public double? StrokeDashOffset { get; init; }
+    public PenLineCap? StrokeLineCap { get; init; }
+    public PenLineJoin? StrokeLineJoin { get; init; }
+    public double? StrokeMiterLimit { get; init; }
+    public Stretch? Aspect { get; init; }
+}
+
+public sealed record RectangleElement : ShapeElement { public double? RadiusX { get; init; } public double? RadiusY { get; init; } }
+public sealed record EllipseElement : ShapeElement;
+public sealed record RoundRectangleElement(CornerRadius CornerRadius) : ShapeElement;
+public sealed record LineElement : ShapeElement { public double X1 { get; init; } /* Y1, X2, Y2 */ }
+public sealed record PolygonElement : ShapeElement { public IReadOnlyList<Point> Points { get; init; } /* copied */ public FillRule? FillRule { get; init; } }
+public sealed record PolylineElement : ShapeElement { public IReadOnlyList<Point> Points { get; init; } /* copied */ public FillRule? FillRule { get; init; } }
+public sealed record PathElement : ShapeElement
+{
+    public string? PathDataString { get; init; }
+    public Geometry? Data { get; init; }
+    public Transform? RenderTransform { get; init; }
+}
+```
+
+**Factories**: `Rectangle()`, `Ellipse()`, `Line(x1, y1, x2, y2)` and `Path2D()` (WinUI's), plus
+`Path2D(string pathData)` and `Path2D(Geometry data)` (overloads WinUI could add), `Polygon(params Point[] points)`,
+`Polyline(params Point[] points)` and `RoundRectangle(CornerRadius cornerRadius)` (MAUI's names; a
+`double` converts to a uniform `CornerRadius`).
+
+**Modifiers**, generic over `T : ShapeElement` so they chain: `.Fill(Brush?)` and `.Fill(Color?)`,
+`.Stroke(Brush?, double? thickness = null)` and `.Stroke(Color?, double? thickness = null)` (a
+thickness leaves the current one when `null`; `.Stroke(brush)` is WinUI's call),
+`.StrokeThickness(double)`, `.StrokeDashArray(params double[])`, `.StrokeDashOffset(double)`,
+`.StrokeMiterLimit(double)` (WinUI's names), `.StrokeLineCap(PenLineCap)`, `.StrokeLineJoin(PenLineJoin)`,
+`.Aspect(Stretch)`; `.Radius(double x, double? y = null)` on `RectangleElement`; `.FillRule(FillRule)` on
+`PolygonElement` and `PolylineElement` (WinUI's name, on its path). The `Color?` overloads exist because MAUI's implicit `Color` to `Brush` conversion
+turns a `null` color into `Brush.Default` (`Brush.cs` 110), a written empty brush rather than a
+cleared property; the overloads map `null` to clearing, and a literal `null` binds to them (a `Color`
+converts to a `Brush`, not the reverse, so `Color` is the better conversion target). The brush entries
+also treat `Brush.Default` as unset, so `with { Fill = nullColor }` clears too.
+
+**Semantics.**
+
+- **Every property is optional.** `null` leaves MAUI's default, and a value removed on a later render
+  is cleared back to it (`ClearValue`), as every other element does. `LineElement`'s coordinates
+  default to 0, as on WinUI and in MAUI.
+- **Collections are values** (review round 1). The element copies `StrokeDashArray` and `Points`
+  into storage it owns when the property is initialized (the factories and `with` both go through
+  the `init` accessor), so an app that mutates or reuses its array after rendering can't change a
+  declaration Reactor has retained as the previous one. Successive declarations are compared by
+  sequence; an equal one writes nothing, a different one writes a new `DoubleCollection` or
+  `PointCollection`, converted only on that write; `null` clears the property explicitly.
+  `ControlDescriptor.Property` can't express this (its value type must be the bindable property's,
+  `ControlDescriptor.cs` 42-54), so the shapes use a projected entry built on `OneWay`: it compares
+  declarations with the sequence comparer and, on a write, converts or clears.
+- **Brushes are compared by value** (§4.4), so a gradient built in `Render` is written once.
+- **Path data, as on WinUI.** `PathDataString` is converted with MAUI's `PathGeometryConverter` only
+  when the string changes, ordinally compared, and wins over `Data`. Markup MAUI rejects (a
+  `FormatException`) falls back to `Data`, or to no geometry, and logs one `DiagnosticLog` warning per
+  path view and string (not per render). `Data` and `RenderTransform` are MAUI objects compared by
+  reference: build them once (`UseMemo`) or use the string. No value equality for geometries (§4.11).
+- **Clearing `RenderTransform`.** MAUI's iOS and Android `PathHandler.MapRenderTransform` updates the
+  drawable's matrix only when the transform is non-null, so clearing the property leaves the old
+  transform drawn. Reactor watches each path's `RenderTransform` (MAUI's own `Path`, which is sealed,
+  through its `PropertyChanging` and `PropertyChanged` events) and, whenever it goes from a transform to
+  none by any route, clears the transform MAUI's `ShapeDrawable` keeps (`UpdateRenderTransform(null)`,
+  public) and invalidates the platform view. The routes: the element's own transform removed, a style or
+  class style removed or swapped (a class style resolves only once the path is attached), a parent's
+  resources replaced outside any render, a visual state, a write through a ref. A transform that
+  remains (a style still provides one) is left alone; nothing is written to the property. History: the
+  design wrote an identity transform and cleared it, first in the transform entry, then after the
+  modifiers with apply-boundary snapshots (reviews of `566796fa` and `aa16b547`); a snapshot can't see a
+  change outside an apply (verification of `b2718714`), and an identity written inside the notification
+  that cleared the transform reached the property but not the drawing on any of the three platforms
+  (§4.13). Since this is MAUI's own `Path`, an implicit `Path` style applies as usual (no
+  `ApplyToDerivedTypes`, unlike 4c-1's `ScrollView` subclass). Verified on devices with an asymmetric
+  path for each route.
+- **Size.** MAUI sizes `Line`, `Polyline`, `Polygon` and `Path` from their geometry when the layout
+  gives no size (`Shape.MeasureOverride`), and draws `Rectangle`, `RoundRectangle` and `Ellipse` into
+  the size they are given. Reactor adds nothing: the README says so, and the device fixture pins it.
+- **No events and no controlled values.** A tap on a shape is the `.OnTap` modifier, which every
+  Controls view takes.
+
+**Both registries.** Shapes render as Controls shapes on both; the direct registry inherits the
+registration and hosts nothing inside them. A direct shape (MAUI's `ShapeViewHandler` draws any
+`IShapeView`) was considered and rejected: each kind's path would be a copy of MAUI's `GetPath`
+geometry code, for no port that needs it. Recorded in spec 068's Shapes row.
+
+**Handler**: a `ControlDescriptor` per shape, sharing the base entries through one internal
+`ShapeProperties()` extension (as `TextProperties()` does): `Property` for scalars, the projected
+entry for the two collections, and a brush entry (comparer, `Brush.Default` as unset) for `Fill` and
+`Stroke`. `Path` adds hand-written entries for the conversion and its fallback, and for clearing the
+transform (spec 067 §16).
+
+### 4.4 Gradient brushes, and brush equality
+
+```csharp
+Border(content)
+    .Background(LinearGradientBrush(new(0, 0), new(0, 1), (Colors.SkyBlue, 0), (Colors.Navy, 1)))
+    .Stroke(RadialGradientBrush(new(0.5, 0.5), 0.5, Colors.White, Colors.Gold), 2)
+    .CornerRadius(12);
+```
+
+**Factories**, in `Factories`, named after the MAUI type they return, as WinUI's `AcrylicBrush` is:
+
+```csharp
+public static LinearGradientBrush LinearGradientBrush(Point startPoint, Point endPoint, params (Color Color, double Offset)[] stops);
+public static LinearGradientBrush LinearGradientBrush(Point startPoint, Point endPoint, params Color[] colors); // evenly spaced
+public static RadialGradientBrush RadialGradientBrush(Point center, double radius, params (Color Color, double Offset)[] stops);
+public static RadialGradientBrush RadialGradientBrush(Point center, double radius, params Color[] colors);
+```
+
+Points and radius are relative to the element's bounds (0 to 1), as in MAUI. Offsets are `double`, so
+`0.5` needs no suffix, and are stored as MAUI's `float`. The factories copy the stops into new
+`GradientStop`s, so the app's array is never retained. A call with no stops is ambiguous between the
+two overloads and doesn't compile; an empty gradient draws nothing in MAUI anyway. The same names as
+MAUI's types work in invocations, as `Label(…)` and `Entry(…)` already do; a file that also names the
+type's members (`LinearGradientBrush.StartPointProperty`) aliases it, as the tests alias `MauiLabel`.
+
+**The gap: brushes compare by reference.** MAUI's `SolidColorBrush` overrides `Equals` (by color) and
+`GradientStop` does (by color and offset, within 1e-5), but `LinearGradientBrush` and
+`RadialGradientBrush` don't. Today `.Background` compares with `Equals` (`Props.SetRef`), so a
+gradient built in `Render` is written on every render, and MAUI's `BindableObject` doesn't skip the
+write either (it compares with the same `Equals`): every render re-maps the background.
+
+**Brush equality** (one internal comparer, `BrushComparer`, used by every brush-valued property):
+
+- the same instance, or both `null`: equal; one `null`: not;
+- two `SolidColorBrush`es (an `ImmutableBrush`, which a `Color` converts to, is one): their colors'
+  four float components exactly equal;
+- two brushes of the same `LinearGradientBrush` or `RadialGradientBrush` type: equal start and end
+  points, or center and radius, and equal stop sequences (same count, in order, each stop's float
+  offset and float color components exactly equal);
+- anything else (an app's own `Brush` subclass, two kinds): by reference. (MAUI's `ImageBrush` is
+  internal in 11.0, §4.13.)
+
+**Exact, never approximate** (review round 1). MAUI's `GradientStop.Equals` allows 1e-5 on the
+offset and `Color.Equals` compares bytes; a tolerance isn't transitive, and the descriptor compares
+successive declarations (`ControlDescriptor.cs` 177-181), not the installed value, so offsets 0,
+0.000008, 0.000016 would each look unchanged while the installed brush stayed at 0. Exact float
+comparison is an equivalence, so the installed brush is always the last declaration's value. The
+comparer's hash combines exactly what it compares. (MAUI may still skip writing a solid brush whose
+color is byte-equal: that is its own `BindableObject` check, and draws the same.)
+
+Applied to `.Background` (Controls views; `ViewApplier`), `Border.Stroke`, and shapes' `Fill` and
+`Stroke`. Not to `Shadow`'s brush: shadows are 4d's.
+
+**Brushes are immutable once rendered** (review round 1), like image sources. A brush that compares
+equal is never written, so the view keeps the earlier instance, and mutating a rendered brush is
+unsupported: its effect depends on which instance the view kept. To change a brush, render a new one
+(a factory call with the new value). Documented, and pinned by a test (§4.10).
+
+**`Border.Stroke` becomes a `Brush?`** (was `Color?`; a preview break of the record property). The
+modifier keeps `.Stroke(Color? color, double thickness = 1)`, so named `color:` arguments still
+compile, with `null` clearing the stroke (not MAUI's `Brush.Default`, see §4.3), and gains
+`.Stroke(Brush? brush, double thickness = 1)`. The handler stops wrapping colors in a new
+`SolidColorBrush` per change.
+
+**Both registries.** `.Background` with a brush already renders the element as a Controls view on the
+direct registry (`ViewModifiers.NeedsControls`); unchanged. A brush on direct views belongs to 4d's
+styling of direct views (§4.11).
+
+### 4.5 ContentView
+
+```csharp
+ContentView(Component<Forecast>()).Padding(16).Background(Theme.Card)
+```
+
+- **`ContentViewElement(Element? Content)`** with `Padding` (`Thickness?`), factory
+  `ContentView(Element? content)` and `.Padding(uniform)`, `.Padding(horizontal, vertical)` overloads
+  like `Border`'s. A plain single-child container: no template (`ControlTemplate` is excluded, spec
+  068), no `SafeAreaEdges` (safe areas are 4d's layout work).
+- **MAUI's name.** WinUI Reactor has no plain content container (§4.2); the ports subclass
+  `ContentView` for their custom controls, which components replace, and use it directly for a padded,
+  colored slot.
+- **The child** renders through the root's registry; on the direct registry a direct child is hosted
+  by `AsView`, as in `Border` and `ScrollView`. Replacing the child updates it in place when it can
+  (same type and key), so its state survives; clearing it unmounts it.
+- **Both registries**: the Controls `ContentView` on both. A direct content view (MAUI's
+  `IContentView`) would save one view; no port needs it in a hot path.
+- A hand-written handler like `BorderHandler` (the single-child strategy), or a descriptor with
+  `WithChildren`; the implementation picks the descriptor unless it can't express the slot.
+
+### 4.6 Image source equality
+
+```csharp
+Image(new FontImageSource { FontFamily = "FontAwesome", Glyph = IconFont.Mobile, Color = Palette.MidGray, Size = 42 })
+    .Size(50, 50);
+Image(StreamImage($"avatar:{user.Id}", () => store.OpenAvatar(user.Id)));
+```
+
+**The gap.** `Props.SameImage` compares file sources by `File` and URI sources by `Uri`, and everything
+else by reference. WeatherTwentyOne builds `FontImageSource`s in its pages; a new one per render
+reloads the image: a new platform image, and a layout pass.
+
+**Value equality, by type** (one function, `ImageSources.Same`, used by every consumer):
+
+- the same instance, or both `null`: equal; one `null`: not;
+- **a key on either** (a `StreamImage`, below): equal only if both have one and the keys are equal
+  (ordinal);
+- otherwise only sources of the same runtime type compare by value:
+  - `FileImageSource`: `File` (as today);
+  - `UriImageSource`: `Uri`, `CachingEnabled` and `CacheValidity` (the caching settings are ignored
+    today, so changing them on the same URI isn't written: a fix);
+  - `FontImageSource`: `Glyph`, `FontFamily`, `Size`, `Color` (MAUI's `Color.Equals`) and
+    `FontAutoScalingEnabled`, every property MAUI raises `SourceChanged` for;
+- anything else, including an unkeyed `StreamImageSource`: by reference.
+
+**Stream sources have no value.** A `StreamImageSource` holds a `Func<CancellationToken, Task<Stream>>`,
+and `ImageSource.FromStream(Func<Stream>)` wraps the app's delegate in a new closure on every call, so
+not even the delegate can be compared; nor can the stream, which is opened only to load. What the app
+knows is which image it means, so it says so with a key (the factory accepted in review round 1):
+
+```csharp
+public static ImageSource StreamImage(string key, Func<Stream> open);
+public static ImageSource StreamImage(string key, Func<CancellationToken, Task<Stream>> open);
+```
+
+`StreamImage` returns MAUI's own `StreamImageSource` (through `ImageSource.FromStream`, so MAUI's
+image services load it unchanged) and records the key against that instance in a
+`ConditionalWeakTable`. Two `StreamImage`s with the same key are the same image: the second isn't
+written and its `open` is never called. A plain `ImageSource.FromStream` source has no key and
+compares by reference: create it once (`UseMemo`) or use `StreamImage`. Considered and rejected: a
+`.WithKey(key)` extension on any `ImageSource` (the same word as an element's key for a different
+mechanism, and only streams need it); a Reactor `StreamImageSource` subclass (MAUI's image service
+lookup would have to accept it on every platform); comparing the wrapped delegate's target (a fresh
+closure each call); a hint when an unkeyed stream source is replaced (a legitimate new image looks
+the same; answered no in review).
+
+**Consumers**, all through `Props.SetImage` or `SameImage` today: `Image` (Controls and the direct
+`DirectImage`), `ImageButton`, `Button.ImageSource`, page and Shell item icons, and the structure
+checks of `ToolbarAction.Icon` and `SwipeItemData.Icon` (an equal icon no longer rebuilds the
+toolbar or the swipe side). One more compares by reference today: a page's `BackButtonBehavior`
+(`ShellBackButton`, a record whose `Icon` the record's equality compares by reference), so an equal
+icon rebuilds Shell's back button behavior on every render; its comparison uses `ImageSources.Same`
+for the icon.
+
+**Sources are values.** An equal source isn't written, so the view keeps the earlier instance;
+mutating a rendered source is unsupported (documented), as for brushes.
+
+**Characterize first** (device, all three platforms): how many times one mount of a `StreamImage`
+calls `open` (expected 1; the oracle below uses the measured count N, and requires N > 0 and a decoded
+platform image before any "no reload" count means anything), and that a re-render writing nothing
+keeps the platform image instance (iOS and Mac Catalyst `UIImageView.Image`, Android
+`ImageView.Drawable`).
+
+### 4.7 The remaining 🧪 rows (4c-3b)
+
+Each row gets the census's matrix rows for its properties and events (§4.8) on both registries, and
+these, by row:
+
+| Row | Beyond the matrix | Device |
+|---|---|---|
+| BoxView | — | none: `Color` and `CornerRadius` are bindable properties MAUI maps, with no Reactor code between (§4.8's criterion) |
+| CheckBox, Switch | the direct views (`DirectCheckBox`, `DirectSwitch`) remap their colors on set, update and clear (a recording stub handler) | the existing echo fixtures; plus the direct views' colors set, updated and cleared on the platform (the switch's on and thumb tints, the check box's tint; which platform properties to read is characterized first), since the remap is Reactor's code |
+| SearchBar | `OnSearch` reports the text, the current render's callback, nothing after unmount | none (echo exists) |
+| ActivityIndicator, ProgressBar | — | new: `IsRunning` on, off, on and `Progress` changes reach the platform (iOS `IsAnimating`, `UIProgressView.Progress`; Android visibility and progress, characterized first), colors set and cleared to a fresh control's platform default, on both registries (the direct views are Reactor's) |
+| DatePicker, TimePicker | headless (none today): `Date`/`Time` controlled per spec 067 §14 (a write unreported, input reported once, refused restored, nothing after unmount); `MinimumDate`, `MaximumDate`, `Format` set, updated and cleared; a declared date outside a new range shows MAUI's coerced date, reports nothing, and an equal re-render raises no `PropertyChanged` | the existing echo fixtures, plus the range and the date changed in one render (spec 067 §14's untested "several values on one control") |
+| GraphicsView | a new drawable is assigned; the same one is invalidated on every update (counted through a stub handler's `Invoke("Invalidate")`) | new: a re-render redraws (a counting drawable) and shows the drawable's current color (pixels, §4.10) |
+| Border | in 4c-3a (§4.4) | 4c-3a |
+| FlexLayout, AbsoluteLayout | the layout properties and the children's `.Flex(…)` and `.Absolute(…)` attached values set, updated and cleared; a direct child with one of them becomes a Controls view (`NeedsControls`) | new: geometry for direction, wrap, justify, align, grow, and absolute and proportional bounds, with direct children (no modifier) placed in order |
+| FlyoutPage | `IsPresented` controlled (below); `LayoutBehavior` set, updated, cleared; slot swaps (existing) | new, after the characterization below |
+| ToolbarItems | the items in declared order, each with its `Order` and `Priority`; a render that changes only callbacks keeps the native items, a changed text, icon, order or priority rebuilds them; the current render's callback, nothing after unmount. **A retired item invokes nothing**: today an item the platform still holds after a rebuild invokes the action now at its index, the bug §3.5 fixed for swipe items; the same identity check is added (found reading `PageHandlers`) | new: the platform shows the items in order (iOS and Mac Catalyst `UINavigationItem.RightBarButtonItems` and the secondary menu; Android the toolbar `Menu` and overflow), and invoking a platform item runs the current callback once |
+
+**The flyout's split mode (found reading MAUI; a hard gate).** `FlyoutPage` shows its flyout
+permanently in split mode (`IFlyoutPageController.ShouldShowSplitMode`: not on phones; on tablets and
+desktops in landscape with `Default` or `SplitOnLandscape`, in portrait with `SplitOnPortrait`, always
+with `Split`). Mac Catalyst's idiom is `Desktop`, so a default flyout in a landscape window is split.
+MAUI then sets `IsPresented = true` itself, from `OnAppearing` and on a layout-behavior change, and
+refuses `false` by throwing (`OnIsPresentedPropertyChanging`: "Can't change IsPresented when setting
+…"). Reactor today reports MAUI's `true` as the user's input, and if the app declares `false`, the
+restore writes `false` and MAUI throws.
+
+- **Characterize first**, on plain MAUI and on Reactor: on the iOS simulator (phone) and the Android
+  emulator (phone), opening and closing through the platform (iOS: the toolbar button's action and the
+  pan; Android: `DrawerLayout.OpenDrawer` and `CloseDrawer`, as the gestures end) and from code;
+  whether every `IsPresentedChanged` from a write is raised inside it; on Mac Catalyst, the
+  notification sequence at mount and when the window's shape changes from landscape to portrait and
+  back (resizing the window), and whether writing `false` throws.
+- **Proposed rule**, to revise if the characterization contradicts it: **while split, `IsPresented`
+  is the platform's.** Reactor doesn't write it, and a change raised while `ShouldShowSplitMode` is
+  true isn't reported (the user can't toggle a split flyout, so it is MAUI's enforcement; this reads
+  the flyout's state at notification time, it doesn't guess which write caused it). When split mode
+  ends (the flyout page's size changes and `ShouldShowSplitMode` turns false), Reactor requests a
+  restore, so the declaration applies again, unreported. Documented: in split mode `IsPresented` and
+  `OnIsPresentedChanged` do nothing.
+- **The guard covers both write paths** (review round 1): the update path (`FlyoutHandler.Update`,
+  `PageHandlers.cs` 617) and the slot synchronization that writes `IsPresented` at mount and after a
+  slot swap (`SyncSlots`, `PageHandlers.cs` 642). A split guard on one of them only would still throw.
+- If Mac Catalyst raises a change after a write returns, or the platform can toggle a split flyout,
+  this stops for revision (§4.11's self-check).
+
+**Not modeled, from each row's MAUI class** (listed against the ports that need them; the five ports
+in `maui-samples` 11.0 were searched; BaristaNotes and eShop are checked before the gate):
+FlexLayout's `Order` (a declarative tree orders its children) and `Position`; SearchBar's colors and
+alignment; DatePicker's and TimePicker's text colors beyond the shared font settings; ToolbarItem's
+`IsEnabled`. None is used by a port searched so far; each goes into its row's notes as a gap, or is
+added if BaristaNotes or eShop uses it.
+
+### 4.8 The §1 audit: a property census
+
+**The method.** An audit by reading tests can't be repeated and goes stale the next time a property
+is added. Instead:
+
+1. **A census test** (`ElementCensusTests`, headless) enumerates, by reflection over the
+   `Microsoft.UI.Reactor.Maui` assembly, every public non-abstract record that derives from `Element`,
+   plus the value records that elements hold (`SwipeItemData`, `ToolbarAction`, `RichTextRun`,
+   `RichTextHyperlink`, `ItemGroup`, `ShellBackButton`), and each of their public settable instance
+   properties, inherited ones included (`TextViewElement`'s fonts, `LayoutElement.Padding`,
+   `ShapeElement`'s strokes), except `Modifiers` (4d's census) and the core `Element`'s own members.
+2. **Every (type, property) must have exactly one claim** (review round 1 tightened what counts):
+   - a **matrix row** (a property case or an event case, below): the default evidence, because it
+     executes every facet;
+   - **covered by** a named test, only where the matrix can't express the property (a controlled
+     value, a child slot, a structural value such as an item template): it names the test class and
+     method (`nameof`), lists the facets it covers (set, update, clear, equal render, event), and
+     carries its property-specific mutation evidence (the mutation, and the §4.13 or §2.15/§3.13 run
+     that turned it red). Reflection checks that the method exists **and** is a discovered test
+     (`[Fact]` or `[Theory]`);
+   - **pending**: only the properties in a **baseline allowlist generated now**, from the existing
+     elements that have no executable evidence, and only `"4c-3b"`. The list is checked in, may only
+     shrink (the test pins its size as a ceiling), and can't hold a property added in 4c-3a;
+   - **excluded** with a reason the test prints (expected to be rare; each one is listed in §4.13).
+   A property without a claim, a claim naming no property (stale), or two claims fail the test, with
+   the names. A name-only reference (a test that merely mentions the property) is inventory, not
+   evidence: it can't make a row ✅.
+3. **Positive controls in the census itself**: it asserts that it enumerated at least as many
+   records as its first run found (a floor pinned in the test and logged), and that known pairs are in
+   its list (`ButtonElement.BorderColor`,
+   `EntryElement.ReturnType`, `EllipseElement.Fill` through `ShapeElement`), so an enumeration that
+   finds nothing can't pass. Mutation: delete one claim, and the test names the unclaimed property.
+4. **The matrix runner** (`PropertyMatrixTests`, a theory over every case and both registries):
+   - **property case**: a base element, two transforms setting distinct values A and B, a reader for
+     the native view (the Controls view, or the direct view through its MAUI interface), and the
+     bindable property (Controls) or interface property name (direct). Steps: mount with A, read A;
+     render B, read B, on the same native instance, with a write (one `PropertyChanged` for the
+     property on Controls views; its `UpdateValue` on a recording stub handler for direct views);
+     render a new element equal to B (built separately, so reference types are new instances): no
+     write; render A again: read A; render the base: the read equals a freshly created view's value,
+     MAUI's default, and on Controls views the property holds no local value (`IsSet` is false). The
+     runner asserts A ≠ B and A ≠ the default, so the reapply and the clear can't be tautologies.
+   - **values are domain-aware** (review round 1): a `bool` runs true → false → true → unset (B may be
+     the default; A never is); an enum whose default is one of two values the same; a nullable
+     reference value (a brush, a color, a collection) uses two distinct non-default values. On the
+     direct registry an element that falls back to Controls is asserted to be the Controls type, and
+     the steps run on it.
+   - **event case**: an element with callback 1 and a trigger on the native view (a MAUI controller
+     method or an interface call, as the existing tests use). Trigger: callback 1 once, with the
+     expected arguments; render with callback 2, trigger: callback 2 once, callback 1 not again;
+     unmount, trigger: nothing (the earlier calls are the positive control).
+   - **controlled values** are claimed by their echo tests (spec 067 §14 and the per-control tests),
+     not the matrix, which can't express a refusal.
+5. **The device need**, recorded per element in the census claims' comments and spec 068's rows: a
+   device fixture when Reactor code sits between the element and the platform (a direct view's remap,
+   a layout of Reactor's, an input path, a quirk characterized), or when the result is rendering that
+   a property read can't show (shapes, gradients, images loading, geometry). A bindable property on a
+   Controls view that MAUI maps with nothing of Reactor's in between is covered headlessly; MAUI's own
+   device tests cover its mapping. That criterion is itself a decision for review (§4.11).
+
+**Preliminary census** (by property name in the three test projects, so only an estimate until the
+census runs; the probe's positive control: it finds `ReturnType` in `ControlRefTests`, where 4c-1 put
+it, and `RefreshColor` there too). ✅ rows with likely gaps:
+
+| ✅ row | Properties with no test found by name |
+|---|---|
+| Button | `ImageSource`, `CornerRadius`, `BorderColor`, `BorderWidth`, `Padding`; the font settings' update and clear |
+| Slider | `MinimumTrackColor`, `MaximumTrackColor`, `ThumbColor` |
+| Stepper | `Increment` |
+| Editor | updates from one value to another (set and clear are tested) |
+| Entry | `HorizontalTextAlignment`, `ClearButtonVisibility`, `IsSpellCheckEnabled`, `PlaceholderColor` |
+| Label | `HorizontalTextAlignment`, `VerticalTextAlignment`, `Padding`, `TextType`, and `LineBreakMode` headlessly |
+| Picker | `Title` update and clear |
+| VStack, HStack, Grid | `Spacing`, `Padding`, `RowSpacing`, `ColumnSpacing` and definitions updated and cleared (geometry has a device fixture) |
+| ContentPage (`Page`) | `BackgroundColor`, `Padding`, `Icon`, `HasNavigationBar`, `HasBackButton`, `BackButtonTitle` |
+| NavigationStack | `Title`, `Icon`, `BarBackgroundColor`, `BarTextColor`; `OnPopped` headlessly |
+| Tabs | `BarBackgroundColor`, `SelectedTabColor`, `UnselectedTabColor` |
+| Light and dark theme, window size hooks | device only (`Hooks_WindowSizeAndTheme_TrackTheWindow`); a headless test of the hooks' re-render and cleanup |
+
+The rows from 4b, 4c-1 and 4c-2 (Shell, dialogs, back button, lifecycle, refs, focus, WebView, Entry's
+selection, CollectionView, SwipeView, RadioButton, Label spans, ScrollView, RefreshView) were designed
+against §1 and are expected to be claimed by their existing tests; the census confirms it.
+
+**What the audit fixes.** A gap found is closed in 4c-3b with its matrix rows; a property whose test
+finds a bug gets a fix with its own test and mutation, recorded in §4.13; a fix that needs design
+(as the flyout's did) is designed in §4.7's style before it is built. A ✅ row whose fix can't land in
+4c-3b goes back to 🟡 with the gap named.
+
+### 4.9 Both registries
+
+| Element | Controls | Direct registry |
+|---|---|---|
+| Shapes | a descriptor per shape; `Path` hand-written | the Controls shape |
+| Gradient brushes | `.Background`, `Border.Stroke`, shapes' `Fill` and `Stroke` | `.Background` with a brush renders the element as a Controls view (unchanged) |
+| ContentView | single-child strategy | the Controls `ContentView`; a direct child hosted by `AsView` |
+| Image | `ImageHandler` | `DirectImage` (hybrid); both use `ImageSources.Same` |
+| ImageButton, Button's image, icons | their handlers | Controls (`ImageButton`); a `Button` with an image falls back to Controls (unchanged) |
+| Border | `BorderHandler` | the Controls `Border`; a direct child hosted |
+
+A ref to any new element gets the Controls view on both registries.
+
+### 4.10 Tests
+
+Each oracle names the mutation that must turn it red; the implementation records each run in §4.13.
+Counts are positive witnesses; zero oracles have a positive control in the same test.
+
+**Headless (`tests/Reactor.Maui.Tests`), both registries unless noted. 4c-3a:**
+
+| Test | Oracle | Mutation |
+|---|---|---|
+| Shape properties (matrix) | every `ShapeElement` property on each of the seven shapes, and each shape's own (`RadiusX`, `RadiusY`, `CornerRadius`, `X1`…`Y2`, `Points`, `FillRule`, `PathDataString`, `Data`, `RenderTransform`): set, updated in place with one write, an equal re-render with no write (for `StrokeDashArray` and `Points` a new equal array), reapplied, and unset: nullable properties cleared to MAUI's default with a fresh view's local-value state; the non-nullable `X1`…`Y2` and `CornerRadius` write their default (§4.13 deviation 10) | compare the arrays by reference; skip the clear; write every render |
+| Collections are values | after rendering, the app mutates its points (and dash) array and renders a **new** array equal to the mutated one: the native collection is updated (the retained declaration was a copy, so the change is seen); the app reuses one array instance, mutated between renders: each render's content is written; mutating the array after the last render changes nothing natively | keep the app's array (no copy); compare by reference |
+| Brush and color overloads | `.Stroke(null)` and `.Fill(null)` (literal), and a `Color?` variable holding `null`, clear the property (no local value, so a `Style` setter for it applies afterwards); `with { Fill = nullColor }` (`Brush.Default`) clears too | drop the `Color?` overload; write `Brush.Default` |
+| `RenderTransform` clear | set a rotation, then clear: the identity transform was written before the clear (the native's value sequence is rotation, identity, unset), and the property ends unset | plain `ClearValue` |
+| Path data | a changed string writes `Data` once, an equal string never; the string wins over `Data`; markup MAUI rejects shows `Data` (or no geometry) and logs one warning across three renders, a changed bad string one more | convert every render; let `Data` win; warn per render |
+| Brush equality rules | the §4.4 rules as a table: solid by exact color (an immutable brush equal to a `SolidColorBrush` of that color); linear by points and stops in order (reordered stops differ; offsets 1e-6 apart differ; colors one float step apart differ); radial by center, radius and stops; linear vs radial with equal stops differ; `ImageBrush` and a subclass by reference; `null` cases; equal brushes have equal hashes | compare stops as a set; ignore the end point or the radius; compare gradients by reference; MAUI's tolerant `GradientStop.Equals` |
+| Cumulative small changes | offsets 0 → 0.000008 → 0.000016 over three renders: each render writes, and the **installed** brush's stop offset equals the last declaration (0.000016), read from the native view | MAUI's tolerant comparison |
+| Brush consumers | `.Background`, `Border.Stroke`, `Fill` and `Stroke`: a new equal gradient each render writes nothing (no `PropertyChanged`); a changed stop writes once; solid ↔ gradient writes once; clearing restores MAUI's default | keep `Equals` in `ViewApplier`; drop the comparer from one entry |
+| Brushes are immutable once rendered | render A, then an equal B (not written: the native holds A), then mutate B's stop: the native still holds A with its color (the documented consequence); a factory-made changed brush is written (positive control) | — (pins the documented contract) |
+| Gradient factories | stops in order with their offsets; the colors overload spaces offsets evenly (0, 0.5, 1 for three; 0 for one); mutating the app's stops array after the call changes nothing | — |
+| Border (matrix and children) | `Stroke` (a color and a gradient), `StrokeThickness`, `Padding`, `CornerRadius` (uniform and per corner: a `RoundRectangle` with that radius; cleared: MAUI's default shape); content set, replaced (same type: state kept), cleared (cleanup ran); on the direct registry a direct child is hosted | skip the unmount on clear; write a new stroke shape every render |
+| ContentView | content set, replaced (state kept), cleared (cleanup ran); `Padding` matrix; a direct child hosted on the direct registry; a ref to it gets the Controls view | as Border |
+| Image source equality rules | the §4.6 rules as a table, including `StreamImage` against `ImageSource.FromStream`, two keys, `UriImageSource` caching settings, and `FontImageSource` differing in each of its five properties | reference equality for fonts; ignore caching; ignore keys; compare across types |
+| Image source consumers | `Image` (Controls and `DirectImage`), `ImageButton`, `Button.ImageSource`, a page's icon, a back button behavior's icon, a toolbar item's icon and a swipe item's icon, each given a new equal `FontImageSource` per render: no write (no `PropertyChanged`; no `UpdateValue("Source")` on the direct image's stub handler), the native holds the first instance, the toolbar and swipe side aren't rebuilt (instances kept); positive control: a changed glyph writes once, and a `StreamImage` with a changed key writes once | keep `SameImage`'s reference fallback for fonts; skip `SameImage` in one consumer |
+| Image and ImageButton (matrix and events) | `Aspect`, `IsAnimationPlaying`, `CornerRadius`, `Padding`; `OnClick` as an event case | — |
+| Census | §4.8: no unclaimed, stale or doubled claim; the floor and the known pairs enumerated; covered-by claims name discovered tests and list facets and mutation evidence; pending claims only in the baseline, which is no larger than its ceiling and holds no 4c-3a property | delete one claim; add a claim for a missing property; point a claim at a non-test method; mark a new shape property pending |
+
+**4c-3b:** the matrix rows for the 🧪 rows' and ✅ rows' properties (the pending list emptied), and:
+
+| Test | Oracle | Mutation |
+|---|---|---|
+| Date and time echo | per §4.7: a declared write raises `DateSelected` inside the write and reports nothing; a `Date` set as input is reported once and, refused, restored; nothing after unmount; a declared date outside the range shows MAUI's coerced date, reports nothing, and an equal re-render raises no `PropertyChanged` | write outside the scope; compare with the old element instead of the view |
+| GraphicsView | the same drawable: one `Invalidate` per update (stub handler); a new drawable: assigned, and invalidated by MAUI rather than Reactor | invalidate only when the drawable changes |
+| Flex and absolute children | `.Flex(…)` and `.Absolute(…)` set, updated and cleared on the child's attached properties; a direct-registry child with them is a Controls view | skip the clear |
+| Flyout split mode | with a test `ShouldShowSplitMode` (a `ReactorFlyoutPage` override seam): MAUI's own `true` while split isn't reported; a declaration of `false` while split writes nothing and throws nothing; leaving split restores the declaration, unreported; phone mode keeps the existing echo (input reported once, refusal restored) as the positive control | report while split; write while split; no restore on leaving split |
+| Toolbar items | §4.7: declared order; native items kept on a callback-only render and rebuilt on a structure change; a retained retired item invokes nothing while the new item at its index does (positive control); the current callback; nothing after unmount | read only the index; rebuild on every render; capture the first callback |
+
+**Device (`tests/Reactor.Maui.DeviceTests`), Mac Catalyst, iOS and Android, `[controls]` and
+`[direct]` unless noted.** Waits accept only events after their own action; first-use costs (image
+decoding, the first capture) are absorbed by a warm-up step before any timed wait.
+
+| Fixture | PR | Oracle |
+|---|---|---|
+| `Pixels_Sampler` (characterization, gate) | 4c-3a | a new helper reads a view's rendered pixels (iOS and Mac Catalyst: the layer rendered into an image; Android: `View.Draw` into a bitmap). Inside a `BoxView` of a known color the sample is that color within a tolerance (logged raw, with the color space); outside it, the page's background; a second color for the same box changes the sample (positive control). Every pixel oracle below depends on it, so it runs first and a failure stops them |
+| `Shapes_Render` | 4c-3a | per shape, predicted colors at fixed normalized coordinates, with strokes thick enough (8 points) that a sample sits well inside them: closed shapes (`Rectangle`, `RoundRectangle`, `Ellipse`, `Polygon`, `Path`) sample the fill at the interior and the stroke at an edge's middle; open shapes (`Line`, `Polyline`) sample the stroke only, on the line and beside it (background); a bounds corner outside the ellipse, and outside a `RoundRectangle`'s radius, is the background, while the same corner of a `Rectangle` is the fill (positive control); `Line` and `Polyline` sized from their points; an asymmetric `Path` (a right triangle) with `Aspect = Uniform` and `Fill` in a non-square box: the filled corner and the empty corner are where the triangle predicts, and with `None` the drawn extent is the geometry's own |
+| `Shapes_UpdateInPlace` | 4c-3a | a new fill color: the same platform view instance, the interior sample changes; a dash array set then cleared changes an edge sample between dash and gap; an asymmetric path given a 90° `RenderTransform` and then cleared: the rotated sample pattern, then the original one (the clear really reaches the drawable) |
+| `Gradients_Render` | 4c-3a | predicted RGBA at fixed normalized coordinates: a vertical linear background (top near the first stop, bottom near the last, the middle their mix); a re-render with a changed stop changes the sample (the written brush is drawn); a radial background with a non-default center (0.25, 0.25) and radius (0.5): the center sample is the first stop, the opposite corner the last; a gradient `Border` stroke differs between its top and bottom edges; the same on a direct stack (rendered as Controls) |
+| `Border_Geometry` | 4c-3a | the content's frame is inset by the padding and the stroke thickness (MAUI's rule, characterized and logged); with a corner radius the corner sample is the background, without it the stroke (positive control) |
+| `ContentView_Geometry` | 4c-3a | the content's frame is inset by the padding; a direct child is realized and placed |
+| `Image_EqualSourceDoesNotReload` | 4c-3a | a `StreamImage` of a bundled PNG: after mount settles, its `open` call count N is logged, and the positive witnesses hold first: N > 0 and the platform view has a decoded image with the PNG's size; three re-renders with a new `StreamImage` of the same key leave N after settling (400 ms and a dispatcher turn) and keep the platform image instance; a changed key raises N (positive control, counting only calls after the change) and yields a new decoded image. A `FontImageSource` re-created per render: the platform image (decoded, non-empty) is the same instance after three re-renders and a new one for a new glyph (positive control). The same for an `ImageButton` |
+| `ActivityIndicator_Platform`, `ProgressBar_Platform` | 4c-3b | §4.7 |
+| `GraphicsView_Redraw` | 4c-3b | a re-render redraws (a counting drawable: the count rises after it, and only after it) and the sample shows the drawable's current color |
+| `FlexLayout_Geometry`, `AbsoluteLayout_Geometry` | 4c-3b | children frames for direction, wrap, `JustifyContent = SpaceBetween` (first at the start, last at the end), `AlignItems`, a grow child filling the rest; absolute and proportional bounds; direct children placed in order |
+| `FlyoutPage_Characterization` (gate) | 4c-3b | §4.7's matrix, on plain MAUI and Reactor |
+| `FlyoutPage_IsPresented` | 4c-3b | phones: opened through the platform and accepted, it stays open; refused, it closes (Android `IsDrawerOpen`; iOS the flyout's presented state); a declared change opens it and reports nothing; nothing after unmount. Mac Catalyst (split): no exception at mount or when the app declares `false`, nothing reported, the flyout visible; after resizing the window to portrait, the declaration applies |
+| `ToolbarItems_Platform` | 4c-3b | §4.7; a callback-only render keeps the platform item; a removed item leaves the platform |
+
+### 4.11 Decisions, open questions, out of scope
+
+**Decisions** (review round 1 settled the ones marked).
+
+1. **Split into 4c-3a and 4c-3b** (§4.1), joined by the census's pending list (settled).
+2. **Shapes take WinUI's names** (`Rectangle`, `Ellipse`, `Line`, `Path2D`, and their properties);
+   MAUI's names for MAUI-only shapes and properties (`Polygon`, `Polyline`, `RoundRectangle`,
+   `StrokeLineCap`, `Aspect`); Controls on both registries.
+3. **Path data follows WinUI**: a string converted when it changes, winning over `Data`, falling back
+   to it, with one warning; geometries and transforms by reference.
+4. **Brushes are MAUI's types, compared by exact value** for solid and gradient brushes, immutable
+   once rendered; factories named after the type, as WinUI's `AcrylicBrush` (settled: exactness,
+   immutability).
+5. **`Border.Stroke` is a `Brush?`**, with `Color?` and `Brush?` modifier overloads; `null` clears
+   (settled).
+6. **ContentView** is a plain container with `Padding`, Controls on both registries.
+7. **Image sources compare by value** where they have one (file, URI with its caching settings,
+   font), and by key for `StreamImage(key, open)` (settled); other streams by reference.
+8. **The census** is the audit, and the gate's measure; executable matrix cases are its default
+   evidence, other claims list facets and mutation evidence, and the pending list is a shrinking
+   baseline (settled); a bindable property MAUI maps with nothing of Reactor's in between needs no
+   device fixture (§4.8).
+9. **The flyout's split mode** leaves `IsPresented` to the platform, after characterization (§4.7).
+10. **Collections are values**: copied on init, compared by sequence, converted only on a write
+    (settled).
+11. **`RenderTransform` clears through an identity transform** (settled), or is left out.
+
+**Identity across deferred notifications.** Nothing here infers which write caused a later
+notification: brush and image equality compare values at render; the census and matrix are
+synchronous; the flyout reads `ShouldShowSplitMode` when its notification arrives. The flyout's rule
+assumes every `IsPresentedChanged` a Reactor write causes is raised inside the write, and that a
+split flyout can't be toggled by the user. Both are hard gates of `FlyoutPage_Characterization`; if
+either fails, 4c-3b stops there and reports.
+
+**Answered in review round 1**: the split (two PRs); the stream key (`StreamImage(key, open)`, not
+`.WithKey`); no hint for unkeyed stream sources; exact brush equality; collections and brushes as
+values; the census's evidence rules; domain-aware matrix values; the pixel and load oracles' witnesses
+(§4.10); the flyout guard on both paths (§4.7). Kept as proposed, with no objection: the gradient
+factories' names and evenly spaced overloads, the `Path2D` overloads, the device criterion (§4.8), and
+pixel samples at a per-channel tolerance with the raw values logged. No question is open.
+
+**Out of scope, with where each goes.**
+
+- Modifiers (fonts, opacity, shadow and its brush, clip, transforms, accessibility) → 4d; swipe and
+  pan → 4e; a brush on direct views (direct styling) → 4d.
+- Direct shapes and a direct `ContentView` (§4.3, §4.5), and attached flex and absolute values on
+  direct children without the Controls fallback (MAUI's `FlexLayout` supports non-bindable children
+  through its instance setters): no port needs them; recorded as possible optimizations.
+- `ImageBrush` (no port), value equality for geometries and transforms (`Path.Data`, `.Clip`).
+- `ContentView.SafeAreaEdges` → 4d's layout work.
+- CarouselView and IndicatorView (4c-4, §5); Windows (4g).
+
+### 4.12 Gate for 4c-3
+
+**4c-3a:**
+
+- **WinUI** isn't changed: `skills/reactor.api.txt` is byte-identical.
+- **MAUI**: headless, engine and device suites green on Mac Catalyst, iOS and Android; the pixel
+  sampler, the image-load and the `RenderTransform` characterizations recorded in §4.13 before the
+  fixtures that use them; each §4.10 mutation of 4c-3a turns its oracle red; the census green with
+  pending claims only from the baseline; `Reactor.Maui.slnx` builds in Release with no warnings; the
+  MAUI benchmark within noise (`ViewApplier`'s background comparison and every image consumer
+  change).
+- **Docs**: `src/Reactor.Maui/README.md` documents shapes (sizing, path data and its fallback),
+  gradient brushes and that brushes and image sources are values (equality, not mutating,
+  `StreamImage`), with its snippets mirrored by tests; spec 068's rows (Shapes, Brushes, ContentView,
+  Image and ImageButton, Border) are updated with their evidence; GraphicsView/Border is split so
+  Border shows ✅; spec 065's direct-renderer notes and the CHANGELOG record the new elements and the
+  `Border.Stroke` break.
+
+**4c-3b:**
+
+- The census has no pending claim; every 🧪 control and layout row of spec 068 is ✅ (or 🟡 with a
+  gap no port needs), and each ✅ row's note names its census claims' evidence.
+- The flyout characterization recorded in §4.13, with neither hard gate broken (or the design revised
+  and reviewed); each §4.10 mutation of 4c-3b turns its oracle red.
+- Suites green on the three platforms; the benchmark within noise if a handler changed.
+- **Docs**: README sections for the flyout's split mode and toolbar items; spec 068's "not modeled"
+  gaps (§4.7) written into their rows.
+
+### 4.13 As built (4c-3a)
+
+4c-3b's as-built section is written when it lands.
+
+**What was built** (commits after `168a42f0`, each step its own commit):
+
+- **Characterizations first** (`VisualsCharacterization.cs`, plain MAUI): the pixel sampler gate, a
+  path's `RenderTransform` clear, a stream source's open count, and a `Border`'s content inset; table
+  below. Nothing was built on them before they passed.
+- **Elements** (`Elements/Visuals.cs`): `ShapeElement` and the seven shapes, `ContentViewElement`, and
+  `ValueList`, the owned storage the `init` accessors copy point and dash lists into (C#'s `field`
+  keyword, so `with` copies too). `BorderElement.Stroke` is a `Brush?`.
+- **Handlers** (`Handlers/Visuals.cs`): `BrushComparer` (exact, with a matching hash; `Brush.Default`
+  as unset), `SequenceComparer<T>`, the descriptor helpers `BrushProperty`, `ListProperty` (the
+  projected entry, on `OneWay`) and `ShapeProperties`, a descriptor per shape and for `ContentView`,
+  `PathData` (markup conversion with its fallback and warning, and the transform watch that resets
+  the platform drawable's transform), and `ImageSources` (value equality and `StreamImage` keys in a `ConditionalWeakTable`).
+  `Props.SetBrush` serves `.Background` and the border stroke; `Props.SameImage` forwards to
+  `ImageSources.Same`; a page's back button compares its icon with it.
+- **Factories and modifiers**: the shapes, `ContentView`, `StreamImage`, the gradient factories;
+  `.Fill`, `.Stroke` (brush and color), `.StrokeThickness`, `.StrokeDashArray`, `.StrokeDashOffset`,
+  `.StrokeMiterLimit`, `.StrokeLineCap`, `.StrokeLineJoin`, `.Aspect`, `.Radius`, `.FillRule`;
+  `ContentView.Padding`; the border's two `.Stroke`s (a color 1 unit thick unless given, as before; a
+  brush keeps the current thickness, as on shapes).
+- **The census** (`PropertyMatrix.cs`, `MatrixCases.cs`, `CensusBaseline.*.cs`): 58 element types
+  and value records, every public settable property claimed: 89 property cases (most built by a typed
+  `Case(make, name, set, a, b, …)` from fresh factory calls through the modifiers) and 1 event case,
+  each run on both registries (180 theory rows), 2 covered-by claims (the content slots), and 348
+  pending properties for 4c-3b. The pending list must equal its ceiling and be a subset of
+  `CensusBaseline.Original`, the list as generated, whose SHA-256 is pinned; no property of an element
+  4c-3a covered (the shapes, `ContentView`, `Border`, `Image`, `ImageButton`) may be pending.
+
+**Deviations from §4, and why:**
+
+1. **MAUI's rectangles and ellipse construct with `Aspect = Fill`** (`Rectangle`, `RoundRectangle` and
+   `Ellipse` constructors), so clearing the property would draw with the property's default, `None`.
+   Unsetting `Aspect` on them writes `Fill` back (`ShapeProperties(constructedAspect:)`). Found by the
+   matrix, whose clear step now compares the property's local-value state with a fresh view's (a
+   fresh rectangle has a local `Aspect`) instead of requiring none.
+2. **`ImageBrush` is internal in MAUI 11**, so an app can't make one; the by-reference rule is tested
+   with an app's own `Brush` subclass.
+3. **The package's global usings alias `PenLineCap`, `PenLineJoin` and `FillRule`**: they live in
+   `Microsoft.Maui.Controls.Shapes`, whose `Path` and `Rectangle` a namespace import would bring into
+   every component file. (`Stretch` is in `Microsoft.Maui.Controls`.) The test projects, the
+   benchmark and the sample import the shipped props file instead of copying its `Using` items, so a
+   change to it is compiled there.
+4. **Rejected path markup warns once per change** of the (markup, data) pair, the only time the
+   entry converts, rather than once per view and string: rendering the same bad string again warns
+   nothing, changing it (or the fallback `Data`) warns again.
+5. **A literal `null` binds to the `Color?` overloads**, as designed; their `null`-to-clear mapping is
+   redundant with the comparer's `Brush.Default` normalization (equivalent mutant M15). Both kept: the
+   overload documents intent, the normalization covers `with { Fill = nullColor }`.
+6. **Mutating a rendered brush can also hide a later change**, found writing the immutability test:
+   the mutated brush is the retained declaration, so a new brush equal to the mutation compares equal
+   to it and isn't written. The README says so; the test uses a different color for its positive
+   control.
+7. **Shell item icons** go through the same `Props.SetImage` as page icons and aren't in the
+   consumer test, which covers images (both registries), image buttons, button images, page,
+   toolbar, swipe and back-button icons.
+8. **The census enumerates the `Microsoft.UI.Reactor.Maui*` namespaces**: the shared composition
+   records (`Microsoft.UI.Reactor.Core`) and the members dialog elements inherit from
+   `ComponentElement` (`ComponentType`, `Props`) are the engine's, not this census's.
+9. **Instrument notes.** A bindable property with a default-value creator counts as set once read
+   (`StrokeDashArray`, `Padding`), so the matrix reads `IsSet` before reading the value. On Android a
+   layout that touches the status bar lays its children below it (`SafeAreaEdges`), so pixel and
+   geometry fixtures stage their subjects 120 points down and capture the subject itself.
+10. **`LineElement`'s coordinates and `RoundRectangleElement.CornerRadius` are non-nullable**, as on
+    WinUI (and `RoundRectangle(radius)` takes one), so they are always written: unset means 0, written
+    as a local value, and a `Style` setter for them can't apply. The matrix marks them as writing their
+    default instead of clearing.
+11. **Review of `566796fa`.** A style that provided a path's transform, removed while neither
+    declaration has one, left the transform drawn (the entry skipped an unchanged `null`): the reset
+    moved after the modifiers (§4.3). URI sources compare `OriginalString` ordinally, since `Uri`'s
+    `==` ignores the user info and the fragment. `ViewModifiers.NeedsControls` treats a `null`-color
+    background (`Brush.Default`) as no brush, so it no longer forces a Controls view. The internal
+    `ReferenceEqualityComparer<T>` gave way to the BCL's.
+
+**Characterization (device; plain MAUI):**
+
+| | Mac Catalyst | iOS | Android |
+|---|---|---|---|
+| Sampler: a red/blue box with a white margin, then a changed color | exact (240 px at scale 2, the view hierarchy drawn into sRGB) | exact (360 px at scale 3) | exact (315 px, `View.Draw` into ARGB_8888) |
+| Path `RenderTransform`: rotated, then `ClearValue` | the rotation stays drawn | same | same |
+| Path `RenderTransform`: rotated, then an identity transform and `ClearValue` | the original drawing | same | same |
+| One mount of a stream source; a new instance | opened once, decoded 24×12; opened again, a new platform image | same | same |
+| `Border` content inset (padding 10, stroke 6) | 16 on every side; the padding area transparent | same | same |
+
+**Tests.** Headless `Reactor.Maui.Tests`: 679 (429 before), in `PropertyMatrix.cs` (the runner and the
+census, 4 census facts), `MatrixCases.cs`, `VisualsTests.cs`, `PathDataWarningTests` and
+`ReadmeVisualsSnippetTests.cs`. Engine `Reactor.Maui.Engine.Tests`: 80 (unchanged). Device: 18 new
+fixtures (4 characterizations, 7 behaviors on both registries) in `VisualsCharacterization.cs` and
+`VisualsFixtures.cs`, with `Pixels.cs` (the sampler) and `TestPng.cs`. Full device suites: Mac Catalyst
+174 passed, 7 skipped; iOS simulator 174 passed, 7 skipped; Android emulator 176 passed, 5 skipped
+(before: 156/7, 156/7, 158/5). `Reactor.Maui.slnx` builds in Release with no warnings.
+
+**Mutation checks** (each broke the code, ran the class's tests, restored and touched the file; all
+red but M15): stops compared as a set (M1), the end point ignored (M2), the radius ignored (M3),
+gradients by reference (M4, 33 red across rules, matrix and background), MAUI's tolerant stop
+equality (M5: the 1e-6 and float-step rules and the cumulative test), `.Background` by `Equals` (M6),
+the fill entry without the comparer (M7), no list copy (M8), lists by reference (M9), lists not
+cleared (M10), a plain transform clear (M11), markup converted every render (M12), `Data` winning
+(M13), `Brush.Default` written (M14), the `Color?` overload writing `Brush.Default` (M15: survived,
+equivalent, deviation 5), fonts by reference (M16), URI caching ignored (M17), keys ignored (M18), no
+type check (M19, red once the subclass rule was added), a button image by reference (M20), the back
+button by record equality (M21), no constructed aspect (M22), content not cleared on `null` in a
+`ContentView` (M23) and a `Border` (M25), a remount on every update of each (M24, M26); the census:
+a claim deleted, a covered claim at a non-test method, a 4c-3a property pending, the baseline grown
+(C1 to C4). On devices (each built and run with the fixture filter, restored and touched; all red): a
+plain transform clear (`Shapes_UpdateInPlace`, all three platforms: the rotated pattern stayed), keys
+ignored (`Image_EqualSourceDoesNotReload`, Mac Catalyst: 2 opens became 8), fonts by reference (the
+same, Android direct: a new font image), the dash list not cleared (`Shapes_UpdateInPlace`, iOS
+direct: the dashes stayed).
+
+Review of `566796fa`, mutation checks (all red): no reset after the modifiers (the style and the
+local transform tests; on Android, `Shapes_UpdateInPlace`'s styled path stayed rotated), a reset
+whenever a transform was shown (a transform a remaining style provides was overwritten), the pending
+list with a same-size swap, the original list edited, the ceiling raised, `.StrokeMiterLimit` and
+`.FillRule` as no-ops, URIs by `Uri`'s `==` (the user-info and fragment rules), a brush stroke
+resetting the border's thickness to 1, the back button ignoring its text, and `NeedsControls` on any
+background (the `null`-color label stayed Controls). Full device suites afterwards: Mac Catalyst 174
+passed, 7 skipped; iOS 174 passed, 7 skipped; Android 176 passed, 5 skipped.
+
+Verification of `aa16b547` (both reviewers reproduced it): the reset compared with the transform
+recorded at the end of the last apply, so a class style that resolved on attachment after mount, or a
+transform set through a ref between renders, wasn't seen, and swapping the class on the first update
+left the rotation drawn. Now observed at the start of each apply. Mutation checks (all red): the
+previous design restored (the class-swap test on both registries, the ref test, and on Mac Catalyst
+`Shapes_UpdateInPlace`'s class-swapped path stayed rotated), the observation taken after the modifiers
+(also the declared and style clears), and the hook silently replaced. Headless 683; the visual device
+fixtures on all three platforms passed again.
+
+Verification of `b2718714` (gpt, reproduced on both registries): replacing a parent's class-style
+resources cleared the path's transform outside any render, so no apply-boundary snapshot saw it. The
+reset moved to the property (above) and the after-modifiers hook was removed from `ControlDescriptor`.
+A first version wrote the identity transform and cleared it inside the clearing notification: the
+property went rotation, none, identity, none (and for a `null` written through a ref, where MAUI
+queues the identity behind its own setter, too), yet on Mac Catalyst, iOS and Android the path
+stayed rotated, at the class swap and at the resource replacement alike. Clearing the drawable's own
+transform works on all three. Tests: the resource replacement, the class swap after mount, the
+declared clear, the style removal, a ref write cleared by a render, a `null` written through a ref, a
+style still providing a transform (no reset), equal renders (no write, no reset); both registries where
+a registry matters; device: `Shapes_UpdateInPlace` replaces a parent's resources outside any render.
+Headless oracles count the resets the watch requests (an internal event; nothing is drawn headlessly).
+Mutation checks (all red): no watch, a reset although a transform remains, and on Android the drawable
+not reset (`Shapes_UpdateInPlace`). Headless 686; the visual device fixtures passed on all three.
+
+**Benchmark** (Mac Catalyst, one pair against `7281bf4d`, base first): total time within noise or
+lower in every scenario on both renderers (−4% to +0.03%, and −13% and −35% on the 40-ms `UpdateOne`),
+allocations identical to the kilobyte. The benchmark sets no brushes or images, so it measures the
+changed paths' cost when unused: `ViewApplier`'s background comparison and the image comparison
+behind every icon.
+
+**Open issues.**
+
+- **Upstream (MAUI):** `PathHandler.MapRenderTransform` ignores a `null` transform on iOS, Mac
+  Catalyst, Android and Windows (each platform's handler updates the `ShapeDrawable` only for a non-null
+  matrix), so a cleared transform stays drawn. Worked around here on iOS, Mac Catalyst and Android; to
+  file upstream with the 4c-2 issues.
+- **Windows (4g):** the workaround's drawable reset is `#if IOS || MACCATALYST || ANDROID`; Windows isn't
+  compiled in this phase's CI, so no uncompiled branch was added. 4g adds the `WINDOWS` branch
+  (`PlatformView is W2DGraphicsView { Drawable: ShapeDrawable d }` → `d.UpdateRenderTransform(null);
+  view.Invalidate();`) and verifies it on the Dev Box with `Shapes_UpdateInPlace`'s routes.
+- 4c-3b: the 348 pending properties, the remaining 🧪 rows and the flyout's split mode (§4.7).
 
 ## 5. 4c-4: CarouselView and IndicatorView
 

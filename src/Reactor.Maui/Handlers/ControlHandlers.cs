@@ -347,11 +347,7 @@ internal sealed class BorderHandler : ViewHandler<BorderElement, Border>
 
     protected override void Apply(HandlerContext<BorderElement> context, Border view, BorderElement? previous, BorderElement next)
     {
-        if (previous is null || !Equals(previous.Stroke, next.Stroke))
-        {
-            if (next.Stroke is { } stroke) view.Stroke = new SolidColorBrush(stroke);
-            else if (previous is not null) view.ClearValue(Border.StrokeProperty);
-        }
+        Props.SetBrush(view, Border.StrokeProperty, previous?.Stroke, next.Stroke);
         Props.Set(view, Border.StrokeThicknessProperty, previous?.StrokeThickness, next.StrokeThickness);
         Props.Set(view, Border.PaddingProperty, previous?.Padding, next.Padding);
         if (previous is null || previous.CornerRadius != next.CornerRadius)
