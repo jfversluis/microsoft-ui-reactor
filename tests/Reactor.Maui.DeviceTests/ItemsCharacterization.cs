@@ -6,7 +6,7 @@ using static Reactor.Maui.DeviceTests.FixtureContext;
 namespace Reactor.Maui.DeviceTests;
 
 /// <summary>Platform readback for the spec 070 §3 fixtures (collections, radio buttons, swipe views, spans).</summary>
-public static class ItemsPlatform
+public static partial class ItemsPlatform
 {
     private static object? Native(IView view) => view.Handler?.PlatformView;
 
