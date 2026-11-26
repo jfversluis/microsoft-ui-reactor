@@ -75,6 +75,7 @@ internal sealed class ScrollBridge
     private readonly bool _observesFinishes;
     private TaskCompletionSource<bool>? _request;
     private Point _target;
+    private ScrollOrientation _axes;
     private int _expectedFinishes;
     private bool _dispatching;
     private ScrollToRequestedEventArgs? _parkedForReplay;
@@ -113,6 +114,9 @@ internal sealed class ScrollBridge
         var request = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _request = request;
         _target = target;
+        // The axes the request scrolls on, kept for every check: an orientation changed while it runs
+        // (to Neither, say) must not make an unreached target count as reached.
+        var axes = _axes = _scrollView.Orientation;
         // The bridge only dispatches what is ready, so MAUI sends it to the handler at once. Counted
         // first: UIKit ends an interrupted animation (an earlier request's finish) inside the dispatch.
         var expectedBefore = _expectedFinishes;
@@ -142,7 +146,7 @@ internal sealed class ScrollBridge
         {
             if (!ReferenceEquals(_request, request)) return;
             _request = null;
-            request.TrySetResult(Matches(_scrollView, target));
+            request.TrySetResult(Matches(_scrollView, target, axes));
         });
         if (!_observesFinishes)
         {
@@ -151,7 +155,7 @@ internal sealed class ScrollBridge
             {
                 if (!ReferenceEquals(_request, request)) return;
                 _request = null;
-                request.TrySetResult(Matches(_scrollView, target));
+                request.TrySetResult(Matches(_scrollView, target, axes));
             }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
         return request.Task;
@@ -204,7 +208,7 @@ internal sealed class ScrollBridge
         _parkedForGeometry = null;
         if (_expectedFinishes > 0) _expectedFinishes--;
         if (_request is not { } request) return;
-        if (Matches(_scrollView, _target))
+        if (Matches(_scrollView, _target, _axes))
         {
             _request = null;
             request.TrySetResult(true);
@@ -246,11 +250,11 @@ internal sealed class ScrollBridge
     /// Whether the scroll position is at <paramref name="target"/> within one device pixel on each
     /// scrollable axis, or as far toward it as the content allows.
     /// </summary>
-    internal static bool Matches(MauiScrollView scrollView, Point target)
+    internal static bool Matches(MauiScrollView scrollView, Point target, ScrollOrientation axes)
     {
         var pixel = PixelInDips(scrollView);
-        var vertical = scrollView.Orientation is ScrollOrientation.Vertical or ScrollOrientation.Both;
-        var horizontal = scrollView.Orientation is ScrollOrientation.Horizontal or ScrollOrientation.Both;
+        var vertical = axes is ScrollOrientation.Vertical or ScrollOrientation.Both;
+        var horizontal = axes is ScrollOrientation.Horizontal or ScrollOrientation.Both;
         return (!vertical || AxisMatches(scrollView, scrollView.ScrollY, target.Y, pixel, verticalAxis: true))
             && (!horizontal || AxisMatches(scrollView, scrollView.ScrollX, target.X, pixel, verticalAxis: false));
     }

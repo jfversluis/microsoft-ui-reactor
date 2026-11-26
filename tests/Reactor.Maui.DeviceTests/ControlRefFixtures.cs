@@ -443,14 +443,23 @@ public static partial class Fixtures
         var interrupted = scroll.ScrollToAsync(far, ScrollToPosition.Start, true);
         await Task.Delay(100);
         var how = await RefPlatform.InterruptScroll(scroll);
-        await c.WaitFor(() => interrupted.IsCompleted, "the interrupted scroll to complete", (int)bound.TotalMilliseconds + 2000);
+        // The offset is read on the UI thread in the first check that sees the task complete, before
+        // anything else can move the scroll view.
+        var at = double.NaN;
+        await c.WaitFor(() =>
+        {
+            if (!interrupted.IsCompleted) return false;
+            at = RefPlatform.ScrollOffset(scroll).Y;
+            return true;
+        }, "the interrupted scroll to complete", (int)bound.TotalMilliseconds + 2000);
         var elapsed = clock.ElapsedMilliseconds;
         var result = await interrupted;
-        var at = RefPlatform.ScrollOffset(scroll).Y;
         var target = RefPlatform.ContentY(scroll, far.Current!);
-        Note($"[{renderer}] interrupted through {how}: {scroll.FinishCount - finishes} finish(es), {(result ? "true" : "false")} after {elapsed} ms at {at:0} (target {target:0})");
-        Equal(Math.Abs(at - target) <= 1, result, "the result says whether the scroll view is at the target");
         await c.Settle(300);
+        var settled = RefPlatform.ScrollOffset(scroll).Y;
+        Note($"[{renderer}] interrupted through {how}: {scroll.FinishCount - finishes} finish(es), {(result ? "true" : "false")} after {elapsed} ms at {at:0} (target {target:0}), {settled:0} after settling");
+        Equal(Math.Abs(at - target) <= 1, result, "the result says whether the scroll view is at the target");
+        Close(at, settled, "nothing moved the scroll view after it completed (no fling)");
     }
 
     // ── RefreshView ─────────────────────────────────────────────────────────

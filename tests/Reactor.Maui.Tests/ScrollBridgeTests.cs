@@ -475,6 +475,33 @@ public class ScrollBridgeProtocolTests
     }
 
     [Fact]
+    public async Task AnOrientationChangedWhileARequestRuns_DoesntConfirmAnUnreachedTarget()
+    {
+        var (_, scroll, _) = Mount();
+        var delayed = new List<Action>();
+        ScrollBridge.DelayOverride.Value = (_, action) => delayed.Add(action);
+        try
+        {
+            var atTheBound = Request(scroll, 900);
+            scroll.SetScrolledPosition(0, 250);
+            scroll.Orientation = ScrollOrientation.Neither;
+            delayed[^1]();
+            Assert.False(await Completed(atTheBound), "settled by the bound on the axes it was requested on");
+
+            // A fresh scroll view: the first request's finish is still counted on this one.
+            var (_, other, _) = Mount();
+            var atAFinish = Request(other, 900);
+            other.Orientation = ScrollOrientation.Horizontal;
+            Finish(other, 250);
+            Assert.False(await Completed(atAFinish), "settled by a finish on the axes it was requested on");
+        }
+        finally
+        {
+            ScrollBridge.DelayOverride.Value = static (_, _) => { };
+        }
+    }
+
+    [Fact]
     public async Task ALateFinish_AfterItsRequestSettledByTheBound_DoesntSettleTheNextRequest()
     {
         var (_, scroll, _) = Mount();

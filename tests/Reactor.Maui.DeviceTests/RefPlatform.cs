@@ -223,8 +223,14 @@ public static class RefPlatform
                     Send(Android.Views.MotionEventActions.Move, 400 + i * 30, time + i * 16);
                     await Task.Delay(16);
                 }
-                Send(Android.Views.MotionEventActions.Up, 550, time + 6 * 16);
-                return "a dispatched touch drag";
+                // Held still before lifting, so the velocity at the lift is zero and no fling starts.
+                for (var i = 6; i <= 12; i++)
+                {
+                    Send(Android.Views.MotionEventActions.Move, 550, time + i * 16);
+                    await Task.Delay(16);
+                }
+                Send(Android.Views.MotionEventActions.Up, 550, time + 13 * 16);
+                return "a dispatched touch drag, held before the lift";
 #endif
             default:
                 throw new CheckFailedException("no platform scroll view");
