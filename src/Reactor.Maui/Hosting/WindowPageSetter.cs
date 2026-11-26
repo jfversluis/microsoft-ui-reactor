@@ -63,7 +63,7 @@ internal sealed class WindowPageSetter(Window window, Action<Exception> onError)
         }
     }
 
-    private static INativeStack? FindRunning(Page? page) => page switch
+    internal static INativeStack? FindRunning(Page? page) => page switch
     {
         ReactorNavigationPage { Navigator: { IsIdle: false } navigator } => navigator,
         ReactorShell shell => shell.Navigators.FirstOrDefault(n => !n.IsIdle),

@@ -24,6 +24,7 @@ public class ReactorWindow : Window
     private readonly ReactorRoot _root;
     private readonly WindowPageSetter _pages;
     private ContentPage? _viewHost;
+    private List<Exception>? _destroyingErrors;
 
     public ReactorWindow(Element root, ElementHandlerRegistry? registry = null)
     {
@@ -31,12 +32,46 @@ public class ReactorWindow : Window
         _root = new ReactorRoot(registry ?? MauiHandlers.CreateRegistry(), new MauiRenderScheduler(Dispatcher), SetRootNative);
         _pages = new WindowPageSetter(this, _root.ReportHostError);
         Render(root);
-        Destroying += (_, _) =>
+    }
+
+    internal ReactorRoot Root => _root;
+
+    /// <summary>
+    /// Unmounts the tree, running every effect cleanup. MAUI calls this after the <c>Destroying</c>
+    /// event's handlers, so <c>UseWindowLifecycle</c>'s <c>onDestroying</c> runs while the tree is
+    /// still mounted (spec 069 §5.4). Errors those callbacks threw are reported after the teardown.
+    /// </summary>
+    protected override void OnDestroying()
+    {
+        base.OnDestroying();
+        Exception? teardown = null;
+        try
         {
             _root.Unmount();
+        }
+        catch (Exception ex)
+        {
+            // Unmount rethrows cleanup errors when nothing handles UnhandledException.
+            teardown = ex;
+        }
+        finally
+        {
             _pages.Cancel();
-        };
+        }
+
+        var held = _destroyingErrors;
+        _destroyingErrors = null;
+        if (held is null)
+        {
+            if (teardown is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(teardown).Throw();
+            return;
+        }
+        if (teardown is not null) held.Add(teardown);
+        _root.ReportUnhandled(held.Count == 1 ? held[0] : new AggregateException("Callbacks failed while the window was being destroyed.", held));
     }
+
+    /// <summary>Holds an <c>onDestroying</c> callback's error until the tree has been unmounted.</summary>
+    internal void HoldDestroyingError(Exception error) => (_destroyingErrors ??= []).Add(error);
 
     /// <summary>Raised for errors no error boundary caught, after the tree has been unmounted.</summary>
     public event Action<Exception>? UnhandledException
@@ -55,7 +90,7 @@ public class ReactorWindow : Window
             _pages.Set(page);
             return;
         }
-        _viewHost ??= new ContentPage();
+        _viewHost ??= new ReactorContentPage { BackRoot = _root };
         _viewHost.Content = native is null ? null : Props.AsView(native);
         _pages.Set(_viewHost);
     }
@@ -96,6 +131,9 @@ public class ReactorPage : ContentPage
 
     /// <summary>Re-renders the page with a new root element, keeping the state of everything that still matches.</summary>
     public void Render(Element root) => _root.Render(MauiContexts.Page.Provide(this, root));
+
+    /// <summary>The system back key asks the tree's <c>UseSystemBackButton</c> handlers first (spec 069 §5.2).</summary>
+    protected override bool OnBackButtonPressed() => SystemBack.Handle(this, _root, base.OnBackButtonPressed);
 
     /// <summary>
     /// Unmounts the tree and runs every effect cleanup. Call it when the page is discarded for good,

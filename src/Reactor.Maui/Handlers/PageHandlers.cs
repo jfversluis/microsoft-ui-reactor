@@ -1,12 +1,32 @@
 using Microsoft.UI.Reactor.Hosting;
+using Microsoft.UI.Reactor.Maui.Hosting;
 
 namespace Microsoft.UI.Reactor.Maui.Handlers;
 
+/// <summary>
+/// The <see cref="ContentPage"/> of a <c>Page(…)</c> (and a <c>ReactorWindow</c>'s view host): the
+/// system back key asks the tree's <c>UseSystemBackButton</c> handlers first (spec 069 §5.2).
+/// </summary>
+internal sealed class ReactorContentPage : ContentPage
+{
+    /// <summary>The tree the page belongs to.</summary>
+    public ReactorRoot? BackRoot;
+
+    protected override bool OnBackButtonPressed() => SystemBack.Handle(this, BackRoot, base.OnBackButtonPressed);
+}
+
 internal sealed class PageHandler : Reactor.Hosting.IElementHandler<PageElement, ContentPage>
 {
+    /// <summary>
+    /// Whether <see cref="PageElement.ModalPresentationStyle"/> reaches MAUI. Not on Mac Catalyst: there
+    /// MAUI's dismissal of a sheet-style modal never completes (Mac Catalyst 26.7), which blocks every
+    /// later modal of the window, so modals stay full screen (spec 069 §5.6).
+    /// </summary>
+    internal static readonly bool WritesModalPresentationStyle = !OperatingSystem.IsMacCatalyst();
+
     public ContentPage Mount(HandlerContext<PageElement> context, PageElement element)
     {
-        var page = new ContentPage();
+        var page = new ReactorContentPage { BackRoot = context.Node.Root };
         if (element.AutomationId is { } automationId) page.AutomationId = automationId;
         page.Appearing += (_, _) => context.Live?.OnAppearing?.Invoke();
         // A page the app removes is unmounted before the platform pops it, so its Disappearing
@@ -32,6 +52,12 @@ internal sealed class PageHandler : Reactor.Hosting.IElementHandler<PageElement,
         Props.Set(page, Shell.TabBarIsVisibleProperty, previous?.TabBarIsVisible, next.TabBarIsVisible);
         Props.SetRef(page, Shell.SearchHandlerProperty, previous?.SearchHandler, next.SearchHandler);
         Props.Set(page, Shell.PresentationModeProperty, previous?.PresentationMode, next.PresentationMode);
+        // Read by iOS when the page is presented modally, so it is written at mount, before any presentation.
+        if (WritesModalPresentationStyle)
+        {
+            Props.Set(page, Microsoft.Maui.Controls.PlatformConfiguration.iOSSpecific.Page.ModalPresentationStyleProperty,
+                previous?.ModalPresentationStyle, next.ModalPresentationStyle);
+        }
         if (!Equals(previous?.BackButtonBehavior, next.BackButtonBehavior))
         {
             if (next.BackButtonBehavior is { } back)
@@ -403,6 +429,9 @@ internal sealed class ReactorNavigationPage : NavigationPage
     /// <summary>Set while a <c>NavigationHost</c> renders this stack.</summary>
     public Microsoft.UI.Reactor.Navigation.NavigationHostBinding? HostBinding;
 
+    /// <summary>The tree the page belongs to.</summary>
+    public ReactorRoot? BackRoot;
+
     public ReactorNavigationPage() => Popped += (_, e) => ReportPopped?.Invoke(e.Page);
 
     /// <summary>
@@ -411,7 +440,9 @@ internal sealed class ReactorNavigationPage : NavigationPage
     /// pops the page as well; at the root it is passed on (spec 069 §2.4). A nested page that handles
     /// the key itself goes first, as in <see cref="NavigationPage"/>.
     /// </summary>
-    protected override bool OnBackButtonPressed()
+    protected override bool OnBackButtonPressed() => SystemBack.Handle(this, BackRoot, PassOnBack);
+
+    private bool PassOnBack()
     {
         if (HostBinding is not { } binding) return base.OnBackButtonPressed();
         if (CurrentPage?.SendBackButtonPressed() == true) return true;
@@ -423,7 +454,7 @@ internal sealed class NavigationStackHandler : Reactor.Hosting.IElementHandler<N
 {
     public ReactorNavigationPage Mount(HandlerContext<NavigationStackElement> context, NavigationStackElement element)
     {
-        var page = new ReactorNavigationPage();
+        var page = new ReactorNavigationPage { BackRoot = context.Node.Root };
         var navigator = page.Navigator = new StackNavigator(page) { OnError = context.ReportError };
         page.ReportPopped = popped =>
         {
@@ -512,13 +543,18 @@ internal sealed class NavigationStackHandler : Reactor.Hosting.IElementHandler<N
 internal sealed class ReactorTabbedPage : TabbedPage
 {
     public bool Syncing;
+
+    /// <summary>The tree the page belongs to.</summary>
+    public ReactorRoot? BackRoot;
+
+    protected override bool OnBackButtonPressed() => SystemBack.Handle(this, BackRoot, base.OnBackButtonPressed);
 }
 
 internal sealed class TabsHandler : Reactor.Hosting.IElementHandler<TabsElement, ReactorTabbedPage>
 {
     public ReactorTabbedPage Mount(HandlerContext<TabsElement> context, TabsElement element)
     {
-        var tabs = new ReactorTabbedPage();
+        var tabs = new ReactorTabbedPage { BackRoot = context.Node.Root };
         tabs.CurrentPageChanged += (_, _) =>
         {
             if (tabs.Syncing || context.IsEchoing(tabs)) return;
@@ -582,13 +618,18 @@ internal sealed class TabsHandler : Reactor.Hosting.IElementHandler<TabsElement,
 internal sealed class ReactorFlyoutPage : FlyoutPage
 {
     public bool Syncing;
+
+    /// <summary>The tree the page belongs to.</summary>
+    public ReactorRoot? BackRoot;
+
+    protected override bool OnBackButtonPressed() => SystemBack.Handle(this, BackRoot, base.OnBackButtonPressed);
 }
 
 internal sealed class FlyoutHandler : Reactor.Hosting.IElementHandler<FlyoutElement, ReactorFlyoutPage>
 {
     public ReactorFlyoutPage Mount(HandlerContext<FlyoutElement> context, FlyoutElement element)
     {
-        var flyout = new ReactorFlyoutPage();
+        var flyout = new ReactorFlyoutPage { BackRoot = context.Node.Root };
         flyout.IsPresentedChanged += (_, _) =>
         {
             if (flyout.Syncing || context.IsEchoing(flyout)) return;

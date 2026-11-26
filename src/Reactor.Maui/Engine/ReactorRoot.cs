@@ -545,6 +545,8 @@ public sealed class ReactorRoot
         node.Subscriptions = null;
         ReactorElement? rendered;
         var pushed = PushProviders(node);
+        var outer = _owner.Rendering;
+        _owner.Rendering = node;
         try
         {
             var host = new KernelHost();
@@ -558,6 +560,7 @@ public sealed class ReactorRoot
         }
         finally
         {
+            _owner.Rendering = outer;
             if (pushed > 0) _contextScope.Pop(pushed);
         }
 
@@ -896,6 +899,19 @@ public sealed class ReactorRoot
     /// like an error that escaped every boundary: the tree is unmounted, then the error is reported.
     /// </summary>
     internal void ReportHostError(Exception error) => FailRoot(error);
+
+    /// <summary>
+    /// Reports an error that is not a render failure and leaves the tree as it is: to
+    /// <see cref="UnhandledException"/>, or rethrown without a handler.
+    /// </summary>
+    internal void ReportUnhandled(Exception error)
+    {
+        if (UnhandledException is { } handler) handler(error);
+        else System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
+    }
+
+    /// <summary>The root this tree belongs to: a child root's (a list cell's) is its owner's.</summary>
+    internal ReactorRoot TopRoot => ContextParent is { } owner ? owner.Root.TopRoot : this;
 
     /// <summary>An error escaped every boundary: unmount the whole tree, then report it.</summary>
     private void FailRoot(Exception error)

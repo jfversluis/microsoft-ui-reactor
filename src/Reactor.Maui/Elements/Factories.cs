@@ -155,6 +155,21 @@ public static class Factories
         return CoreFactories.Component<Navigation.NavigationHostComponent<TRoute>, Navigation.NavigationHostProps<TRoute>>(new(nav, routeMap, stack));
     }
 
+    // ── Dialogs (spec 069 §5.1) ──
+
+    /// <summary>A declarative one-button alert. Open it with <c>with { IsOpen = …, OnClosed = … }</c>.</summary>
+    public static AlertElement Alert(string title, string? message, string close) => new(title, message, null, close);
+
+    /// <summary>A declarative two-button alert; <c>OnClosed</c> receives true for <paramref name="accept"/>.</summary>
+    public static AlertElement Alert(string title, string? message, string accept, string cancel) => new(title, message, accept, cancel);
+
+    /// <summary>A declarative action sheet; <c>OnClosed</c> receives the button chosen, or null.</summary>
+    public static ActionSheetElement ActionSheet(string? title, string? cancel, string? destruction, params string[] buttons) =>
+        new(title, cancel, destruction, buttons);
+
+    /// <summary>A declarative prompt for one line of text; <c>OnClosed</c> receives the text, or null when cancelled.</summary>
+    public static PromptElement Prompt(string title, string? message) => new(title, message);
+
     public static TabsElement Tabs(int selectedIndex, Action<int>? onSelectedIndexChanged, params Element?[] pages) =>
         new(pages, selectedIndex, onSelectedIndexChanged);
 

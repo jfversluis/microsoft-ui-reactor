@@ -268,7 +268,7 @@ public class ShellTests
         var section = shell.CurrentItem.CurrentItem;
         Assert.Equal("home", ShellNatives.GetKey(section));
         Assert.Equal(FlyoutBehavior.Disabled, shell.FlyoutBehavior);
-        var home = Assert.IsType<ContentPage>(section.CurrentItem.Content);
+        var home = Assert.IsType<ContentPage>(section.CurrentItem.Content, exactMatch: false);
         ((IButtonController)Assert.IsType<Button>(home.Content)).SendClicked();
         host.Scheduler.Drain();
 

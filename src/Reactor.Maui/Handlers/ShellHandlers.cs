@@ -125,7 +125,12 @@ internal sealed class ReactorShell : Shell
         }
     }
 
-    protected override bool OnBackButtonPressed()
+    /// <summary>The tree the Shell belongs to.</summary>
+    internal ReactorRoot? BackRoot;
+
+    protected override bool OnBackButtonPressed() => Hosting.SystemBack.Handle(this, BackRoot, PassOnBack);
+
+    private bool PassOnBack()
     {
         if (BackKeyIsModelBack && CurrentItem?.CurrentItem is { } section && section.Navigation.ModalStack.Count == 0
             && ShellNatives.GetNavigator(section) is { } navigator)
@@ -311,7 +316,7 @@ internal sealed class ShellHandler : Reactor.Hosting.IElementHandler<ShellElemen
 {
     public ReactorShell Mount(HandlerContext<ShellElement> context, ShellElement element)
     {
-        var shell = new ReactorShell { Declared = element.Selected };
+        var shell = new ReactorShell { Declared = element.Selected, BackRoot = context.Node.Root };
         var node = context.Node;
         shell.ReportSelected = key =>
         {

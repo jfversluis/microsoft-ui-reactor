@@ -44,6 +44,25 @@ public abstract class Component : ReactorComponent
     /// <summary>The size of the window the tree is shown in, or (0, 0) before it is known.</summary>
     protected Size UseWindowSize() => Context.UseWindowSize();
 
+    /// <summary>MAUI's page dialogs for this component's window, stable across renders.</summary>
+    protected Maui.Dialogs UseDialogs() => Context.UseDialogs();
+
+    /// <summary>Registers a handler for the system back key; return true when it handled the back.</summary>
+    protected void UseSystemBackButton(Func<bool> onBack) => Context.UseSystemBackButton(onBack);
+
+    /// <summary>The system back key goes back in <paramref name="nav"/> whenever it can go back.</summary>
+    protected void UseSystemBackButton<TRoute>(Navigation.NavigationHandle<TRoute> nav) where TRoute : notnull
+        => Context.UseSystemBackButton(nav);
+
+    /// <summary>Subscribes to the window's lifecycle events while this component is mounted.</summary>
+    protected void UseWindowLifecycle(
+        Action? onActivated = null,
+        Action? onDeactivated = null,
+        Action? onStopped = null,
+        Action? onResumed = null,
+        Action? onDestroying = null)
+        => Context.UseWindowLifecycle(onActivated, onDeactivated, onStopped, onResumed, onDestroying);
+
     protected RouteStack<T> UseRouteStack<T>(T root)
         => Context.UseRouteStack(root);
 
