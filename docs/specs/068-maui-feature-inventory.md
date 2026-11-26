@@ -43,19 +43,19 @@ their sources. It sets the order in §4.
 | BoxView, CheckBox, SearchBar, Switch | 🧪 | descriptors (3e). Mount and echo are tested; updating and clearing their other properties (colors, placeholder, corner radius) is not |
 | Button, Slider, Stepper | ✅ | |
 | Entry | ✅ | spec 070 §2.8 (4c-1): `CursorPosition` and `SelectionLength` with WinUI's semantics (written when the declaration changes, never restored) and WinUI's `OnSelectionChanged(selectedText, cursor, length)`, reported once per change from the platform's selection, on both registries; return type set, updated and cleared. Selection isn't controlled: a gate decision for WinUI parity (no port needs a controlled caret). Evidence: headless `EntrySelectionTests`, device `Entry_Selection_*` (with the per-platform characterization) and `Entry_ReturnType_*` |
-| RadioButton | 🟡 | text content only. Templated RadioButtons with view content (WeatherTwentyOne, PointOfSale) in 4c |
+| RadioButton | ✅ | spec 070 §3.6 (4c-2): WinUI's `ContentElement` with MAUI's default template or a content-only one (`IsIndicatorVisible = false`), the checked look rendered from state; the text as accessible name, else a one-time warning asking for `.Semantics(description: …)`. Groups are Reactor's on both registries (MAUI's search misses peers in direct layouts): named per page, unnamed per layout; a tap settles the native group before any callback and reports the peers' unchecks first; checks from inside a callback run on the next turn (MAUI delays nested writes); conflicting declarations shown as declared, with a warning. Evidence: headless `RadioContentTests`, `RadioGroupTests`, `RadioTransactionTests`, `RadioConflictTests`; device `Gate_RadioButton_*`, `RadioButton_*` |
 | ActivityIndicator, ProgressBar | 🧪 | descriptors; headless tests only, no device fixture |
 | DatePicker, TimePicker | 🧪 | device fixtures only, no headless tests |
-| Label | 🟡 | no `FormattedText` spans (4c; PointOfSale uses 24) |
-| Picker | 🟡 | no item display binding (4c) |
+| Label | ✅ | spec 070 §3.9 (4c-2): `Label(Run(…), Hyperlink(…))`, WinUI's inline types with MAUI's property names (font, colors, decorations, line height, transform), spans updated in place, hyperlinks underlined and invoking only while current; the direct registry falls back to the Controls label. Evidence: headless `LabelInlineTests`, device `Label_Spans_Platform` (platform attributes and a hit-tested tap, with negative controls) |
+| Picker | ✅ | spec 070 §3.8 (4c-2): `Picker(items, display, index, …)` computes a text per item; the selection stays an index. Evidence: headless `PickerDisplayTests`, device `Picker_ItemDisplay` |
 | Image, ImageButton | 🧪 | font and stream sources compare by reference, so a new instance per render reloads the image (4c: value equality) |
 | WebView | ✅ | spec 070 §2.7 (4c-1): `OnNavigating` (cancel; not exactly once on Android), `OnNavigated` with MAUI's `WebNavigatedEventArgs` and its result, posted so `CanGoBack` is current; `Reload`, `GoBack`, `GoForward`, `EvaluateJavaScriptAsync` through a ref; `Url` is the requested source, loaded when it changes. Evidence: headless `WebViewTests`, device `WebView_*` with bundled pages on all three platforms |
 | GraphicsView, Border | 🧪 | |
-| CollectionView | 🟡 | keyed items, item templates, cell recycling, context and selection are tested. Header, footer, empty view, remaining-items threshold, grid and horizontal layouts, `ItemSpacing` and `ItemSizingStrategy` exist but are untested (4c; layouts and spacing are used by 3 ports). Grouping is missing (4c; no port). Item rendering must be able to show the selection state, which replaces the `Selected` visual state (4c) |
-| CarouselView | 🧪 | position, `Loop`, `PeekAreaInsets` and `ItemSpacing` exist, all untested; its position echo isn't characterized (spec 067 §14) |
-| SwipeView | 🟡 | left and right items of text and icon only. Missing: top and bottom items, custom item views, `SwipeMode`, `Threshold`, opening and closing from code (4c) |
+| CollectionView | 🟡 | spec 070 §3.3–3.4 (4c-2): layouts, spacing, sizing, header, footer, empty view and threshold tested on devices; `ItemState` in templates (the declared selection, with the platform highlight off) replaces the `Selected` visual state; grouping with list-wide keys; `ScrollToKey`; selection reports from the event, key-set comparison, and a native selection verification on iOS and Mac Catalyst behind MAUI's deferred batch updates. Evidence: headless `ItemStateTests`, `CollectionSelectionTests`, `NativeSelectionVerificationTests`, `CollectionViewFeatureTests`; device `Gate_CollectionView_*`, `CollectionView_*`. Gaps no port needs: reordering (`CanReorderItems`, `ReorderCompleted`), `Scrolled`, `ItemsUpdatingScrollMode` |
+| CarouselView | 🧪 | position, `Loop`, `PeekAreaInsets` and `ItemSpacing` exist, all untested; its position echo isn't characterized (spec 067 §14). Moved to 4c-4 (spec 070 §5): its design review found the position echo needs more than 4c-2's scope (never write or report during a drag, no provenance guessing) |
+| SwipeView | 🟡 | spec 070 §3.5 (4c-2): WinUI's `SwipeItemData` (was `SwipeAction`) on four sides with their modes, content items, `Threshold`, the swipe events, items rebuilt only when their structure changes and invoking only while current; opening and closing through a ref with MAUI's `Open`/`Close`. Evidence: headless `SwipeViewTests`; device `SwipeView_*` (open, close, Reveal and Execute around the threshold). Gap no port needs: `SwipeBehaviorOnInvoked` (per side in MAUI, per item in WinUI) |
 | ScrollView, RefreshView | ✅ | spec 070 §2.6 (4c-1): scrolling from code through a ref, and `ScrollToAsync(ElementRef<T>, …)` to an element in Controls or direct layouts (MAUI's own position math, a confirmed-completion task); orientation and scroll bars; RefreshView's user refresh reported once and a refusal restored. Evidence: headless `ScrollBridgeTests`, `ScrollAndRefreshTests`, device `ScrollView_*` (equivalent trees with UIKit insets) and `RefreshView_*` (a real pull on Android, the refresh control on iOS and Mac Catalyst) |
-| IndicatorView | ⬜ 4c | paired with CarouselView; no port |
+| IndicatorView | ⬜ 4c-4 | paired with CarouselView; no port. `IndicatorTemplate`: proposed exclusion (render a row of elements from the count and position) |
 | ContentView | ⬜ 4c | as a plain single-child container |
 | Shapes (Ellipse, Line, Path, Polygon, Polyline, Rectangle, RoundRectangle) | ⬜ 4c | WeatherTwentyOne uses `Ellipse` |
 | Brushes (linear and radial gradients) as backgrounds and strokes | ⬜ 4c | `.Background` takes a `Brush` already; gradient factories are missing (1 port). WinUI has none either |
@@ -98,10 +98,11 @@ their sources. It sets the order in §4.
 | Opacity, Shadow, Clip, Rotation, Scale, Translation, ZIndex | 🧪 | modifiers. Opacity has a headless test, the rest none; they need device geometry checks |
 | Flow direction (right-to-left) | ⬜ 4d | no modifier; the direct view hard-codes `MatchParent` |
 | Animations | ⬜ 4d | 5 of 7 ports animate, mostly with explicit `FadeTo`, `TranslateTo`, `RotateTo` and `ScaleTo`. WinUI's names and meanings (spec 014): implicit `.Animate(curve)`, enter and exit `.Transition(...)`, explicit `WithAnimation(curve, ...)`. The `Curve` and `Transition` types move to the shared core if they're framework-neutral |
-| VisualStateManager | ⛔ | state drives the element; Controls views keep their own visual states. The ports' states map to: `Checked` and `Selected` → props from state (templated RadioButton and CollectionView selection, 4c); `PointerOver` → pointer events (4e); `AcceptDrop` → drag and drop (4e); `AdaptiveTrigger` → `UseWindowSize` |
+| VisualStateManager | ⛔ | state drives the element; Controls views keep their own visual states. The ports' states map to: `Checked` and `Selected` → props from state (a radio button's content and `ItemState` in item templates, spec 070 §3.3 and §3.6); `PointerOver` → pointer events (4e); `AcceptDrop` → drag and drop (4e); `AdaptiveTrigger` → `UseWindowSize` |
 | Triggers (`Trigger`, `DataTrigger`, `EventTrigger`) and trigger actions | ⛔ | a `DataTrigger` is a conditional prop; an `EventTrigger` on `Appearing` is `OnAppearing` plus an animation (4d); a style trigger on a Shell item's `IsChecked` is that item's selected state (4b) |
 | `ControlTemplate`, `ContentPresenter` | ⛔ | components are the templates |
 | Data binding (`BindingContext`, compiled bindings) | ⛔ | state and props replace it |
+| `RadioButtonGroup` attached properties (`GroupName`, `SelectedValue` on a layout) | ⛔ | Reactor groups radio buttons itself (spec 070 §3.6): `GroupName` on each button, the selection in state |
 | `DataTemplateSelector`, `BindableLayout` | ⛔ | an item-render function chooses per item; `ForEach` renders a list into any layout |
 | Effects | ⛔ | legacy in MAUI (handlers replace them); `.Set` and descriptors reach the native view |
 
@@ -177,7 +178,8 @@ The order follows the ports: what blocks the most of them lands first.
      Picker display;
    - tests for every 🧪 control and layout, and the §1 audit of every ✅ row;
    - CollectionView grouping, IndicatorView, CarouselView tests, gradient brushes, ContentView, image
-     source equality.
+     source equality. (CarouselView and IndicatorView moved to a sub-phase of their own, 4c-4: spec
+     070 §5.)
 4. **4d**: look: animations, the theme value (`ThemeRef`-style), styling direct views, flow
    direction, `AutomationProperties`, and tests for every 🧪 modifier.
 5. **4e**: desktop interaction: pinch, pointer, drag and drop, context menus, MenuBar, tooltips,

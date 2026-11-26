@@ -3,7 +3,6 @@ using MauiBoxView = Microsoft.Maui.Controls.BoxView;
 using MauiCheckBox = Microsoft.Maui.Controls.CheckBox;
 using MauiEditor = Microsoft.Maui.Controls.Editor;
 using MauiProgressBar = Microsoft.Maui.Controls.ProgressBar;
-using MauiRadioButton = Microsoft.Maui.Controls.RadioButton;
 using MauiSearchBar = Microsoft.Maui.Controls.SearchBar;
 using MauiSwitch = Microsoft.Maui.Controls.Switch;
 
@@ -47,18 +46,6 @@ internal static class ControlDescriptors
                 static (v, report) => v.Toggled += (_, e) => report(e.Value),
                 static e => e.OnToggled,
                 static v => v.IsToggled);
-
-    public static ControlDescriptor<RadioButtonElement, MauiRadioButton> RadioButton() =>
-        ControlDescriptor.Create<RadioButtonElement, MauiRadioButton>()
-            .OneWay(static e => e.Content, static (v, content) => v.Content = content)
-            .TextProperties()
-            .Property(MauiRadioButton.GroupNameProperty, static e => e.GroupName)
-            .Controlled(
-                static e => e.IsChecked,
-                static (v, isChecked) => v.IsChecked = isChecked,
-                static (v, report) => v.CheckedChanged += (_, e) => report(e.Value),
-                static e => e.OnCheckedChanged,
-                static v => v.IsChecked);
 
     public static ControlDescriptor<EditorElement, MauiEditor> Editor() =>
         ControlDescriptor.Create<EditorElement, MauiEditor>()

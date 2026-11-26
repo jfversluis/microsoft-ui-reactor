@@ -17,7 +17,7 @@ public static class DirectHandlers
 {
     public static ElementHandlerRegistry CreateRegistry() => MauiHandlers.CreateRegistry()
         .Register(Hybrid(new LabelHandler(), new ControlsHandlers.LabelHandler(),
-            static e => e.LineBreakMode is not null || e.MaxLines is not null || e.TextType is not null || e.TextTransform is not null))
+            static e => e.LineBreakMode is not null || e.MaxLines is not null || e.TextType is not null || e.TextTransform is not null || e.Inlines is not null))
         .Register(Hybrid(new ButtonHandler(), new ControlsHandlers.ButtonHandler(), static e => e.ImageSource is not null))
         .Register(Hybrid(new EntryHandler(), new ControlsHandlers.EntryHandler(), static _ => false))
         .Register(Hybrid(new CheckBoxHandler(), ControlsHandlers.ControlDescriptors.CheckBox(), static _ => false))

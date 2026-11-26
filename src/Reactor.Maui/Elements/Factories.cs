@@ -39,6 +39,19 @@ public static class Factories
 
     public static LabelElement Label(string text) => new(text);
 
+    /// <summary>A label of formatted runs: <c>Label(Run("Total ").Bold(), Run(price), Hyperlink(" details", show))</c>.</summary>
+    public static LabelElement Label(params RichTextInline[] inlines) => new("") { Inlines = inlines };
+
+    /// <summary>A run of formatted text in a label (WinUI's <c>Run</c>).</summary>
+    public static RichTextRun Run(string text) => new(text);
+
+    /// <summary>Text in a label that runs <paramref name="onClick"/> when tapped (WinUI's <c>Hyperlink</c>).</summary>
+    public static RichTextHyperlink Hyperlink(string text, Action onClick)
+    {
+        ArgumentNullException.ThrowIfNull(onClick);
+        return new(text, onClick);
+    }
+
     /// <summary>An image from a file, an embedded resource name or an <c>http(s)</c> URL.</summary>
     public static ImageElement Image(string source) => new(ToImageSource(source));
 
@@ -86,12 +99,33 @@ public static class Factories
     public static PickerElement Picker(IReadOnlyList<string> items, int selectedIndex, Action<int>? onSelectedIndexChanged = null, string? title = null) =>
         new(items, selectedIndex, onSelectedIndexChanged) { Title = title };
 
+    /// <summary>
+    /// A picker over <paramref name="items"/>, each shown as <paramref name="display"/> returns. The
+    /// selection is an index, as in the string overload; the texts are compared, so a re-render with
+    /// the same texts changes nothing.
+    /// </summary>
+    public static PickerElement Picker<T>(IReadOnlyList<T> items, Func<T, string> display, int selectedIndex, Action<int>? onSelectedIndexChanged = null, string? title = null)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        ArgumentNullException.ThrowIfNull(display);
+        var texts = new string[items.Count];
+        for (var i = 0; i < texts.Length; i++) texts[i] = display(items[i]);
+        return new(texts, selectedIndex, onSelectedIndexChanged) { Title = title };
+    }
+
     public static DatePickerElement DatePicker(DateTime date, Action<DateTime>? onDateSelected = null) => new(date, onDateSelected);
 
     public static TimePickerElement TimePicker(TimeSpan time, Action<TimeSpan>? onTimeSelected = null) => new(time, onTimeSelected);
 
-    public static RadioButtonElement RadioButton(string content, bool isChecked, Action<bool>? onCheckedChanged = null, string? groupName = null) =>
-        new(content, isChecked, onCheckedChanged) { GroupName = groupName };
+    public static RadioButtonElement RadioButton(string content, bool isChecked, Action<bool>? onIsCheckedChanged = null, string? groupName = null) =>
+        new(content, isChecked, onIsCheckedChanged) { GroupName = groupName };
+
+    /// <summary>A radio button with declarative content (WinUI's shape); set its accessible name with <c>.Semantics(description: …)</c>.</summary>
+    public static RadioButtonElement RadioButton(Element content, bool isChecked, Action<bool>? onIsCheckedChanged = null, string? groupName = null)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        return new("", isChecked, onIsCheckedChanged) { GroupName = groupName, ContentElement = content };
+    }
 
     // ── Layout ──────────────────────────────────────────────────────────────
 
@@ -235,7 +269,49 @@ public static class Factories
 
     /// <summary>A virtualized list of <paramref name="items"/>, matched across renders by <paramref name="key"/>.</summary>
     public static CollectionViewElement CollectionView<T>(IReadOnlyList<T> items, Func<T, string> key, Func<T, Element?> itemTemplate) =>
-        new(new ItemsAdapter<T>(items), item => key((T)item!), item => itemTemplate((T)item!));
+        new(new ItemsAdapter<T>(items), item => key((T)item!), (item, _) => itemTemplate((T)item!));
+
+    /// <summary>
+    /// A virtualized list whose template also gets the item's <see cref="ItemState"/> (its declared
+    /// selection), to draw the selection itself; the platform's own selection highlight is turned off.
+    /// </summary>
+    public static CollectionViewElement CollectionView<T>(IReadOnlyList<T> items, Func<T, string> key, Func<T, ItemState, Element?> itemTemplate) =>
+        new(new ItemsAdapter<T>(items), item => key((T)item!), (item, state) => itemTemplate((T)item!, state)) { ShowsSelectionHighlight = false };
+
+    /// <summary>
+    /// A grouped virtualized list. <paramref name="groupKey"/> and <paramref name="key"/> match groups and
+    /// items across renders; item keys are unique across all groups.
+    /// </summary>
+    public static CollectionViewElement CollectionView<TGroup, T>(
+        IReadOnlyList<TGroup> groups, Func<TGroup, string> groupKey, Func<TGroup, IReadOnlyList<T>> groupItems,
+        Func<T, string> key, Func<T, Element?> itemTemplate,
+        Func<TGroup, Element?>? groupHeader = null, Func<TGroup, Element?>? groupFooter = null) =>
+        Grouped(groups, groupKey, groupItems, key, (item, _) => itemTemplate((T)item!), groupHeader, groupFooter);
+
+    /// <summary>A grouped list whose template gets the item's <see cref="ItemState"/>; the platform highlight is turned off.</summary>
+    public static CollectionViewElement CollectionView<TGroup, T>(
+        IReadOnlyList<TGroup> groups, Func<TGroup, string> groupKey, Func<TGroup, IReadOnlyList<T>> groupItems,
+        Func<T, string> key, Func<T, ItemState, Element?> itemTemplate,
+        Func<TGroup, Element?>? groupHeader = null, Func<TGroup, Element?>? groupFooter = null) =>
+        Grouped(groups, groupKey, groupItems, key, (item, state) => itemTemplate((T)item!, state), groupHeader, groupFooter)
+            with { ShowsSelectionHighlight = false };
+
+    private static CollectionViewElement Grouped<TGroup, T>(
+        IReadOnlyList<TGroup> groups, Func<TGroup, string> groupKey, Func<TGroup, IReadOnlyList<T>> groupItems,
+        Func<T, string> key, Func<object?, ItemState, Element?> template,
+        Func<TGroup, Element?>? groupHeader, Func<TGroup, Element?>? groupFooter)
+    {
+        ArgumentNullException.ThrowIfNull(groups);
+        var built = new ItemGroup[groups.Count];
+        for (var i = 0; i < built.Length; i++)
+            built[i] = new ItemGroup(groupKey(groups[i]), groups[i], new ItemsAdapter<T>(groupItems(groups[i])));
+        return new([], item => key((T)item!), template)
+        {
+            Groups = built,
+            GroupHeaderTemplate = groupHeader is null ? null : group => groupHeader((TGroup)group!),
+            GroupFooterTemplate = groupFooter is null ? null : group => groupFooter((TGroup)group!),
+        };
+    }
 
     public static CarouselViewElement CarouselView<T>(
         IReadOnlyList<T> items, Func<T, string> key, Func<T, Element?> itemTemplate, int position, Action<int>? onPositionChanged = null) =>

@@ -892,6 +892,8 @@ The gate's four points, on MAUI:
 
 Eight built-in Controls handlers are now descriptors (`ControlDescriptors`): `BoxView`,
 `ActivityIndicator`, `ProgressBar`, `CheckBox`, `Switch`, `RadioButton`, `Editor` and `SearchBar`.
+(Spec 070 §3.6 made `RadioButton` hand-written again in 4c-2: Reactor owns its groups, which a
+descriptor's single controlled value can't express.)
 Controls with coercion or several coupled values (`Entry`'s text and selection, `Slider`, `Stepper`,
 the pickers) stay hand-written for now. That is a MAUI decision: WinUI describes its slider, text box,
 number box and combo box declaratively (`CoercingOneWay`, `HandCodedControlled`), and a MAUI

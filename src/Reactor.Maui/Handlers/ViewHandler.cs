@@ -17,6 +17,7 @@ internal abstract class ViewHandler<TElement, TView> : Reactor.Hosting.IElementH
         var view = Create(context, element);
         Apply(context, view, null, element);
         ViewApplier.Apply(context, view, null, element.Modifiers);
+        AfterModifiers(context, view, element);
         return view;
     }
 
@@ -24,9 +25,16 @@ internal abstract class ViewHandler<TElement, TView> : Reactor.Hosting.IElementH
     {
         Apply(context, control, oldElement, newElement);
         ViewApplier.Apply(context, control, oldElement.Modifiers, newElement.Modifiers);
+        AfterModifiers(context, control, newElement);
     }
 
+    /// <summary>Runs after the shared modifiers are applied, for a value the control derives from both.</summary>
+    protected virtual void AfterModifiers(HandlerContext<TElement> context, TView view, TElement element) { }
+
     public virtual void Unmount(TView control) { }
+
+    /// <summary>Whether the new element can update the mounted view; <c>false</c> remounts it.</summary>
+    public virtual bool CanUpdate(TElement oldElement, TElement newElement) => true;
 
     public virtual IChildrenStrategy<TElement, TView>? Children => null;
 

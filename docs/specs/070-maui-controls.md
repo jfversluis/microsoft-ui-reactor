@@ -1,14 +1,15 @@
 # Spec 070: MAUI controls (phase 4c)
 
-Phase 4c closes the controls rows of spec 068's inventory. It lands in three gated PRs:
+Phase 4c closes the controls rows of spec 068's inventory. It lands in four gated PRs:
 
 | PR | Scope |
 |---|---|
 | 4c-1 | Element refs, and the imperative commands they enable: focusing, scrolling and WebView commands from code; cancelling a WebView navigation; `Entry` cursor and selection; tests for `ScrollView` and `RefreshView` |
-| 4c-2 | Collections and items: CollectionView layouts, spacing, sizing, header, footer, empty view, threshold, grouping and selection state in items; CarouselView and IndicatorView; SwipeView items and opening from code; Picker item display; RadioButton with view content; Label spans |
+| 4c-2 | Collections and items: CollectionView layouts, spacing, sizing, header, footer, empty view, threshold, grouping and selection state in items; SwipeView items and opening from code; Picker item display; RadioButton with view content and Reactor-owned groups; Label spans |
 | 4c-3 | Shapes, gradient brushes, ContentView, image source equality, tests for every remaining 🧪 control and layout, and the §1 audit of every ✅ row of spec 068 |
+| 4c-4 | CarouselView and IndicatorView (moved out of 4c-2 in its design review) |
 
-This spec details 4c-1 (§2). §3 and §4 are written when 4c-2 and 4c-3 start. The bar for each item
+This spec details 4c-1 (§2) and 4c-2 (§3). §4 and §5 are written when 4c-3 and 4c-4 start. The bar for each item
 is spec 068 §1.
 
 ## 1. Scope
@@ -20,9 +21,12 @@ is spec 068 §1.
   `Entry` return type tests; headless and device tests for `ScrollView`, `RefreshView` and `WebView`.
   Rows it closes in spec 068: Element refs, Focus and keyboard, Entry, ScrollView and RefreshView,
   WebView.
-- **4c-2, collections and items** (§3, later). It reuses 4c-1's refs for `CollectionView.ScrollTo`,
-  `CarouselView.ScrollTo` and `SwipeView.Open`/`Close`.
+- **4c-2, collections and items** (§3). It reuses 4c-1's refs for `CollectionView.ScrollTo` and
+  `SwipeView.Open`/`Close`.
 - **4c-3, shapes, brushes, ContentView, image equality, tests and the audit** (§4, later).
+- **4c-4, CarouselView and IndicatorView** (§5). Moved out of 4c-2 in its design review: the
+  carousel's position echo must never write or report during a drag and must not guess an
+  operation's provenance (§5 lists the requirements).
 
 ## 2. 4c-1: element refs and imperative commands
 
@@ -796,10 +800,30 @@ allocations +0.0–0.2%.
   and GPU processes (its own log: 6.4 s and 1.4 s), not a missed event, a rejected completion or an
   unresolved asset URL. The fixtures now give the process's first web view page 60 s and later ones
   the ordinary 10 s, note each load's time, and on a timeout list every event with its time and URL.
+- `WebView_Navigations_AreAttemptedAndCompleted` failed intermittently in full Android runs (2 of 3
+  on the 4c-2 branch, never alone). Two fixture races, both reproduced on purpose:
+  - **The recovery after a late cancel.** Where Android's late-cancelled reload landed early, it left
+    a blank page (title `""`; a probe got it every time with no delay in `OnNavigating`, and the
+    reloaded page 2 with 150 ms or more), and the fixture then went back to page 2 by declaring page 1
+    and running a script navigation. Android marks an entry that navigates away without a user
+    gesture as one its back skips, so the refused back then went to page 2 and asked `Back page2`,
+    not `Back page1`. Forcing that recovery path fails the old fixture every time with the CI
+    message; the fixture now starts the next case from a new web view (page 1, then page 2 declared)
+    after any late cancel.
+  - **A script poll lost to a navigation.** MAUI's Android `EvaluateJavaScriptAsync` never completes
+    when a navigation replaces the document before the script answers: 5 of 17 polls of
+    `document.title` during navigations went unanswered (a probe). The fixture awaited it without a
+    bound, so a poll racing the positive control's navigation hung it past the runner's 30 s. Every
+    script call now has a bound: polls retry, reads fail with a clear message, and scripts that
+    navigate don't wait for their own answer.
+
+  With both fixed, three consecutive full Android runs passed (156 passed, 5 skipped each).
 - The WebView fixture once waited for a page 1 completion its shared log already held from an
   earlier show, so on a slow CI simulator it read the title before the new web view had loaded;
   `ShowPage1` now counts only completions after its own show, and the refused cases wait for the
   attempt (and Android's late completion) instead of a fixed delay.
+- MAUI's Android `EvaluateJavaScriptAsync` can stay pending forever when a navigation replaces the
+  document before the script answers: MAUI behaviour to file upstream; await it with a timeout.
 - Android can't keep the previous page when it cancels a reload or a back navigation (§2.7's table);
   MAUI's own overloads can leave a superseded `ScrollToAsync` pending; both are MAUI behaviour to
   file upstream.
@@ -810,8 +834,853 @@ allocations +0.0–0.2%.
 
 ## 3. 4c-2: collections and items
 
-To be written when 4c-2 starts.
+### 3.1 Scope, and what moved out
+
+4c-2 closes these rows of spec 068: CollectionView, SwipeView, RadioButton, Picker and Label. Ordered
+by the ports (spec 068 §4), it lands as:
+
+1. **Port-driven**: Label spans (PointOfSale), CollectionView layouts, spacing, sizing, header,
+   footer, empty view and threshold tests (3 ports), selection state in items (the ports' `Selected`
+   visual state), RadioButton with view content (WeatherTwentyOne, PointOfSale), Picker item
+   display (DeveloperBalance).
+2. **No port**: CollectionView grouping and SwipeView's missing parts.
+
+**CarouselView and IndicatorView moved to 4c-4 (§5)** (design review round 1). The round-0 design
+reported the carousel position once at rest, but it still wrote under the user's finger (the
+handler's apply reasserts the declared position during a drag, MAUI's iOS `ScrollToPosition` has no
+drag guard, and the settle bound flushed regardless), and its conditional in-flight flag guessed
+whether a change came from Reactor, which MAUI's carousel code gives no operation identity to tell.
+Neither has a port; §5 lists what their design must meet.
+
+Smaller parts not in 4c-2, each with its reason, are in §3.11.
+
+**MAUI sources.** Behavior claims cite MAUI 11.0.0 (commit `4e6582f`): `TemplatedCell2`,
+`SelectableItemsViewController2` (iOS and Mac Catalyst), `SelectableViewHolder` and
+`TemplatedItemViewHolder` (Android), `SelectableItemsView`, `RadioButton`, `RadioButtonGroup` and
+the Android radio mapper, `SwipeView`, and `Span`, `FormattedString` and `Label`. The device
+characterizations confirm or correct them.
+
+### 3.2 What WinUI has (the source of truth for names)
+
+| Need | WinUI Reactor | Used for MAUI |
+|---|---|---|
+| Item templates | `ListView<T>(items, key, (item, index) => …)`, `ItemsView<T>`; an item's selection is app state the template closes over, or `ItemContainerElement.IsSelected` (ItemsView) | the template-closes-over-state model; no index parameter (§3.3) |
+| Grouping | none | MAUI's names (`IsGrouped`, group header and footer) |
+| Swipe | `SwipeControl` with `LeftItems`, `RightItems` (`SwipeItemData(Text, OnInvoked, IconSource, Background, Foreground, BehaviorOnInvoked)`), `LeftItemsMode`, `RightItemsMode` | `SwipeItemData`, `LeftItems`, `RightItems`, `…ItemsMode` |
+| Radio with content | `RadioButton(Element content, isChecked, onIsCheckedChanged, groupName)`, stored in `ContentElement`; checking one reports the others' unchecks | `ContentElement`, the same factory shape, and the same reports (§3.6) |
+| Item display | `ComboBox(string[] Items, SelectedIndex)`, `ItemElements` | strings computed by the factory (§3.8) |
+| Rich text | `RichTextBlock(Paragraphs)` of `RichTextInline`s: `RichTextRun` (`Run(text)`), `RichTextHyperlink` (`Hyperlink(text, Action onClick)` or a `Uri`), `RichTextLineBreak`; run modifiers `FontSize`, `FontFamily`, `FontWeight`, `Foreground`, `TextDecorations`, … | the inline types and factories; MAUI's property names on them (§3.9) |
+
+The MAUI renderer's established rule applies throughout: element and control names are MAUI's,
+properties keep MAUI's names (`TextColor`, `FontAttributes`), and where WinUI has the feature and
+MAUI has no API of its own (an event, a structural shape), WinUI's name wins.
+
+### 3.3 Selection state in items
+
+**The gap.** The ports style a selected item through the `Selected` visual state. In Reactor the item
+template already re-renders whenever the list renders (`ItemsHost.Sync` re-renders every realized
+cell), so a template that closes over the app's selection shows it. Two things are missing: a
+direct way to get the state, and a way to turn off the platform's own highlight, which MAUI draws
+unless the item's root view has a `Selected` visual state that sets a background
+(`TemplatedCell2.UpdateSelectionColor` clears iOS's gray `SelectedBackgroundView`;
+`TemplatedItemViewHolder.UseDefaultSelectionColor` skips Android's activated-highlight drawable).
+Without that, a template that draws its own selection gets a second highlight on top.
+
+**API.** An overload whose template takes the item's state:
+
+```csharp
+public readonly record struct ItemState(bool IsSelected);
+
+public static CollectionViewElement CollectionView<T>(
+    IReadOnlyList<T> items, Func<T, string> key, Func<T, ItemState, Element?> itemTemplate);
+```
+
+`ItemState` is a struct so it can grow without new overloads: `IsCurrent` arrives with the carousel
+in 4c-4 (§5).
+
+- **`IsSelected` is the declared selection**, not the platform's, by the rules the selection write
+  uses (one function serves both, so they can't diverge):
+  - `SelectionMode.None`: `false` for every item, whatever `SelectedKey` or `SelectedKeys` declares;
+  - `Single`: the item's key equals `SelectedKey` (`SelectedKeys` is ignored);
+  - `Multiple`: `SelectedKeys` contains the key (a set built once per apply; `SelectedKey` is ignored);
+  - a `null` key, a `null` or empty `SelectedKeys`, or a declared key no item has: nothing selected.
+
+  Selection is controlled (§3.4), so a tap the app refuses never renders the item selected; the
+  platform's own `Selected` flag (and its accessibility trait) follows the tap until the restore.
+- **The platform highlight is off** when the overload is used: the element's
+  `ShowsSelectionHighlight` (default `true`) is set `false` by it, and the app can set it either way.
+  When `false`, every `ReactorCell` gets a visual state group whose `Selected` state sets the cell's
+  `BackgroundColor` to transparent, which is exactly the condition MAUI checks on both platforms; the
+  item's own content is untouched. Changing it remounts the list (`CanUpdate`), because iOS clears
+  the gray highlight once and never restores it.
+- **No remount on a selection change.** A cell's element is keyed by its item key (unkeyed with
+  `ReuseItemTrees`), and the key doesn't change, so a changed `IsSelected` updates the tree in place:
+  component state, refs and native views stay.
+- **Recycling.** `ReactorCell.Render` computes the state for the item it is bound to, at render. A
+  cell rebound from a selected item A to item B renders B's state; with `ReuseItemTrees` that is an
+  update, without it the keyed remount it already is. Nothing is cached per cell.
+- **Echo.** The template is called from Reactor's render (the `Sync` re-render loop), never inside
+  the platform's `SelectionChanged` callback, and the selection write keeps its echo scope (§3.4).
+
+The element's `ItemTemplate` becomes `Func<object?, ItemState, Element?>`; the item-only factory
+adapts its template. That changes the record's primary constructor (a preview break; the factories,
+which every sample and test uses, are unchanged).
+
+### 3.4 CollectionView
+
+```csharp
+sealed class Menu : Component
+{
+    public override Element Render()
+    {
+        var (selected, setSelected) = UseState<string?>(null);
+        var list = UseElementRef<CollectionView>();
+
+        return VStack(12,
+            (CollectionView(Products, p => p.Id, (p, state) =>
+                Border(VStack(8, Image(p.Photo).Height(96), Label(p.Name)))
+                    .Stroke(state.IsSelected ? Colors.White : Palette.Secondary, 1)
+                    .CornerRadius(8)) with
+            {
+                Arrangement = ItemsArrangement.VerticalGrid,
+                Span = 2,
+                ItemSpacing = 12,
+                SelectionMode = SelectionMode.Single,
+                SelectedKey = selected,
+                OnSelectionChanged = keys => setSelected(keys.Count > 0 ? keys[0] : null),
+                Header = Label(Run("Menu ").FontSize(32), Run($"{Products.Count} items").TextColor(Palette.Gray)),
+                EmptyView = Label("Nothing on the menu today"),
+                RemainingItemsThreshold = 4,
+                OnRemainingItemsThresholdReached = LoadMore,
+            }).Ref(list),
+            Button("Top", () => list.Current?.ScrollTo(0, position: ScrollToPosition.Start)),
+            Button("Show the special", () => list.Current?.ScrollToKey(SpecialId)));
+    }
+}
+```
+
+**Untested parts get tests; these behaviors change:**
+
+- **The selection mode is written in the echo scope.** It is written outside it today, and MAUI
+  raises `SelectionChanged` when a mode change changes the effective selection (single to none with
+  an item selected), which is reported as a user's deselection.
+- **Item lookup by key is a dictionary** kept by `Sync`, so `Find` (selection, `ScrollToKey`) is O(1)
+  and spans groups.
+- **`ScrollToKey`**, an extension:
+  `bool ScrollToKey(this CollectionView view, string key, ScrollToPosition position = MakeVisible, bool animate = true)`.
+  MAUI's `ScrollTo(object item, …)` can't take the app's item (Reactor's items source holds boxes),
+  and calling it with a key string compiles and silently does nothing, hence a separate name. It finds
+  the item (and its group) and calls MAUI's `ScrollTo(item, group, position, animate)`; it returns
+  `false` when no item has the key, and throws on a `CollectionView` Reactor didn't create. MAUI's
+  `ScrollTo(int index, int groupIndex, …)` works as is through the ref: Reactor's items keep the
+  declared order.
+
+**Grouping.**
+
+```csharp
+public sealed record ItemGroup(string Key, object? Group, IReadOnlyList<object?> Items);
+
+public static CollectionViewElement CollectionView<TGroup, T>(
+    IReadOnlyList<TGroup> groups, Func<TGroup, string> groupKey, Func<TGroup, IReadOnlyList<T>> groupItems,
+    Func<T, string> key, Func<T, ItemState, Element?> itemTemplate,
+    Func<TGroup, Element?>? groupHeader = null, Func<TGroup, Element?>? groupFooter = null);
+// and the same with Func<T, Element?> itemTemplate
+```
+
+- The element gains `Groups` (`IReadOnlyList<ItemGroup>?`, built by the factory),
+  `GroupHeaderTemplate` and `GroupFooterTemplate`; `IsGrouped` is `Groups is not null`. Switching
+  between grouped and flat remounts (`CanUpdate`).
+- The native source is an observable list of group boxes, each an observable list of item boxes, as
+  MAUI's grouped sources expect. `Sync` diffs the groups by key, then each group's items by key, with
+  the existing fewest-moves algorithm.
+- **Keys are unique across the list**, not per group, because selection, `ScrollToKey` and the
+  dictionary are by key; group keys are unique among groups. A duplicate throws, as today.
+- **A move to another group is a removal and an insertion** (MAUI has no cross-section move), so
+  the item gets a new box. Its tree keeps its state only when MAUI rebinds the same cell directly from
+  the old box to the new one: the cell's element keeps its key, so the rebind is an update. Any other
+  path (another cell realizes the new box, or the cell is retired in between) mounts a fresh tree.
+  Nothing more is promised; the test uses real cell instances (§3.10).
+- Group headers and footers are `ReactorCell`s with a role, created by their own `DataTemplate`s,
+  bound to the group box; their tree is keyed by the group key, so a header cell rebound to another
+  group remounts unless `ReuseItemTrees`. They retire like item cells (§2.4).
+- Not in MAUI: sticky headers. Group headers aren't selectable (MAUI's behavior).
+
+**Selection: reports, writes and the native selection** (spec 067 §14 left it uncharacterized).
+
+- **A report is captured at notification.** The keys come from the `SelectionChanged` arguments'
+  `CurrentSelection`, the selection MAUI raised, never from a later read of the view.
+- **It reaches the app before any reconcile can overwrite it.** MAUI raises `SelectionChanged`
+  synchronously when a tap selects (`SetValueFromRenderer` from the platform's delegate), so the
+  callback runs inside that notification, before any queued render applies. Renders compute their
+  elements when they run, so a render that was queued before the tap reads the state the callback
+  set. The test makes that order observable (§3.10). If the characterization finds any
+  `SelectionChanged` raised after a Reactor write has returned (a late echo), this design stops there
+  and is revised, as the carousel's was: telling a late echo from input would mean guessing which
+  write caused it.
+- **Multiple selection is compared as key sets**, not sequences: a native order that differs from
+  the declared order isn't a difference, so it writes nothing.
+- **The native selection is verified after batch completion (iOS and Mac Catalyst).** MAUI's only
+  deferral of a native selection is in `SelectableItemsViewController2.SelectItem`: when the
+  collection view isn't loaded, it calls `PerformBatchUpdates(null, completion)` and selects in the
+  completion (`ValidateAndSelectItem`), which checks that the item is still in the source but not
+  that it is still the selected item. So a write of A, then B, before completion can leave A selected
+  natively while `SelectedItem` says B, and a deferred A can also land after the user selected B and
+  the app accepted it, when B's render writes nothing (the virtual selection is already B) and so
+  would schedule no repair. The verification:
+  - **Scheduled by every commit** that applies a `CollectionView` whose mode isn't `None`, accepting
+    or refusing, whether or not it wrote anything, by Reactor's mount, and by a commit that **enters
+    `None`**: MAUI's `UpdatePlatformSelection` returns early for `None` and its mode mapper deselects
+    nothing, so native selected paths (and a deferred selection still pending) would survive; the
+    effective selection in `None` is empty, so the verification deselects them. Each schedule bumps
+    the list's verification generation, invalidating older work.
+  - **The barrier** is Reactor's own `PerformBatchUpdates(null, completion)` on the same collection
+    view. MAUI's deferral is issued synchronously inside the property write (the handler maps
+    `SelectedItem` as it changes), so it is queued before Reactor's barrier, issued at the end of the
+    apply. That UIKit runs the completions of queued batches in order is checked first, on device
+    (§3.10); the design depends on it, and is revised if it fails.
+  - **One barrier outstanding.** A schedule while one is outstanding marks it stale. A completion
+    takes exactly one of three branches:
+    1. **invalid owner**: the list is unmounted, or the handler (or its platform view) isn't the one
+       that issued the barrier: the work is retired, nothing is issued;
+    2. **stale generation**: the work is retired and the current work is issued as a fresh barrier
+       (behind every batch queued since);
+    3. **current generation**: it compares (below).
+  - **A user's selection notification invalidates pending corrections**: it bumps the generation and
+    marks the outstanding barrier stale, so no correction computed before the input is applied
+    after it.
+  - **The current completion compares** the native `IndexPathsForSelectedItems`, mapped to keys, with
+    the declared effective selection of the live element, as sets. Equal: done. Different: it selects
+    and deselects natively inside the echo scope (UIKit's programmatic selection calls no delegate, so
+    nothing is reported), then verifies once more with a fresh barrier; a mismatch on that second
+    check logs a `DiagnosticLog` warning and stops, so a platform that never converges can't loop.
+  - **Android** isn't verified unless its characterization shows a divergence; then the same
+    protocol runs with the adapter's selected positions and the next layout pass as its barrier.
+- **Characterize first**, on all three platforms, reading the **native** selection (iOS
+  `IndexPathsForSelectedItems`, Android the adapter's selected positions) as well as MAUI's: single
+  and multiple writes; overlapping writes during realization (before the list is loaded) and during
+  a batch (with an items change in the same apply); removing the selected item (Reactor's `Find` gives
+  `null` and writes no selection, suppressed); changing the mode with a selection; a user tap
+  accepted and refused; in multiple mode a tap that adds and one that removes. Per case: whether
+  `SelectionChanged` arrived inside the write or late, the final native and virtual selections, and
+  the exact callback sequence after settling (400 ms and a dispatcher turn). If Android diverges too,
+  the same reconcile runs there from the adapter's selected positions.
+
+### 3.5 SwipeView
+
+```csharp
+sealed class TaskRow : Component<TaskItem>
+{
+    public override Element Render()
+    {
+        var swipe = UseElementRef<SwipeView>();
+        var row = HStack(8,
+            Label(Props.Title).Padding(12),
+            Button("More", () => swipe.Current?.Open(OpenSwipeItem.RightItems)));
+        return (SwipeView(row) with
+        {
+            LeftItems = [new SwipeItemData("Done", Props.Complete) { Content = DoneBadge(Props) }],
+            LeftItemsMode = SwipeMode.Execute,
+            RightItems =
+            [
+                new SwipeItemData("Delete", Props.Delete) { BackgroundColor = Colors.Red, Icon = Icons.Trash },
+                new SwipeItemData("Close", () => swipe.Current?.Close()),
+            ],
+            Threshold = 80,
+            OnSwipeEnded = (direction, isOpen) => Props.SetOpen(isOpen),
+        }).Ref(swipe);
+    }
+}
+```
+
+- **Four sides**: `LeftItems`, `RightItems`, `TopItems`, `BottomItems`, each with its mode
+  (`LeftItemsMode`, …; MAUI's `SwipeMode`, `Reveal` or `Execute`, the same names as WinUI's).
+  `Threshold` (`double?`, cleared to MAUI's default when `null`) is MAUI-only: WinUI's
+  `SwipeControl` has none.
+- **`SwipeItemData`** replaces `SwipeAction` (WinUI's name; a preview break, decided in review):
+  `SwipeItemData(string Text, Action? OnInvoked = null)` with `BackgroundColor` and `Icon` as today,
+  and `Content` (`Element?`). With `Content`, the item is a MAUI `SwipeItemView` showing a child tree
+  (`CreateChildRoot`), and `Text` becomes its semantic description, so the item keeps an accessible
+  name.
+- **Items are rebuilt only when their structure changes** (a count, a kind, a text, a color, an icon
+  or a mode). A changed `Content` re-renders its child tree in place, so re-rendering an open swipe
+  view doesn't rebuild what MAUI shows. Content trees are unmounted when their item is removed, at a
+  rebuild and with the swipe view.
+- **An item invokes only while it is current.** Callbacks read the live element at the item's index
+  (existing), so after a rebuild an old `SwipeItem` (still held by the platform, or by anything else)
+  would invoke the replacement's action at its index. Each item's handler therefore checks that its
+  sender is still the item at that index in the side's current `SwipeItems`, and that the element is
+  live; a retired item invokes nothing. No generation counter: the identity check reads what the view
+  holds.
+- **Events, fire-only, through `Live`**: `OnSwipeStarted(SwipeDirection)`,
+  `OnSwipeChanging(SwipeDirection, double offset)` and `OnSwipeEnded(SwipeDirection, bool isOpen)`.
+- **Opening and closing are MAUI's API through the ref** (§2.6): `Open(OpenSwipeItem, animated)`
+  and `Close(animated)` on the Controls `SwipeView`, which both registries render. No wrapper: they
+  are public and complete. Before the view has a handler they do nothing, as in plain MAUI
+  (documented, §2.4 "When the view can act").
+- **Open isn't a controlled value.** WinUI's `SwipeControl` exposes only `Close()`, MAUI raises no
+  event for every way a swipe view closes (a tap elsewhere closes it on iOS), and no port declares
+  it. `OnSwipeEnded`'s `isOpen` tells the app what the user left.
+- **The threshold is MAUI's behavior, tested as such**: below it nothing is invoked; above it a
+  `Reveal` side stays open without invoking, and an `Execute` side invokes exactly once (MAUI's iOS
+  `ValidateSwipeThreshold` invokes the first visible item), the current render's callback, for a text
+  item and a content item alike.
+
+### 3.6 RadioButton with view content, and Reactor-owned groups
+
+```csharp
+HStack(12,
+    (RadioButton(ThemeCard("Light", Icons.Sun, theme == AppTheme.Light), theme == AppTheme.Light,
+        on => { if (on) setTheme(AppTheme.Light); }, "theme") with { IsIndicatorVisible = false })
+        .Semantics(description: "Light theme"),
+    (RadioButton(ThemeCard("Dark", Icons.Moon, theme == AppTheme.Dark), theme == AppTheme.Dark,
+        on => { if (on) setTheme(AppTheme.Dark); }, "theme") with { IsIndicatorVisible = false })
+        .Semantics(description: "Dark theme"));
+```
+
+**Content.**
+
+- **`ContentElement`** (`Element?`, WinUI's name), taking precedence over the text `Content`, and
+  WinUI's factory `RadioButton(Element content, bool isChecked, Action<bool>? onIsCheckedChanged = null, string? groupName = null)`.
+  The content is a child of the radio button, so it renders through the registry: direct views in
+  it are hosted by `AsView` on the direct registry.
+- **The template.** MAUI shows view content only through a `ControlTemplate` (`ContentAsString`
+  otherwise; on Android the platform view is a `ContentViewGroup` only when a template resolves). With
+  `ContentElement`, Reactor sets MAUI's `RadioButton.DefaultTemplate` (the indicator, then the
+  content), as WinUI shows its glyph next to the content; with `IsIndicatorVisible = false` (decided in
+  review), a template that is only a `ContentPresenter`, so the content is the whole radio button: the
+  ports' cards. `IsIndicatorVisible` is MAUI-only: the ports replace the whole look with a
+  `ControlTemplate`, which Reactor excludes (components are the templates), and WinUI needs a style
+  for the same.
+- **The checked look is the content's props from state**, replacing the `Checked` visual state: the
+  app renders the content from the declared `IsChecked` (controlled), so a refused tap never shows it
+  checked.
+- **Remount** when `ContentElement` switches between `null` and an element, or `IsIndicatorVisible`
+  changes (`CanUpdate`): Android picks its platform view when the handler is created. Content updates
+  in place otherwise.
+- **Accessibility.** With a template, MAUI's semantic description falls back to
+  `Content.ToString()`, a type name for a view. Reactor sets the description from the text `Content`
+  when it isn't empty. For view content the docs require `.Semantics(description: …)`, and a radio
+  button with view content and no description logs one `DiagnosticLog` warning (deduplicated: once
+  per native radio button, not per render). The device fixture asserts the accessible name and
+  the radio role with its checked state on each platform; where MAUI's templated path lacks the role
+  or the state, the handler supplies it before the gate (characterized first).
+
+**Groups are Reactor's, on both registries** (design review round 1). MAUI's grouping can't work in
+direct layouts: `RadioButtonGroup.UncheckOtherRadioButtonsInScope` searches `LogicalChildren` (from
+the page for a named group, from the parent for an unnamed one), and a Controls view inside a direct
+layout gets a logical parent (`DirectLayout.AnchorChild`) without being registered as its logical
+child. So radio buttons in direct stacks never uncheck their peers. Reactor takes grouping over:
+
+- **MAUI's grouping is neutralized.** Each native radio button gets a unique internal `GroupName`
+  (`reactor-` plus a GUID), set once at creation; the element's `GroupName` is never written to the
+  view. MAUI then finds no peer, on either registry. Side effects at 11.0.0, from a source search
+  that the implementation's first step repeats at `4e6582f`: `GroupName` is read only by the grouping
+  code (`RadioButtonGroup`, `RadioButtonGroupController`) and by the Windows handler, which already
+  gives each native button its own GUID (MAUI issue 11418); nothing on iOS, Mac Catalyst or Android
+  exposes it to accessibility. The cost is one walk of the page's logical tree per check, which finds
+  nothing. Not supported: MAUI's `RadioButtonGroup.GroupName` and `SelectedValue` attached properties
+  on an ancestor (set through `.Set`), whose controller rewrites the descendants' names; documented.
+- **Peers come from Reactor's tree**, through a table per top-level root (shared with its child
+  roots), keyed by a scope and a name. Registration follows mount, a `GroupName` change and unmount;
+  the handler is hand-written for it (it needs the engine node, spec 067 §16).
+  - **A named group is scoped to its page.** A top-level root holds several pages at once (a
+    navigation stack's pages and modals, tabs), so a root-wide name would join groups across pages.
+    The scope is the radio button's page, found as `SystemBack.PageOf` finds it: up through host
+    nodes and across child roots (cells, slots, swipe item content) to the nearest `Page` (or Shell
+    item), else the root's host page. That is MAUI's scope too (its named search starts at the
+    page).
+  - **An unnamed group is scoped to the nearest host ancestor within the radio button's own root**
+    (the layout that holds it, skipping components and groups): MAUI's "same parent" rule. A child
+    root is a boundary: an unnamed radio button at the top of a cell, slot or swipe item tree has the
+    child root itself as its scope, never the list or swipe view that owns it. So separate cells never
+    share an unnamed group.
+- **A user's check is one transaction, with the native group settled before any callback**, in
+  MAUI's own order (`OnIsCheckedPropertyChanged` unchecks the peers, then raises the checked
+  button's `CheckedChanged`):
+  1. on `CheckedChanged(true)` outside a write, the table bumps the generation of that group (per
+     scope and name: only a check in the same group supersedes a transaction) and snapshots the
+     participants: the checked button and its group's natively checked peers;
+  2. it unchecks each peer natively, inside that peer's echo scope;
+  3. it dispatches the captured reports, the peers' unchecks (`false`) first, then the checked
+     button's (`true`), as WinUI reports both. Before each callback it rechecks that the participant
+     is mounted (`Live`) and still a member of the group, and that the generation is still its own;
+  4. an exception from a callback goes to `ReportError`, and dispatching continues;
+  5. in `finally` it requests a restore for every participant still mounted, so if the app refuses,
+     the declarations restore every button.
+
+  All of it happens inside the tap's notification, before any render drains, and a callback that
+  reads the native state sees the peers already unchecked.
+
+  **Transactions never run reentrantly** (confirmation round). MAUI's `BindableObject.SetValue`
+  queues a write to a property that is already being set and applies it after the original
+  notification returns (`DelayedSetters`), and `RadioButton` raises `CheckedChanged` during that
+  notification. So a check started from a callback (B's transaction reports A's uncheck, A's callback
+  checks C through a ref, C's transaction unchecks B while B's own setter is still active) would get
+  B's write queued, and its notification would arrive after the echo scope that should cover it had
+  closed. Therefore a `CheckedChanged` outside a write that arrives while a transaction is
+  dispatching (or while Reactor is inside any radio button's notification) is not processed there:
+  it is queued, in arrival order, and the queue is drained on a posted turn, after the current
+  transaction and MAUI's setters have unwound. Each queued entry is re-read when drained: a check
+  whose button is still natively checked runs its own transaction from the native state then; an
+  uncheck whose button is still natively unchecked is reported and restored; anything else is
+  dropped (a later write superseded it). Queueing a check bumps its group's generation, so a
+  same-group outer transaction dispatches nothing more; a transaction in another group or page
+  isn't affected and delivers all its reports. The outer transaction's restores still run.
+- **Conflicting declarations are applied verbatim**: state is the source of truth, so two buttons in
+  one group declared checked are both shown checked. Once per render pass, after the pass (posted
+  and coalesced, so a replacement that mounts before the old button unmounts doesn't count), the
+  table checks each group that changed; two or more declared checked logs one `DiagnosticLog`
+  warning per group (deduplicated until the group stops conflicting). Documented.
+- **Reactor's own writes don't cascade**: each button is written to its declaration in its own echo
+  scope, and MAUI finds no peer, so the round-0 cascade problem (a declared change, or a restore,
+  reporting the peers' unchecks) is gone. That replaces round 0's thread-wide radio-write scope.
+- **Characterize first**: a tap in a named and an unnamed group, the declared change in both tree
+  orders, a refused tap; the exact callback sequences, and the native checked states. Every
+  `CheckedChanged` a Reactor write causes must be raised inside that write (MAUI raises it from the
+  property change); one raised later stops this design for revision rather than being classified.
+  The reentrant sequence above is characterized on plain MAUI radio buttons too (B's handler
+  unchecks A, A's handler checks C, C's handler unchecks B): when B's `false` is raised relative to
+  B's handler returning, which confirms the queueing premise.
+
+### 3.7 Both registries
+
+| Element | Controls handler | Direct registry |
+|---|---|---|
+| CollectionView | hand-written (`ItemsHost`, child roots per cell) | the Controls view; cells render through the root's registry, so their content is direct |
+| SwipeView | hand-written (item child roots) | the Controls view; content and item views render direct |
+| RadioButton | hand-written (the group table needs the engine node) | the Controls view; its content renders direct; groups work across direct and Controls layouts (§3.6) |
+| Picker | hand-written (existing) | the Controls view |
+| Label | hand-written (existing), plus inlines | the hybrid falls back to the Controls label when `Inlines` is set (`ILabel` has no formatted text); switching remounts, as any hybrid switch does |
+
+A ref to any of these but `Label` gets the Controls view on both registries, so
+`UseElementRef<CollectionView>` and `<SwipeView>` need no fallback rule.
+
+### 3.8 Picker item display
+
+```csharp
+Picker(Projects, p => p.Name, index, setIndex, title: "Project")
+```
+
+- **A factory overload**, `Picker<T>(IReadOnlyList<T> items, Func<T, string> display, int selectedIndex, Action<int>? onSelectedIndexChanged = null, string? title = null)`,
+  that computes the display strings. The element is unchanged: its `Items` are those strings, compared
+  by sequence (existing), so a re-render with the same texts writes nothing, and a changed text
+  rewrites the items and the index in one echo scope (existing).
+- Selection stays an index (WinUI's `ComboBox`, MAUI's `SelectedIndex`). Two items may share a text.
+- Rejected: MAUI's `ItemDisplayBinding` (Reactor has no bindings) and a `Func` on the element, whose
+  delegate differs every render and would force a rewrite.
+
+### 3.9 Label spans
+
+```csharp
+Label(
+    Run("Total ").FontSize(14).TextColor(Palette.Secondary),
+    Run($"{order.Total:C}").FontSize(32).Bold(),
+    Run(" incl. tax").Italic().LineHeight(1.2),
+    Hyperlink(" details", () => setShowDetails(true)))
+```
+
+- **`LabelElement.Inlines`** (`RichTextInline[]?`, WinUI's name for a text's runs), set by
+  `Label(params RichTextInline[] inlines)`; when set it wins over `Text` (MAUI also nulls one when the
+  other is set). Label-level settings (alignment, line breaking, `MaxLines`, the label's font as the
+  runs' default) apply as in MAUI.
+- **Inline types and factories are WinUI's**: `RichTextInline`, `RichTextRun` (`Run(text)`) and
+  `RichTextHyperlink` (`Hyperlink(text, Action onClick)`), in the MAUI namespace. Their properties use
+  MAUI's names, as every MAUI text element does: `FontSize`, `FontFamily`, `FontAttributes`,
+  `TextColor`, `BackgroundColor`, `CharacterSpacing`, `TextDecorations`, `LineHeight`, `TextTransform`;
+  the text modifiers (`Bold`, `Italic`, `FontSize`, `FontFamily`, `TextColor`, `CharacterSpacing`,
+  `Underline`, `Strikethrough`, and `LineHeight`, `BackgroundColor` for runs) get
+  `where T : RichTextInline` overloads, so a run is styled like a label.
+- **Hyperlink** is a span with a `TapGestureRecognizer`, which MAUI supports on spans. It is
+  underlined unless it declares `TextDecorations`, as WinUI underlines hyperlinks; its color is the
+  run's or the label's.
+- **A recognizer invokes only while it is current.** Its handler reads the live element's inline
+  at its index, so a new lambda each render rewires nothing. It first checks that its span is still at
+  that index in the label's current `FormattedString` and that it is the recognizer currently
+  installed on that span (recorded per span when installed). A span whose inline goes from a
+  hyperlink to a run loses its recognizer, and gets a new one if it becomes a hyperlink again, so a
+  retained old recognizer, of a replaced span or of a reused one, invokes nothing; nothing runs after
+  unmount either.
+- **Updates in place.** When the number of inlines is unchanged, each `Span`'s changed properties are
+  set or cleared (MAUI propagates span changes to the label), and the span instances stay; a span
+  gains or loses its recognizer as its inline becomes or stops being a hyperlink. A changed count
+  rebuilds the `FormattedString`. Unchanged inlines (by value, ignoring callbacks) write nothing.
+- Not mirrored: WinUI's paragraphs (a MAUI label is one paragraph; a `"\n"` in a run breaks the
+  line), `RichTextLineBreak`, `InlineUI`, and the `Uri` hyperlink (call `Launcher` from `onClick`).
+
+### 3.10 Tests
+
+Each oracle names the mutation that must turn it red; the implementation records each run in §3.13.
+Counts are positive witnesses (a test that asserts something didn't happen also asserts the thing
+that would have caused it did).
+
+**Headless (`tests/Reactor.Maui.Tests`), both registries where a cell, content, radio button or
+label can be in a direct layout:**
+
+| Test | Oracle | Mutation |
+|---|---|---|
+| Item state, single and multiple | each realized cell's template sees `IsSelected` for its key from the declared selection; a selection change re-renders cells without remounting (an item component's mount count stays 1, its state survives); a refused tap renders no cell selected (renders with `true`: 0) while the platform's `SelectedItem` did change (positive witness) | read the platform's selection; key the element by `(key, IsSelected)` |
+| Item state rules | `None` with a declared `SelectedKey` and `SelectedKeys`: no item selected; `Single` ignores `SelectedKeys`, `Multiple` ignores `SelectedKey`; `null`, empty and unknown keys select nothing; the selection write applies the same rules (the same cases, read from `SelectedItem(s)`) | a separate rule for the template |
+| Item state and recycling | a cell rebound from selected A to unselected B renders B unselected, with and without `ReuseItemTrees` | cache the state per cell |
+| Highlight | with the state overload every cell (created before and after the change) has a `Selected` state setting `BackgroundColor`; with the item-only factory none has; toggling `ShowsSelectionHighlight` remounts | skip the group on cells created later; update in place |
+| Selection report order | tap B (`SelectedItem` set from the "renderer") with an unrelated render already queued: the callback log has `["b"]` before that render's apply runs, and the queued render (reading the accepted state) leaves B; the same in multiple mode with a key set; a refusal then restores A | post the report; read the view after the render instead of the arguments |
+| Native selection verification | a stub port (barrier issue, completion, native read, native select) drives completions by hand: an old MAUI completion selecting A runs between the user's B notification and the render accepting B, and the next current completion restores B natively, with nothing reported; an obsolete completion issues exactly one replacement barrier (counted) and compares nothing, and the replacement then compares; completions delivered out of order apply only the current generation's; a refused selection with no virtual write is verified too; entering `None` (from single and from multiple, with a pending deferred selection) is verified against an empty selection and deselects; a fix triggers exactly one more verification, and a second mismatch warns and stops; unmount, and a handler change, between issue and completion: retired, nothing issued | schedule only on a virtual write; skip `None`; let a notification keep the pending correction; a stale completion that compares, or issues nothing; drop the generation; no handler guard; verify forever |
+| Selection echo | per the characterization (§3.4): a mode change with a selection reports nothing; a write in a batch with an items change reports nothing; multiple selection declared in another order than the view's writes nothing | write the mode outside the scope; compare sequences |
+| Layout | each `Arrangement` gives MAUI's layout with orientation, `Span` and spacing; changing one writes a new layout, an unchanged render writes none; `ItemSizingStrategy` set and cleared | compare the element instead of the layout's values |
+| Header, footer, empty view | set, replaced (same tree updated: state kept), cleared (cleanup ran, slot `null`), on the direct registry hosted | skip the unmount on clear |
+| Threshold | `RemainingItemsThreshold` set and back to `-1`; `SendRemainingItemsThresholdReached` reported once; not after unmount (positive control: before it) | invoke through `Current` |
+| Grouping | groups and items keyed (moves keep boxes); duplicate keys across groups throw; header and footer cells render their templates with the group and remount when rebound to another group; selection and `ScrollToKey` find an item in any group; grouped↔flat remounts | per-group key uniqueness; a flat dictionary not rebuilt on group moves |
+| Cross-group move, by cell instance | cell X bound to item k in group 1 (state set to 5); k moves to group 2; X rebound directly to the new box keeps 5; a different cell Y bound to the new box starts fresh; X retired (`null`) and rebound starts fresh | key the tree by box instead of key; keep trees across retirement |
+| `ScrollToKey` | finds the item and group and raises MAUI's `ScrollToRequested` with them; an unknown key returns `false` and requests nothing; a foreign `CollectionView` throws | pass the key instead of the box |
+| SwipeView items | four sides with their modes; `Threshold` set and cleared; a text, color or icon change rebuilds that side; a `Content` change keeps the `SwipeItems` instance and the content component's state; a removed content item's tree unmounts (cleanup count); invoking reaches the live callback, not after unmount; events reported through `ISwipeViewController` | rebuild every render; compare the content element |
+| Retired swipe items | keep a reference to a side's item, replace the side's structure, invoke the old item: no callback; the new item at the same index invokes (positive control) | read only the index |
+| RadioButton content | the content is the radio button's `Content` (a hosted direct view on the direct registry); the default template with the indicator, the content-only template without; switching content to text or the indicator flag remounts; content updates keep state; no description logs one warning across renders, a description none | set the template after the handler; skip `CanUpdate`; warn per render |
+| Radio groups | each native button has a unique internal `GroupName`; immediately after a native check (`IsChecked` set from the "handler"), before any render drains: the checked button reported `true`, every checked peer unchecked natively and reported `false`, once each; for a named group spanning a direct `VStack` inside a Controls `Grid` inside a direct `HStack`, and an unnamed group in a direct stack (positive witness of the bug: with MAUI's grouping instead of Reactor's, a test switch, the peers in direct stacks stay checked); two unnamed groups in separate direct stacks don't affect each other; a declared change in both tree orders reports nothing; refused, every button returns to its declaration and nothing more is reported | write the element's `GroupName` to the view; peers by parent node instead of nearest host; uncheck outside the peer's scope; report only the checked one |
+| Radio scope | two pages of one navigation stack (and two tabs), each with a group named "size": checking in one leaves the other page's checked button checked and unreported; unnamed radio buttons at the top of two cells of one list don't affect each other, nor do unnamed ones in the header and footer slots; a named group spanning two cells of one page does join (positive control) | a root-wide name scope; walk `ContextParent` for the unnamed scope |
+| Radio transaction | the checked button's callback reads the native state and sees every peer already unchecked; the reports arrive peers first, then the checked one; a throwing callback reaches the boundary and the next callback still runs, and the restores run; a callback that unmounts a later peer skips that peer's callback | dispatch before unchecking; no membership recheck; restore outside `finally` |
+| Radio reentrancy | the confirmation round's sequence on real MAUI radio buttons (their `DelayedSetters` included): B's transaction reports A's uncheck, A's callback checks C through a ref, C's transaction is queued and runs on a later turn and unchecks B; every `CheckedChanged` raised outside a Reactor write is one the test caused (none escapes an echo scope: the log of unsuppressed notifications is exactly the user's and the ref's), only C ends checked, and the reports are exact; the outer transaction stops after the queued same-group check; nested checks in an independent group and on another page both deliver their checked reports | run the nested transaction inline; one generation per table |
+| Conflicting declarations | two buttons of one group mounted checked: both shown checked, one warning after the pass (and none on the next render); a `GroupName` change that merges two groups with a checked button each warns once; replacing a checked button with another checked one in one render warns nothing (positive control: the two-checked mount above) | check during the pass; warn per render |
+| Picker display | the platform items are the display strings; the same strings write nothing; a changed text rewrites and keeps the index | — |
+| Label inlines | spans with each property set, updated in place (same `Span` instances), cleared; a count change rebuilds; `Inlines` and `Text` replace each other; a hyperlink is underlined unless declared; its tap (`SendTapped` on the span's recognizer) invokes the current render's callback, not after unmount; on the direct registry a label with inlines is a Controls label | rebuild on every change; capture the first render's callback |
+| Retired span recognizers | keep a reference to a hyperlink span's recognizer, rebuild the `FormattedString` (a count change) so another hyperlink sits at that index, tap the old recognizer: no callback; at an unchanged count, `Hyperlink` (R1) → `Run` → `Hyperlink` (R2) on the same span, tapping the retained R1: no callback; the current recognizer invokes (positive control) in both | read only the index; check the span but not the recognizer |
+
+**Device (`tests/Reactor.Maui.DeviceTests`), Mac Catalyst, iOS and Android, `[controls]` and
+`[direct]` unless noted.** Fixtures that check callbacks wait until they settle (400 ms and a
+dispatcher turn) and assert the exact sequence, including zero where none is expected.
+
+| Fixture | Oracle |
+|---|---|
+| `CollectionView_Layouts_Geometry` | platform frames: a vertical list stacks cells with a gap equal to `ItemSpacing` (± 1 device pixel); a horizontal list puts the second cell right of the first; a 2-span grid puts cells 0 and 1 on one row (same y, different x) and cell 2 below; each case also asserts the cells exist (count ≥ 3) |
+| `CollectionView_SizingStrategy` | items whose content differs in height: under `MeasureAllItems` their cells differ (positive control); under `MeasureFirstItem` they equal the first's |
+| `CollectionView_HeaderFooterEmpty` | the header's frame is above the first cell and the footer's below the last; with no items the empty view is shown and no cell exists, and with items it is gone |
+| `CollectionView_Threshold` | 50 items, threshold 5: scrolling to the end through the ref reports ≥ 1; the same scroll with `-1` reports 0, with the end reached asserted (positive witness) |
+| `CollectionView_Grouping` | headers, items and footers appear in order by platform frame, for two groups; moving an item between groups moves its cell |
+| `CollectionView_Selection_Characterization` | the matrix of §3.4, with the native selection read on every case |
+| `CollectionView_BatchCompletionOrder [iOS, Catalyst]` | the premise of the barrier: MAUI's deferred selection (a write while the list isn't loaded) and Reactor's barrier, issued after it, complete in that order, recorded over repeated runs and with an items change in the same apply |
+| `CollectionView_OverlappingSelection_Programmatic` | writes of A then B before the list is loaded, and within a batch with an items change: after settling, the native selected index paths (iOS) or positions (Android) are exactly B's, as is `SelectedItem`, and **zero** reports; positive witness: without Reactor's verification (a fixture switch) iOS is recorded showing A |
+| `CollectionView_OverlappingSelection_User` | a user's B accepted while a deferred A is pending: native B and `SelectedItem` B after settling, and the reports are **exactly `[B]`**, with no report from the repair |
+| `CollectionView_EnterNone` | Single→None and Multiple→None with a selection, and with a deferred selection still pending: after settling the native selected paths are empty and nothing is reported; positive witness: without the verification (a fixture switch) the native path stays selected |
+| `CollectionView_SelectionInItems` | a tap on a cell (Android: a dispatched touch; iOS and Catalyst: `UICollectionView.SelectItem` and the delegate's `ItemSelected`, which is what a tap runs): the item renders selected once accepted, and the native selection is that item; refused, it never renders selected and the native selection returns; the platform's highlight is off (iOS: `SelectedBackgroundView` clear; Android: the item view's background `null`) while the item-only list shows MAUI's highlight (positive control) |
+| `CollectionView_SelectionInItems_Recycling` | scroll until a cell instance has shown two different items (identity witnessed): every live cell renders the selection of the item it shows, and the native selection is the declared one |
+| `SwipeView_OpenCloseThroughARef` | `Open(OpenSwipeItem.RightItems)` moves the content's platform frame by the items' width, `Close()` returns it; each side opens; a re-render with new content while open keeps it open (frame unchanged) |
+| `SwipeView_Threshold` | a swipe below `Threshold` invokes nothing and leaves it closed; above it a `Reveal` side stays open with no invocation, and an `Execute` side invokes exactly once, for a text item and a content item, and the callback is the current render's after a re-render (Android: a dispatched drag; iOS and Catalyst: the swipe recognizer's state changes, as a drag drives them) |
+| `SwipeView_ContentItems` | a content item's view is realized in the open swipe, with its tree; invoking it runs the current callback |
+| `RadioButton_Content` | the content-only radio button's frame equals its content's; the default template adds the indicator (wider); a tap (Android: dispatched; iOS and Catalyst: MAUI's recognizer, `SendTapped`) checks it, its peers uncheck natively, the sequence is exact; refused, it never renders checked |
+| `RadioButton_Groups` | named and unnamed groups across nested direct and Controls layouts, and two unnamed groups under separate direct stacks: after a tap, exactly the tapped button is checked natively within its group, and the other group is untouched |
+| `RadioButton_Accessibility` | the accessible name is the declared description (Android: the node's text or content description; iOS and Catalyst: `AccessibilityLabel`), the role is a radio button and the checked state is exposed and follows the declaration (Android: `checkable` and `checked`; iOS and Catalyst: the traits or value MAUI's templated view exposes, characterized first) |
+| `Picker_ItemDisplay` | the platform shows the selected item's display text |
+| `Label_Spans_Platform` | the platform's attributed text has one range per run with its color, size and decorations (Android: the `SpannableString`'s spans; iOS and Catalyst: the `NSAttributedString` attributes); a tap at the hyperlink's region (Android: a dispatched touch; iOS and Catalyst: the label's `GetChildElements` at that point, then the recognizer) runs the callback once; the same coordinate on a label whose run there is a plain run invokes nothing (negative control, same geometry), and a tap on another run doesn't either |
+
+### 3.11 Decisions, answered questions, out of scope
+
+**Decisions** (review round 1 settled the ones marked).
+
+1. **Item state is an overload's argument, from the declared selection** (§3.3), with explicit rules
+   for each mode. `ItemState` is the name (no WinUI equivalent; settled); it carries `IsSelected`
+   only until 4c-4. Rejected: a hook (`UseItemState()`), which re-renders no less and needs a context
+   per cell; closure only, which can't turn off the platform's highlight.
+2. **The platform highlight goes off through MAUI's own rule**, set by the overload, overridable
+   with `ShowsSelectionHighlight`; a change remounts.
+3. **Grouping keys are unique across the list**; a cross-group move keeps state only on a direct
+   rebind of the same cell (§3.4).
+4. **Selection reports are captured from the event and delivered before any reconcile; multiple
+   selection compares key sets; iOS's native selection is verified after batch completion**, with a
+   generation that user input invalidates, scheduled by every commit, behind a barrier whose ordering
+   is checked on device first (settled, §3.4).
+5. **`SwipeAction` is renamed `SwipeItemData`** (settled); open and close are MAUI's methods through
+   the ref, not a controlled value; retired items and recognizers check their identity (§3.5, §3.9).
+6. **RadioButton**: WinUI's `ContentElement`, MAUI's default template, and `IsIndicatorVisible`
+   (settled) for content-only buttons; **groups are Reactor's on both registries**, named groups per
+   page and unnamed ones per host with child roots as boundaries, a user's check is one transaction
+   that settles the native group before any callback, and conflicting declarations are applied
+   verbatim with a warning (settled, §3.6).
+7. **Picker display is computed by the factory**; the element doesn't change (§3.8).
+8. **Label spans are WinUI's inline types with MAUI's property names**, updated in place (§3.9).
+9. **`ScrollToKey`** is the one new imperative helper, because MAUI's item overload can't take the
+   app's item (§3.4).
+10. **CarouselView and IndicatorView move to 4c-4** (settled, §5).
+
+**Identity across deferred notifications** (the self-check review round 2 asked for). Nothing in §3
+infers which write or input caused a notification that arrives later:
+
+- selection reports come from the synchronous event's arguments; the native verification compares
+  states behind a barrier and is invalidated by generation, not by matching operations;
+- radio transactions, swipe items and span recognizers are synchronous, or check identities the view
+  holds (the sender, the installed recognizer);
+- two places assume a premise instead, and the design stops for revision if the characterization
+  breaks it: every `SelectionChanged` and `CheckedChanged` a Reactor write causes is raised inside the
+  write (§3.4, §3.6), UIKit completes queued batches in order (§3.4), and MAUI applies a nested write
+  to a radio button whose setter is active only after its notification returns (§3.6). These four
+  are **hard gates**: they are characterized first, and if one fails on a device, implementation
+  stops and the failure is reported before anything is built on it. Classifying a late
+  notification as echo or input is what the carousel design needed and what review round 1 rejected.
+- Inherited from 4c-1 and unchanged: cell retirement follows MAUI's binding-context changes (§2.4),
+  and a cell MAUI drops without unbinding stays mounted until the list unmounts.
+
+**Answered in review round 1**: `ItemState`'s name (kept), `IsIndicatorVisible` (kept), the
+`SwipeItemData` rename (yes), the radio description (`.Semantics(description: …)`, a warning, and
+device assertions, §3.6), the carousel (deferred). No question is open.
+
+**Out of scope, with where each goes.**
+
+- **Explicitly partial in spec 068** (🟡, gaps no port needs), found while reading MAUI: CollectionView
+  reordering (`CanReorderItems`, `ReorderCompleted`), `Scrolled` and `ItemsUpdatingScrollMode`;
+  SwipeView's `SwipeBehaviorOnInvoked` (per side in MAUI, per item in WinUI). The gate writes them
+  into the rows' notes so the rows say what is missing.
+- MAUI's `RadioButtonGroup` attached properties (`GroupName`, `SelectedValue` on a layout), which
+  Reactor's groups replace (§3.6): proposed exclusion (⛔), the Reactor way being `GroupName` on each
+  radio button and the selection in state.
+- The `Uri` hyperlink and `RichTextLineBreak` (§3.9); sticky group headers (not in MAUI).
+- CarouselView and IndicatorView (4c-4, §5); Windows (4g).
+
+### 3.12 Gate for 4c-2
+
+- **WinUI** isn't changed: `skills/reactor.api.txt` is byte-identical.
+- **MAUI**: headless, engine and device suites green on Mac Catalyst, iOS and Android; each §3.10
+  mutation turns its oracle red; the selection and radio characterizations, and the batch-order
+  premise, are recorded in §3.13, with no late echo found (§3.11's self-check);
+  the MAUI benchmark within noise (the list path changes: the key dictionary, the item state and the
+  batch reconcile).
+- **Docs**: `src/Reactor.Maui/README.md` documents item state and its rules, the highlight, grouping
+  and what a cross-group move keeps, `ScrollToKey`, swipe items and opening through a ref, radio
+  content, groups (their scopes, the transaction order, conflicting declarations) and accessibility,
+  the Picker overload and label spans; spec 068's rows
+  (CollectionView, SwipeView, RadioButton, Picker, Label) are updated with their evidence, the
+  partial gaps and the exclusion of §3.11; the CarouselView and IndicatorView rows point to 4c-4.
+
+### 3.13 As built (4c-2)
+
+**What was built** (commits `bb34b688` to the docs commit; each step its own commit):
+
+- **Hard gates first** (`ItemsCharacterization.cs`, plain MAUI, no Reactor code): all four premises
+  hold on Mac Catalyst, iOS and Android (the batch gate is UIKit only); the table is below. Nothing
+  was built before they passed.
+- **Label spans** (`Handlers/LabelInlines.cs`): `RichTextInline`, `RichTextRun`, `RichTextHyperlink`,
+  `Label(params RichTextInline[])`, `Run`, `Hyperlink`, and the run modifiers
+  (`RichTextInlineExtensions`). A per-label state keeps the formatted string, its spans and each span's
+  installed recognizer; the recognizer checks itself against that state (MAUI raises `Tapped` with
+  the label as the sender, so the sender can't be the identity).
+- **Picker**: the `Picker<T>(items, display, …)` factory.
+- **CollectionView** (`Handlers/ItemsHandlers.cs`, `NativeSelectionVerifier.cs`,
+  `CollectionViewExtensions.cs`): `ItemState`, the overloads, `ShowsSelectionHighlight`, `ItemGroup`
+  and the grouped overloads, `GroupBox`, cell roles, `SelectionRules` (one rule set for the template
+  and the write), the key dictionary, `ScrollToKey`, and the verifier with an `ISelectionPort`
+  (UIKit's on iOS and Mac Catalyst, none elsewhere, a stub in tests). `ViewHandler` gained a virtual
+  `CanUpdate`.
+- **SwipeView** (`ContainerHandlers.cs`): `SwipeItemData`, four sides, modes, `Threshold`, content
+  items as child roots, the events, structure-only rebuilds and identity-checked invocation.
+- **RadioButton** (`Handlers/RadioButtons.cs`): a hand-written handler replaces the descriptor (the
+  group table needs the engine node); `RadioGroups` per top-level root with page and host scopes,
+  transactions, the queue, per-group generations and the post-pass conflict check.
+
+**Deviations from §3, and why:**
+
+1. **Entering `None` needs no repair on the devices measured.** UIKit deselects every item when MAUI
+   sets `AllowsSelection = false`, and Android's adapter clears too: with the verification switched
+   off, the native selection was empty after `Single → None` and `Multiple → None`, also with a
+   deferred selection pending. The verification still runs on entering `None` (headless tests pin its
+   logic); the device fixture records the switched-off result instead of asserting a witness.
+2. **No late `SelectionChanged` was found** (gate 1), so the pending-report path of §3.4 wasn't
+   needed; the report stays synchronous, from the event's arguments.
+3. **Android never needed the verification**: with it switched off, the overlapping writes still
+   ended at the declared item there. The port exists only on iOS and Mac Catalyst.
+4. **On Android, plain MAUI loops forever** when a text radio button's `IsChecked` is written from its
+   own `CheckedChanged` with a different value: the native button's listener writes the old value
+   back while the setter is active, MAUI delays both writes, and they alternate (gate 4 ran out of
+   memory before it was switched to templated buttons). Reactor never writes a button whose
+   notification is active (the queue); an app writing one through a ref from its own callback hits
+   MAUI's loop (documented in the README as a check from a callback running on the next turn).
+5. **Accessibility**: Android exposes the templated radio button as `android.widget.RadioButton`,
+   checkable, with its checked state; iOS and Mac Catalyst expose the `Button` trait with value `1` or
+   `0` (UIKit has no radio trait). Both carry the description. No handler supplement was needed.
+6. **Test input**: Android reports span regions in pixels (MAUI's tap handler passes the touch's pixel
+   position to `GetChildElements`), so the span fixture taps in pixels; Android's jump scroll doesn't
+   run MAUI's scroll listener, so the threshold fixture scrolls animated; UIKit's swipe is driven
+   through `MauiSwipeView.HandleTouchInteractions` (reflected), Android's through dispatched touches.
+7. **Two equivalent mutants**: the per-callback membership recheck and the restores in `finally` can't
+   be told apart by any test, because a render (the only way membership changes) can't run inside a
+   dispatch and callback exceptions are caught one by one. Both are kept as defense in depth.
+8. **MAUI caps `Threshold` at an Execute side's open distance**, which for content items is their
+   width (UIKit's `ValidateSwipeThreshold` takes `Math.Min(Threshold, GetSwipeOpenDistance())`): a
+   narrow content item executes at a swipe far below `Threshold`. Measured when the first run of the
+   below-threshold Execute check invoked a one-character content item (narrower than 40 points) at 40 points on Mac Catalyst.
+   That is MAUI's behavior, not Reactor's; the fixture's content item is now wider than the
+   threshold. Worth a sentence in user docs if content-item Execute sides become common.
+
+**Characterization (device; gates on plain MAUI):**
+
+| | Mac Catalyst | iOS | Android |
+|---|---|---|---|
+| Gate 1: `SelectionChanged` from a programmatic write (single, multiple, two in a turn, with an items change, removal, mode change) | always inside the write | same | same |
+| Gate 2: `CheckedChanged` from a programmatic write (text and templated, unique group names) | always inside the write | same | same |
+| Gate 3: MAUI's deferred select (list off-window) and a later barrier | deferred 12 of 12; completed before the barrier 12 of 12, with and without an items change between | same | n/a (no deferral) |
+| Gate 4: a write to a radio button inside its own notification | applied after the notification returns, before the outer write returns | same | same (templated); a text button loops forever (deviation 4) |
+| Overlapping selection, verification off | native A, virtual B (MAUI's bug reproduced) | same | native B |
+| Overlapping selection, verification on | native B, no report | same | native B |
+| A user's B while A is deferred | reports exactly `[b]`, native B | same | same |
+| Highlight with `ItemState`; item-only list | none; shown | none; shown | none; shown |
+| Radio tap: native state inside the tap; reports | peers unchecked; peer `false`, then `true` | same | same |
+| Radio accessibility (checked; unchecked) | label, value 1; value 0 | label, `Button`, value 1; value 0 | `RadioButton`, checkable, checked true; false |
+| Swipe below the threshold (Reveal and Execute sides); Reveal above; Execute above | closed, nothing; open at the items' width, nothing; the current callback once | same | same |
+| Swipe content item opened through a ref; re-rendered while open; invoked | realized with a size and its text; updated in place, still open; the current callback once | same | same |
+
+**Tests.** Headless `Reactor.Maui.Tests`: 429 after the review rounds (406 before them; 328 before 4c-2), in `LabelAndPickerTests.cs`,
+`CollectionViewItemTests.cs`, `SwipeViewTests.cs`, `RadioButtonTests.cs` and
+`ReadmeItemsSnippetTests.cs` (the README's snippets). Engine `Reactor.Maui.Engine.Tests`: 80
+(unchanged). Device: 42 new fixtures (4 gates, 18 behaviors on both registries, 2 characterizations)
+in `ItemsCharacterization.cs`, `ItemsFixtures.cs`, `ItemsPlatformInput.cs`. Full device suites at the
+review rounds' head: Mac Catalyst 156 passed, 7 skipped; iOS simulator 156 passed, 7 skipped; Android
+emulator 158 passed, 5 skipped (before them: 154/7, 154/7, 156/5); after the last fix (a radio
+transaction's try/catch/finally), the radio fixtures (`RadioButton*`, 9) passed again on all three. Two earlier full Android runs each failed one 4c-1 fixture of code 4c-2 doesn't touch,
+`WebView_Navigations_AreAttemptedAndCompleted` (once a refused back wasn't asked within 10 s, once
+the fixture ran past 30 s after its back case); it passed alone twice and in the grouped ref and echo
+runs, and the base commit's one full run passed it. The cause was two races in that fixture, timing
+dependent and unrelated to 4c-2 (§2.15, open issues); fixed in the fixture, after which three
+consecutive full Android runs passed.
+
+**Mutation checks** (each broke the code, ran the class's tests, restored and touched the file): all
+red but the two equivalent mutants of deviation 7. Label: rebuilding on every change, invoking
+through `Current`, checking the span but not the recognizer, reading only the index, no hyperlink
+underline, no direct fallback. CollectionView: state from the platform selection, keying the tree by
+`(key, IsSelected)`, toggling the highlight in place, no highlight group, the mode written outside the
+scope, sequence comparison, a posted report. Verification: scheduling only on a virtual write,
+skipping `None`, a notification that keeps the pending correction, a stale completion that compares,
+a stale completion that issues nothing, no owner guard, no second verification. Swipe: rebuilding on
+every render, comparing the content element (first survived: the test's content was equal across
+renders; the test now changes it), reading only the index, invoking through `Current`. Radio: the
+element's `GroupName` on the view, the unnamed scope walking to the top root, peers unchecked outside
+their scope, reporting only the checked one, dispatching before unchecking, the nested transaction
+inline, one generation per table, conflicts checked during the pass, warning per render, the
+description warning per render, the template switch updated in place.
+
+**Benchmark** (Mac Catalyst, `tests/Reactor.Maui.Benchmark`, one pair against `29c66cd6`, base first):
+total time within noise in every scenario on both renderers (head −5% to +0.3%), allocations
+identical to the kilobyte. The benchmark renders stacks of labels and buttons, so it covers the
+label's changed text path, not the list path; the list path's added work per commit is a key
+dictionary rebuild in `Sync` and, on iOS and Mac Catalyst, one empty batch update after a commit
+that wrote the selection or its mode, or followed user input (since the review round below; before
+it, after every commit of a selecting list).
+
+**Review round (pr-review of `a7db2b0c`).** Changes, each with its headless test:
+
+- **Radio group lifetime.** A group (members and generation) is one object in one dictionary and goes
+  with its last member, so a popped page or removed layout (a group key's scope) isn't kept alive; a
+  transaction or queued check on a removed group stops. Test: a weak reference to a removed layout
+  whose buttons were checked collects.
+- **A queued check survives a render.** A callback that changes state and then checks another button
+  through a ref: the state change's render ran before the queue and re-applied the button's
+  declaration (suppressed), so the queue dropped the check. A render now skips the controlled write
+  for a button with a queued check (the queue restores its declaration if it drops the check).
+- **Radio accessible name.** The effective description (the declared one, else non-empty text) is
+  written after the modifiers (a new `ViewHandler.AfterModifiers` hook), so removing
+  `.Semantics(description:)` keeps the text as the name and empty text clears it.
+- **Native verification only when needed** (§3.4 changed): a commit schedules it only when it wrote
+  the selection or its mode, or input arrived since the native selection was last found as declared;
+  an unrelated re-render issues no batch update. The stale-completion reissue is unchanged.
+- **Input awaits its commit** (second verification round, reproduced headlessly by the reviewer): user
+  B, MAUI's deferred A, then the stale barrier and its replacement completing before the accepting
+  render; the replacement compared native A with the still-declared A, cleared the pending work, and
+  B's render (no virtual write) issued nothing, leaving native A under virtual B. Input now sets a
+  marker that only the next commit of the list consumes (accepting or refusing, which then always
+  verifies); a completion while it is set compares nothing and clears nothing, since the declaration
+  it would compare is stale. A commit that wrote no selection no longer bumps the generation of an
+  outstanding barrier (it compares against the element live when it completes), so an accepted tap
+  costs one barrier, not two.
+- **The radio queue survives a throw**: a throwing platform write or app `CheckedChanged` handler in a
+  drained check leaves the rest queued, re-posted, instead of stuck (a queued button skips its
+  controlled writes).
+- **A radio transaction is one try/catch/finally** (third verification round): a throw while
+  settling the native group (an app's `CheckedChanged` handler on a peer, a platform write) skipped
+  the restores and escaped into the platform dispatcher. Now the native phase and the dispatch share
+  one `try`: the error goes to the checked button's boundary (`ReportError`), and every participant
+  gets a restore, on the tap path and the queued path. The peer whose handler threw stays where MAUI
+  left it: MAUI's `BindableObject` doesn't clear a property's "being set" flag when a change handler
+  throws (4e6582f `BindableObject.cs` 675-702 has no `finally`), so every later write to it is queued
+  forever. That's MAUI's, and goes upstream with the others. The drain's re-post after a throw is now
+  unreachable (a transaction no longer throws) and kept as defense in depth.
+- **Run decorations** toggle one flag of the effective value (a hyperlink starts underlined), so
+  `.Strikethrough(false)` keeps a hyperlink's underline and `.Underline().Strikethrough()` keeps both.
+- `Label` gained `.LineHeight(...)` and `.TextTransform(...)`; a swipe content item no longer rebuilds
+  its side for a color or icon it doesn't show; `RadioButton`'s callback parameter is
+  `onIsCheckedChanged`, WinUI's name.
+- Not done: replacing `LabelInlines`' two weak tables with a `Label` subclass (optional in the review;
+  the tables work and the subclass would change the native type users see).
+
+More tests: an unnamed group across a component boundary, MAUI's own grouping as a witness on both
+registries (Controls unchecks the peer, direct doesn't), a ref uncheck outside a transaction, queued
+checks superseded or unmounted before they run, two queued checks where the first unchecks the
+second, swipe mode-only and icon-only rebuilds, content items unmounted with the swipe view, header
+replacement with new text, a group header cell's state across rebinds; every barrier completing
+before the accepting render (single and multiple, with and without MAUI's deferred A), one barrier
+per accepted tap, a throw in the radio drain. Device fixture code, run in the full suites above:
+`SwipeView_ContentItems` (new), the Execute side below its threshold, the overlap precondition and a
+correction count on iOS and Mac Catalyst, MAUI's real iOS label tap dispatch, exact events in gate 1
+and exact selections in the selection characterization, radio accessibility before and after a
+declared change, and the recycled list's exact native selection.
+
+Mutation checks of this round (headless; each red unless noted): the item state cached per cell,
+slots that skip unmount, the threshold through `Current`, grouped items left out of the key index,
+keys unique per group only, the cell tree keyed by box, a tree kept across retirement, `ScrollToKey`
+passing the key, the radio name scope widened to the root, the unnamed scope walking `ContextParent`,
+peers by parent node (red since the component-boundary test), a kept empty group, a render writing a
+queued button, the description written before the modifiers, scheduling regardless of writes, only
+virtual writes scheduling, `Schedule` ignoring the input marker, a completion comparing while input
+awaits its commit, a completion consuming the marker, every commit bumping the generation, the drain
+not re-posted after a throw (red when added; equivalent since the transaction catches), a throwing
+transaction escaping, restoring nothing, or reporting nothing, entering `None`
+unverified (it survived at first: the stub port arrived after mount and left verification pending,
+so the test now settles the mount first and counts issued barriers), the decoration replacing the
+whole value, content items comparing color and icon, the mode not compared, a queued check
+superseding every group (the per-group generation mutant moved there: transactions never nest, so
+bumping every group in `Process` was equivalent). One more equivalent mutant: not restoring a dropped
+queue entry, because the transaction that unchecked it restores it on a posted turn, after the drain.
+Every earlier mutant still dies (`Invalidate` no longer sets pending itself, the marker does, so the
+earlier "a notification doesn't make verification pending" mutant no longer applies).
+
+Device mutation checks (each built and run on the device with the fixture filter, restored and
+touched; all red): the radio content template set after the handler (`RadioButton_Content`, Android
+and Mac Catalyst: the content-only width); swipe sides rebuilt on every render
+(`SwipeView_ContentItems`, Android and Mac Catalyst); `Threshold` written as 10
+(`SwipeView_Threshold`, Android: the Reveal side opened below 100, so the Execute side's +40 check is
+guarded by its +160 positive control rather than killed alone); no native verification port
+(`CollectionView_OverlappingSelection_*`, Mac Catalyst and iOS: native `0:0`); the hyperlink recognizer
+also installed on the label (`Label_Spans_Platform`, Mac Catalyst and iOS: the other-run tap invoked
+it, which the earlier span-only tap helper could not see); a declared radio check not written after
+mount (`RadioButton_Accessibility`, Android and Mac Catalyst); the selection written as the first
+item (`CollectionView_SelectionInItems_Recycling`, Android: native `0:0`).
+
+**Open issues.**
+
+- Android: plain MAUI's infinite loop on a text radio button written from its own notification
+  (deviation 4), and MAUI's iOS `ValidateAndSelectItem` not checking that its item is still the
+  selected one (§3.4): both to file upstream.
+- Not in 4c-2, as designed: CarouselView and IndicatorView (§5), the spec 068 gaps of §3.11, Windows
+  (4g).
 
 ## 4. 4c-3: shapes, brushes, ContentView, image equality, tests and the audit
 
 To be written when 4c-3 starts.
+
+## 5. 4c-4: CarouselView and IndicatorView
+
+To be designed when 4c-4 starts. Moved out of 4c-2 by its design review (round 1), which found the
+round-0 design (a position reported once at rest, compared with the declaration, plus a conditional
+in-flight flag) unsound. The design must meet these requirements, each from a finding:
+
+- **Never write or report during a drag.** The round-0 design still wrote under the user's finger:
+  `CarouselViewHandler.Apply` reasserts the declared position on any render during a drag, MAUI's iOS
+  `ScrollToPosition` (`CarouselViewController2`) has no drag guard, and the settle bound flushed
+  regardless of the drag. Writes and reports wait for the end of a drag, whatever renders meanwhile.
+- **No provenance guessing.** The in-flight flag guessed whether a change came from Reactor; it would
+  have swallowed accessibility scrolls and `ScrollTo` through a ref. MAUI's
+  `MauiCarouselRecyclerView` (`UpdateFromPosition`, `UpdatePosition`) and `CarouselViewController2`
+  expose no operation identity, so the design reads platform state, never infers the cause.
+- **Characterize accessibility actions and ref commands** (VoiceOver and TalkBack scrolling,
+  `ScrollTo` through a ref) along with swipes, flings, programmatic writes, items changes, `Loop` and
+  iOS 26's debounced position writes, before the echo design is fixed.
+- **A long-hold test**: the user holds a drag while an unrelated render runs; nothing is written to
+  the carousel and nothing is reported until the drag ends, and then exactly once.
+- **`ItemState.IsCurrent`** joins `IsSelected` (§3.3), replacing the `CurrentItem`, `PreviousItem` and
+  `NextItem` visual states.
+- **IndicatorView** stays a separate controlled element linked to the carousel through state, with
+  MAUI's names; its `IndicatorTemplate` is a proposed exclusion (render a row of elements from the
+  count and position instead).

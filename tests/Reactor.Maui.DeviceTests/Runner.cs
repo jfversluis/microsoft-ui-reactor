@@ -40,6 +40,13 @@ public sealed class FixtureContext(Window window)
 
     public void Render(Element element) => _root!.Render(MauiContexts.Window.Provide(window, element));
 
+    /// <summary>Shows a plain MAUI view, without Reactor, for characterizing MAUI itself.</summary>
+    public void ShowNative(View view)
+    {
+        _viewHost.Content = view;
+        Pages.Set(_viewHost);
+    }
+
     private bool _keepWindowPage;
 
     /// <summary>Unmounts the tree. <paramref name="keepWindowPage"/> leaves its page in the window.</summary>

@@ -171,7 +171,7 @@ public class ControlledControlTests
     {
         var reported = new List<string>();
         var host = new TestHost(MauiHandlers.CreateRegistry()).Render(
-            Page("p", SwipeView(Label("row")) with { RightItems = [new SwipeAction("Delete", () => reported.Add("swipe"))] })
+            Page("p", SwipeView(Label("row")) with { RightItems = [new SwipeItemData("Delete", () => reported.Add("swipe"))] })
                 with { ToolbarItems = [new ToolbarAction("Save", () => reported.Add("toolbar"))] });
         var page = (Microsoft.Maui.Controls.ContentPage)host.RootView!;
         var toolbar = (IMenuItemController)page.ToolbarItems[0];
@@ -679,10 +679,13 @@ public class ControlDescriptorEntryTests
 
         host.Render(RadioButton("r", true, groupName: "g") with { FontSize = 18 });
         var radio = (Microsoft.Maui.Controls.RadioButton)host.RootView!;
-        Assert.Equal(("r", true, "g", 18d), ((string)radio.Content, radio.IsChecked, radio.GroupName, radio.FontSize));
+        // Reactor groups radio buttons itself; the native name is its own (spec 070 §3.6).
+        var nativeGroup = radio.GroupName;
+        Assert.StartsWith("reactor-", nativeGroup, StringComparison.Ordinal);
+        Assert.Equal(("r", true, 18d), ((string)radio.Content, radio.IsChecked, radio.FontSize));
         host.Render(RadioButton("s", false));
         Assert.Same(radio, host.RootView);
-        Assert.Equal(("s", false, (string?)null), ((string)radio.Content, radio.IsChecked, radio.GroupName));
+        Assert.Equal(("s", false, nativeGroup), ((string)radio.Content, radio.IsChecked, radio.GroupName));
 
         var search = Only<Microsoft.Maui.Controls.SearchBar>(SearchBar("q", placeholder: "find"));
         Assert.Equal(("q", "find"), (search.Text, search.Placeholder));

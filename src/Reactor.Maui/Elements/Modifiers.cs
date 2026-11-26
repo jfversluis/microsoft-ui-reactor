@@ -172,6 +172,11 @@ public static class ViewElementExtensions
     public static LabelElement Padding(this LabelElement element, double horizontal, double vertical) =>
         element with { Padding = new Thickness(horizontal, vertical) };
 
+    /// <summary>The line height, as a multiple of the font's (MAUI's <c>LineHeight</c>).</summary>
+    public static LabelElement LineHeight(this LabelElement element, double multiple) => element with { LineHeight = multiple };
+
+    public static LabelElement TextTransform(this LabelElement element, TextTransform transform) => element with { TextTransform = transform };
+
     public static LabelElement MaxLines(this LabelElement element, int lines) =>
         element with { MaxLines = lines, LineBreakMode = Microsoft.Maui.LineBreakMode.TailTruncation };
 
@@ -197,4 +202,49 @@ public static class ViewElementExtensions
 
     public static T Padding<T>(this T element, double horizontal, double vertical) where T : LayoutElement =>
         (T)(((LayoutElement)element) with { Padding = new Thickness(horizontal, vertical) });
+}
+
+/// <summary>Fluent modifiers for the runs of a formatted label; they keep the run's type.</summary>
+public static class RichTextInlineExtensions
+{
+    public static T FontSize<T>(this T inline, double size) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { FontSize = size });
+
+    public static T Bold<T>(this T inline) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { FontAttributes = (inline.FontAttributes ?? Microsoft.Maui.Controls.FontAttributes.None) | Microsoft.Maui.Controls.FontAttributes.Bold });
+
+    public static T Italic<T>(this T inline) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { FontAttributes = (inline.FontAttributes ?? Microsoft.Maui.Controls.FontAttributes.None) | Microsoft.Maui.Controls.FontAttributes.Italic });
+
+    public static T FontFamily<T>(this T inline, string family) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { FontFamily = family });
+
+    public static T TextColor<T>(this T inline, Color? color) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { TextColor = color });
+
+    public static T BackgroundColor<T>(this T inline, Color? color) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { BackgroundColor = color });
+
+    public static T CharacterSpacing<T>(this T inline, double spacing) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { CharacterSpacing = spacing });
+
+    public static T LineHeight<T>(this T inline, double multiple) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { LineHeight = multiple });
+
+    public static T TextTransform<T>(this T inline, TextTransform transform) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { TextTransform = transform });
+
+    /// <summary>Turns the underline on or off, keeping any other decoration (a hyperlink starts underlined).</summary>
+    public static T Underline<T>(this T inline, bool enabled = true) where T : RichTextInline =>
+        Decorate(inline, Microsoft.Maui.TextDecorations.Underline, enabled);
+
+    /// <summary>Turns the strikethrough on or off, keeping any other decoration.</summary>
+    public static T Strikethrough<T>(this T inline, bool enabled = true) where T : RichTextInline =>
+        Decorate(inline, Microsoft.Maui.TextDecorations.Strikethrough, enabled);
+
+    private static T Decorate<T>(T inline, TextDecorations flag, bool enabled) where T : RichTextInline
+    {
+        var current = inline.TextDecorations ?? (inline is RichTextHyperlink ? Microsoft.Maui.TextDecorations.Underline : Microsoft.Maui.TextDecorations.None);
+        return (T)(((RichTextInline)inline) with { TextDecorations = enabled ? current | flag : current & ~flag });
+    }
 }

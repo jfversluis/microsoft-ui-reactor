@@ -16,6 +16,49 @@ public sealed record LabelElement(string Text) : TextViewElement
     public Thickness? Padding { get; init; }
     public TextTransform? TextTransform { get; init; }
     public TextType? TextType { get; init; }
+
+    /// <summary>
+    /// Formatted text: runs and hyperlinks, each with its own style (MAUI's <c>FormattedText</c>
+    /// spans). When set it wins over <see cref="TextViewElement"/>'s <c>Text</c>. Create it with
+    /// <c>Label(Run(…), Hyperlink(…))</c>. Unset run properties take the label's.
+    /// </summary>
+    public RichTextInline[]? Inlines { get; init; }
+}
+
+/// <summary>
+/// A run of formatted text in a <c>Label</c> (WinUI's name; a MAUI <c>Span</c>). Properties left
+/// <see langword="null"/> take the label's.
+/// </summary>
+public abstract record RichTextInline
+{
+    private protected RichTextInline() { }
+
+    public double? FontSize { get; init; }
+    public FontAttributes? FontAttributes { get; init; }
+    public string? FontFamily { get; init; }
+    public Color? TextColor { get; init; }
+    public Color? BackgroundColor { get; init; }
+    public double? CharacterSpacing { get; init; }
+    public TextDecorations? TextDecorations { get; init; }
+    public double? LineHeight { get; init; }
+    public TextTransform? TextTransform { get; init; }
+
+    internal abstract string InlineText { get; }
+}
+
+/// <summary>Plain formatted text. Create it with <c>Run(text)</c>.</summary>
+public sealed record RichTextRun(string Text) : RichTextInline
+{
+    internal override string InlineText => Text;
+}
+
+/// <summary>
+/// Text that runs <see cref="OnClick"/> when tapped. Underlined unless it declares
+/// <c>TextDecorations</c>. Create it with <c>Hyperlink(text, onClick)</c>.
+/// </summary>
+public sealed record RichTextHyperlink(string Text, Action OnClick) : RichTextInline
+{
+    internal override string InlineText => Text;
 }
 
 public sealed record ImageElement(ImageSource? Source) : ViewElement
@@ -200,10 +243,27 @@ public sealed record TimePickerElement(TimeSpan Time, Action<TimeSpan>? OnTimeSe
     public string? Format { get; init; }
 }
 
-/// <summary>A controlled radio button. Buttons with the same <see cref="GroupName"/> are mutually exclusive.</summary>
+/// <summary>
+/// A controlled radio button. Buttons with the same <see cref="GroupName"/> on one page are mutually
+/// exclusive; unnamed buttons are grouped by the layout that holds them. Checking one reports its
+/// peers' unchecks too. Reactor groups them, on both renderers.
+/// </summary>
 public sealed record RadioButtonElement(string Content, bool IsChecked, Action<bool>? OnCheckedChanged = null) : TextViewElement
 {
     public string? GroupName { get; init; }
+
+    /// <summary>
+    /// Declarative content (WinUI's name), taking precedence over the text <c>Content</c>, which then
+    /// becomes the accessible name. Render the checked look from the declared <c>IsChecked</c>. Without
+    /// a text, set <c>.Semantics(description: …)</c>.
+    /// </summary>
+    public Element? ContentElement { get; init; }
+
+    /// <summary>
+    /// Whether a radio button with <see cref="ContentElement"/> shows MAUI's indicator next to it
+    /// (the default). <c>false</c> makes the content the whole button, as a card. Changing it remounts.
+    /// </summary>
+    public bool IsIndicatorVisible { get; init; } = true;
 }
 
 // ── Layout ──────────────────────────────────────────────────────────────────
@@ -256,17 +316,50 @@ public sealed record RefreshViewElement(Element? Content, bool IsRefreshing, Act
     public Color? RefreshColor { get; init; }
 }
 
-/// <summary>An action revealed by swiping a <c>SwipeView</c>.</summary>
-public sealed record SwipeAction(string Text, Action OnInvoked)
+/// <summary>
+/// An item revealed by swiping a <c>SwipeView</c> (WinUI's name). With <see cref="Content"/> it shows
+/// that element (MAUI's <c>SwipeItemView</c>) and <see cref="Text"/> becomes its accessible name;
+/// otherwise it shows <see cref="Text"/>, <see cref="Icon"/> and <see cref="BackgroundColor"/>.
+/// </summary>
+public sealed record SwipeItemData(string Text, Action? OnInvoked = null)
 {
     public Color? BackgroundColor { get; init; }
     public ImageSource? Icon { get; init; }
+
+    /// <summary>
+    /// A custom view for the item. It re-renders in place while its side keeps the same structure (the
+    /// count, each item's kind and text, a text item's color and icon, and the mode); a change there
+    /// rebuilds the side and remounts it.
+    /// </summary>
+    public Element? Content { get; init; }
 }
 
+/// <summary>
+/// Swipe actions around one child. Open and close it from code through a ref to MAUI's
+/// <c>SwipeView</c>: <c>swipe.Current?.Open(OpenSwipeItem.RightItems)</c>, <c>swipe.Current?.Close()</c>.
+/// Items are rebuilt only when their text, color, icon, kind, count or mode changes.
+/// </summary>
 public sealed record SwipeViewElement(Element? Content) : ViewElement
 {
-    public SwipeAction[] LeftItems { get; init; } = [];
-    public SwipeAction[] RightItems { get; init; } = [];
+    public SwipeItemData[] LeftItems { get; init; } = [];
+    public SwipeItemData[] RightItems { get; init; } = [];
+    public SwipeItemData[] TopItems { get; init; } = [];
+    public SwipeItemData[] BottomItems { get; init; } = [];
+    public SwipeMode LeftItemsMode { get; init; } = SwipeMode.Reveal;
+    public SwipeMode RightItemsMode { get; init; } = SwipeMode.Reveal;
+    public SwipeMode TopItemsMode { get; init; } = SwipeMode.Reveal;
+    public SwipeMode BottomItemsMode { get; init; } = SwipeMode.Reveal;
+
+    /// <summary>How far the content must be swiped to reveal or execute the items; <c>null</c> keeps MAUI's default.</summary>
+    public double? Threshold { get; init; }
+
+    public Action<SwipeDirection>? OnSwipeStarted { get; init; }
+
+    /// <summary>The swipe moved: its direction and offset.</summary>
+    public Action<SwipeDirection, double>? OnSwipeChanging { get; init; }
+
+    /// <summary>The swipe ended: its direction and whether the items were left open.</summary>
+    public Action<SwipeDirection, bool>? OnSwipeEnded { get; init; }
 }
 
 // ── Virtualized collections ─────────────────────────────────────────────────
@@ -281,6 +374,16 @@ public enum ItemsArrangement
 }
 
 /// <summary>
+/// The state an item template can render (spec 070 §3.3). <see cref="IsSelected"/> is the declared
+/// selection: <c>SelectionMode.None</c> selects nothing; <c>Single</c> compares the item's key with
+/// <c>SelectedKey</c>; <c>Multiple</c> looks it up in <c>SelectedKeys</c>.
+/// </summary>
+public readonly record struct ItemState(bool IsSelected);
+
+/// <summary>A group of a grouped <c>CollectionView</c>: its key, the app's group object and its items.</summary>
+public sealed record ItemGroup(string Key, object? Group, IReadOnlyList<object?> Items);
+
+/// <summary>
 /// A virtualized list. Each visible item is rendered by <see cref="ItemTemplate"/> into its own
 /// tree, which inherits this element's context. Items are matched across renders by
 /// <see cref="ItemKey"/>, so changes animate and scroll position is kept. Create it with the generic
@@ -289,7 +392,7 @@ public enum ItemsArrangement
 public sealed record CollectionViewElement(
     IReadOnlyList<object?> Items,
     Func<object?, string> ItemKey,
-    Func<object?, Element?> ItemTemplate) : ViewElement
+    Func<object?, ItemState, Element?> ItemTemplate) : ViewElement
 {
     public ItemsArrangement Arrangement { get; init; }
     public int Span { get; init; } = 1;
@@ -299,7 +402,7 @@ public sealed record CollectionViewElement(
     /// <summary>The key of the selected item (single selection). Controlled.</summary>
     public string? SelectedKey { get; init; }
 
-    /// <summary>The keys of the selected items (multiple selection). Controlled.</summary>
+    /// <summary>The keys of the selected items (multiple selection), compared as a set. Controlled.</summary>
     public IReadOnlyList<string>? SelectedKeys { get; init; }
 
     public Action<IReadOnlyList<string>>? OnSelectionChanged { get; init; }
@@ -316,6 +419,27 @@ public sealed record CollectionViewElement(
     /// item templates to reuse the native views across items, which scrolls faster.
     /// </summary>
     public bool ReuseItemTrees { get; init; }
+
+    /// <summary>
+    /// Whether the platform draws its own highlight on a selected item (iOS's gray background,
+    /// Android's activated color). The factory overload whose template takes an
+    /// <see cref="ItemState"/> sets it to <c>false</c>, since that template draws the selection
+    /// itself. Changing it remounts the list.
+    /// </summary>
+    public bool ShowsSelectionHighlight { get; init; } = true;
+
+    /// <summary>
+    /// The groups of a grouped list (<see cref="Items"/> is then unused). Item keys are unique across
+    /// the whole list. Switching between grouped and flat remounts the list. Create it with the
+    /// grouped <c>CollectionView</c> factory.
+    /// </summary>
+    public IReadOnlyList<ItemGroup>? Groups { get; init; }
+
+    /// <summary>Renders a group's header from its group object; <c>null</c> shows none.</summary>
+    public Func<object?, Element?>? GroupHeaderTemplate { get; init; }
+
+    /// <summary>Renders a group's footer from its group object; <c>null</c> shows none.</summary>
+    public Func<object?, Element?>? GroupFooterTemplate { get; init; }
 }
 
 /// <summary>A swipeable carousel of items, rendered like <see cref="CollectionViewElement"/>. Controlled by <see cref="Position"/>.</summary>
