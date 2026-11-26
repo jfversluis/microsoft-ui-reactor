@@ -8,11 +8,16 @@ namespace Reactor.Maui.DeviceTests;
 /// <summary>
 /// The platform's own dialogs, found and answered in process the way the user would: through the
 /// native button. Android: the dialog's window, found among the process's windows, and its button
-/// clicked. iOS and Mac Catalyst: the alert controller in the window's presentation chain, dismissed,
-/// and the chosen action's own handler run (UIKit exposes no public way to tap an action).
+/// clicked. iOS and Mac Catalyst: UIKit's own tap path, which dismisses the alert and runs the action
+/// as a tap does (the button view's accessibility activation when an accessibility client is running,
+/// else the alert's dismiss-for-action method the button calls). The action's private handler, with a
+/// separate dismissal, is only a last resort. Either way the helper returns once the alert has gone.
 /// </summary>
 public static class NativeDialogs
 {
+    /// <summary>How long a dialog may take to appear or go on a slow (CI) simulator.</summary>
+    public const int Timeout = 10_000;
+
     /// <summary>How many native dialogs are on screen (including one still dismissing on iOS).</summary>
     public static int Count(Window window)
     {
@@ -25,13 +30,16 @@ public static class NativeDialogs
 #endif
     }
 
-    /// <summary>Whether a native dialog is fully shown and can take a tap: presented, and (Android) focused.</summary>
-    public static bool IsReady(Window window)
+    /// <summary>
+    /// Whether a native dialog (titled <paramref name="title"/>, if given) is fully shown and can take a
+    /// tap: presented, and (Android) focused.
+    /// </summary>
+    public static bool IsReady(Window window, string? title = null)
     {
 #if IOS || MACCATALYST
-        return Alerts(window).Any(a => !a.IsBeingPresented && !a.IsBeingDismissed && a.View?.Window is not null);
+        return Alerts(window).Any(a => !a.IsBeingPresented && !a.IsBeingDismissed && a.View?.Window is not null && (title is null || a.Title == title));
 #elif ANDROID
-        return DialogRoots().Any(r => r.HasWindowFocus);
+        return DialogRoots().Any(r => r.HasWindowFocus && (title is null || Texts(r).Contains(title)));
 #else
         return false;
 #endif
@@ -50,8 +58,12 @@ public static class NativeDialogs
 #endif
     }
 
-    /// <summary>Answers the dialog on screen through its button <paramref name="button"/>, typing <paramref name="text"/> first for a prompt.</summary>
-    public static void Answer(Window window, string button, string? text = null)
+    /// <summary>
+    /// Answers the dialog on screen through its button <paramref name="button"/>, typing
+    /// <paramref name="text"/> first for a prompt, and returns once the dialog has gone from the screen;
+    /// fails with what is still shown otherwise.
+    /// </summary>
+    public static async Task Answer(Window window, string button, string? text = null, bool answerBeforeDismissal = false)
     {
 #if IOS || MACCATALYST
         var alert = Alerts(window).LastOrDefault(a => !a.IsBeingDismissed)
@@ -59,10 +71,20 @@ public static class NativeDialogs
         var action = alert.Actions.FirstOrDefault(a => a.Title == button)
             ?? throw new CheckFailedException($"the alert has no '{button}' action: {Describe(window)}");
         if (text is not null) alert.TextFields![0].Text = text;
-        // As a tap does: the alert dismisses (animated, so it stays in the chain for a while) and the
-        // action's handler, MAUI's, sets the answer.
-        alert.DismissViewController(true, null);
-        RunHandler(action);
+        if (answerBeforeDismissal)
+        {
+            // The answer arrives while the alert is still on screen (UIKit's tap runs the handler only
+            // once the alert has gone): what the queue's barrier is for.
+            RunHandler(action);
+            alert.PresentingViewController?.DismissViewController(true, null);
+        }
+        else if (!Tap(alert, action))
+        {
+            Console.WriteLine($"#   UIKit's tap path is unavailable for '{button}'; the action's private handler runs instead");
+            alert.PresentingViewController?.DismissViewController(true, null);
+            RunHandler(action);
+        }
+        await Gone(window, alert, $"the alert answered with '{button}'");
 #elif ANDROID
         var root = DialogRoots().LastOrDefault() ?? throw new CheckFailedException("no dialog window on screen");
         if (text is not null)
@@ -70,10 +92,115 @@ public static class NativeDialogs
             var edit = Find<Android.Widget.EditText>(root) ?? throw new CheckFailedException("the dialog has no text field");
             edit.Text = text;
         }
+        if (!Click(root, button)) throw new CheckFailedException($"the dialog has no '{button}' button: {Describe(window)}");
+        await Gone(window, root, $"the dialog answered with '{button}'");
+#else
+        await Task.CompletedTask;
+        throw new CheckFailedException("native dialogs are not driven on this platform");
+#endif
+    }
+
+    /// <summary>
+    /// Closes every native dialog still on screen (through its cancel button, else by dismissing it),
+    /// waiting until each has gone, so a failed fixture can't leave one that blocks the next fixture's
+    /// dialogs. Returns whether the screen is clear.
+    /// </summary>
+    public static async Task<bool> CloseAll(Window window)
+    {
+#if IOS || MACCATALYST
+        for (var round = 0; round < 4 && Alerts(window).LastOrDefault() is { } alert; round++)
+        {
+            if (!alert.IsBeingDismissed)
+            {
+                var cancel = alert.Actions.FirstOrDefault(a => a.Style == UIAlertActionStyle.Cancel) ?? alert.Actions.FirstOrDefault();
+                if (cancel is null || !Tap(alert, cancel)) alert.PresentingViewController?.DismissViewController(false, null);
+            }
+            try
+            {
+                await Gone(window, alert, "a dialog left on screen");
+            }
+            catch (CheckFailedException)
+            {
+            }
+        }
+        return Count(window) == 0;
+#elif ANDROID
+        for (var round = 0; round < 4 && DialogRoots().LastOrDefault() is { } root; round++)
+        {
+            if (Find<Android.Widget.Button>(root) is { } any) any.PerformClick();
+            try
+            {
+                await Gone(window, root, "a dialog left on screen");
+            }
+            catch (CheckFailedException)
+            {
+            }
+        }
+        return Count(window) == 0;
+#else
+        await Task.CompletedTask;
+        return true;
+#endif
+    }
+
+#if IOS || MACCATALYST
+    // UIKit's own tap path, which dismisses the alert and then runs the action's handler. A button view's
+    // accessibilityActivate is the public way in, but UIKit implements it only while an accessibility
+    // client (VoiceOver, XCUITest) is running; otherwise the alert's dismiss-for-action method is what
+    // the button calls on a tap.
+    private static bool Tap(UIAlertController alert, UIAlertAction action)
+    {
+        if (alert.View is { } root)
+        {
+            foreach (var candidate in Descendants(root).Where(v => v.AccessibilityLabel == action.Title && v.IsAccessibilityElement))
+                if (candidate.AccessibilityActivate()) return true;
+        }
+        var dismissForAction = new ObjCRuntime.Selector("_dismissAnimated:triggeringAction:triggeredByPopoverDimmingView:dismissCompletion:");
+        if (!alert.RespondsToSelector(dismissForAction)) return false;
+        DismissForAction(alert.Handle, dismissForAction.Handle, true, action.Handle, false, IntPtr.Zero);
+        return true;
+
+        static IEnumerable<UIView> Descendants(UIView view)
+        {
+            foreach (var child in view.Subviews)
+            {
+                yield return child;
+                foreach (var nested in Descendants(child)) yield return nested;
+            }
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport(ObjCRuntime.Constants.ObjectiveCLibrary, EntryPoint = "objc_msgSend")]
+    private static extern void DismissForAction(IntPtr receiver, IntPtr selector, [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.I1)] bool animated, IntPtr action, [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.I1)] bool byDimmingView, IntPtr completion);
+
+    // Waits until the alert has left the presentation chain. An animated dismissal UIKit dropped (it can
+    // land as another transition finishes) is requested once more, without animation.
+    private static async Task Gone(Window window, UIAlertController alert, string what)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var retried = false;
+        while (alert.PresentingViewController is not null)
+        {
+            if (!retried && clock.ElapsedMilliseconds > 3000 && !alert.IsBeingDismissed)
+            {
+                retried = true;
+                Console.WriteLine($"#   {what} was still presented after 3 s; dismissed again");
+                alert.PresentingViewController?.DismissViewController(false, null);
+            }
+            if (clock.ElapsedMilliseconds > Timeout)
+                throw new CheckFailedException($"{what} is still on screen after {Timeout} ms: {Describe(window)}");
+            await Task.Delay(16);
+        }
+    }
+#endif
+
+#if ANDROID
+    private static bool Click(Android.Views.View root, string button)
+    {
         if (Find<Android.Widget.Button>(root, b => b.Text == button) is { } native)
         {
             native.PerformClick();
-            return;
+            return true;
         }
         // An action sheet's buttons are the rows of its list.
         if (Find<Android.Widget.ListView>(root) is { } list)
@@ -82,49 +209,23 @@ public static class NativeDialogs
             {
                 if (list.GetItemAtPosition(i)?.ToString() != button) continue;
                 list.PerformItemClick(list.GetChildAt(i - list.FirstVisiblePosition), i, list.GetItemIdAtPosition(i));
-                return;
+                return true;
             }
         }
-        throw new CheckFailedException($"the dialog has no '{button}' button: {Describe(window)}");
-#else
-        throw new CheckFailedException("native dialogs are not driven on this platform");
-#endif
-    }
-
-    /// <summary>
-    /// Dismisses again an alert whose handler already ran but which is still on screen and not
-    /// dismissing: UIKit ignores a dismissal requested while another transition is finishing, which a
-    /// tap never meets but the in-process answer can. Returns whether it asked.
-    /// </summary>
-    public static bool DismissAgain(Window window)
-    {
-#if IOS || MACCATALYST
-        var stuck = Alerts(window).LastOrDefault(a => !a.IsBeingDismissed && !a.IsBeingPresented);
-        if (stuck is null) return false;
-        (stuck.PresentingViewController ?? stuck).DismissViewController(true, null);
-        return true;
-#else
         return false;
-#endif
     }
 
-    /// <summary>Closes whatever native dialog a failed fixture left on screen, so it can't block the next one.</summary>
-    public static void DismissAll(Window window)
+    private static async Task Gone(Window window, Android.Views.View root, string what)
     {
-#if IOS || MACCATALYST
-        foreach (var alert in Alerts(window).Reverse())
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (root.IsAttachedToWindow)
         {
-            var cancel = alert.Actions.FirstOrDefault(a => a.Style == UIAlertActionStyle.Cancel) ?? alert.Actions.FirstOrDefault();
-            alert.DismissViewController(false, null);
-            if (cancel is not null) RunHandler(cancel);
+            if (clock.ElapsedMilliseconds > Timeout)
+                throw new CheckFailedException($"{what} is still on screen after {Timeout} ms: {Describe(window)}");
+            await Task.Delay(16);
         }
-#elif ANDROID
-        foreach (var root in DialogRoots())
-        {
-            if (Find<Android.Widget.Button>(root) is { } button) button.PerformClick();
-        }
-#endif
     }
+#endif
 
 #if IOS || MACCATALYST
     private static IEnumerable<UIAlertController> Alerts(Window window)

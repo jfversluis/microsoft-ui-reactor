@@ -27,6 +27,8 @@ public static partial class Fixtures
         new("Dialogs_RequestedDuringANavigation_WaitForIt", ClosingDialogs(DialogDuringNavigation)),
         new("Dialogs_OnAModalOpenedAfterAnEarlierDialog_IsShownOnItPromptly", ClosingDialogs(DialogOnALaterModal)),
         new("Dialogs_RequestedFromABackgroundThread_IsShownOnce", ClosingDialogs(DialogFromABackgroundThread)),
+        new("Dialogs_AnAlertOutsideTheQueue_DoesNotHoldReactorsDialogsBack", ClosingDialogs(DialogOverAForeignAlert)),
+        new("Dialogs_AnAnswerArrivingBeforeTheAlertHasGone_HoldsTheNextDialog", ClosingDialogs(DialogAnsweredBeforeItHasGone)),
         new("SystemBack_HandlerRunsBeforeTheNavigationHost", BackBeforeHost),
         new("SystemBack_AtTheRoot_AHandlerKeepsTheApp_AndWithoutOneTheDefaultRuns", BackAtTheRoot),
         new("SystemBack_HandleOverload_ConsumesABackTheGuardRefuses", BackHandleOverload),
@@ -48,11 +50,8 @@ public static partial class Fixtures
         }
         finally
         {
-            for (var i = 0; i < 5 && NativeDialogs.Count(c.Window) > 0; i++)
-            {
-                NativeDialogs.DismissAll(c.Window);
-                await c.Settle();
-            }
+            if (!await NativeDialogs.CloseAll(c.Window))
+                Console.WriteLine($"#   a dialog could not be closed after the fixture: {NativeDialogs.Describe(c.Window)}");
         }
     };
 
@@ -74,30 +73,20 @@ public static partial class Fixtures
         return dialogs!;
     }
 
-    /// <summary>Waits for the native dialog, answers it through <paramref name="button"/>, and waits for it to go.</summary>
-    private static async Task<T> AnswerNatively<T>(FixtureContext c, Task<T> answer, string button, string? text = null, string? expect = null)
+    /// <summary>
+    /// Waits for the native dialog, answers it through <paramref name="button"/>, and waits for it to go. With
+    /// <paramref name="nextQueued"/> another request is waiting, so the next dialog may be on screen as soon as this one has
+    /// gone: <see cref="NativeDialogs.Answer"/> already waited for the answered one, and "none left" would race the next.
+    /// </summary>
+    private static async Task<T> AnswerNatively<T>(FixtureContext c, Task<T> answer, string button, string? text = null, string? expect = null, bool nextQueued = false)
     {
-        await c.WaitFor(() => NativeDialogs.IsReady(c.Window), "the native dialog to be shown");
+        await c.WaitFor(() => NativeDialogs.IsReady(c.Window), "the native dialog to be shown", NativeDialogs.Timeout);
         if (expect is not null) Check(NativeDialogs.Describe(c.Window).Contains(expect, StringComparison.Ordinal), $"the dialog shows '{expect}': {NativeDialogs.Describe(c.Window)}");
         Check(!answer.IsCompleted, "no answer before the native button");
-        NativeDialogs.Answer(c.Window, button, text);
+        await NativeDialogs.Answer(c.Window, button, text);
         var result = await answer.WaitAsync(TimeSpan.FromSeconds(5));
-        try
-        {
-            try
-            {
-                await c.WaitFor(() => NativeDialogs.Count(c.Window) == 0, "the native dialog to disappear", 2000);
-            }
-            catch (CheckFailedException) when (NativeDialogs.DismissAgain(c.Window))
-            {
-                Console.WriteLine("#   the in-process dismissal was ignored by UIKit; dismissed again");
-                await c.WaitFor(() => NativeDialogs.Count(c.Window) == 0, "the native dialog to disappear");
-            }
-        }
-        catch (CheckFailedException e)
-        {
-            throw new CheckFailedException($"{e.Message}; on screen: {NativeDialogs.Describe(c.Window)}");
-        }
+        if (!nextQueued)
+            await c.WaitFor(() => NativeDialogs.Count(c.Window) == 0, "no native dialog left on screen", NativeDialogs.Timeout);
         return result;
     }
 
@@ -234,8 +223,8 @@ public static partial class Fixtures
         {
             var first = dialogs.Alert("First", null, "Yes", "No");
             var second = dialogs.ActionSheet("Second", "Cancel", null, "One", "Two");
-            Equal(true, await AnswerNatively(c, first, "Yes", expect: "First"), "the first answer");
-            await c.WaitFor(() => NativeDialogs.IsReady(c.Window), "the second dialog to be shown");
+            Equal(true, await AnswerNatively(c, first, "Yes", expect: "First", nextQueued: true), "the first answer");
+            await c.WaitFor(() => NativeDialogs.IsReady(c.Window), "the second dialog to be shown", NativeDialogs.Timeout);
             Check(NativeDialogs.Describe(c.Window).Contains("Second", StringComparison.Ordinal) || NativeDialogs.Describe(c.Window).Contains("Two", StringComparison.Ordinal),
                 $"the second dialog is shown: {NativeDialogs.Describe(c.Window)}");
             Equal("Two", await AnswerNatively(c, second, "Two"), "the second answer");
@@ -262,12 +251,63 @@ public static partial class Fixtures
         {
             var clock = Stopwatch.StartNew();
             var answer = dialogs.Alert("On the modal", null, "Yes", "No");
-            await c.WaitFor(() => NativeDialogs.IsReady(c.Window), "the dialog to be shown on the modal", 1500);
+            // Promptly: the old focus barrier never showed it at all, so a CI-sized bound still tells.
+            await c.WaitFor(() => NativeDialogs.IsReady(c.Window), "the dialog to be shown on the modal", NativeDialogs.Timeout);
             Console.WriteLine($"#   shown after {clock.ElapsedMilliseconds} ms");
             Check(ReferenceEquals(presenter, modal), "presented on the modal");
             Equal(false, await AnswerNatively(c, answer, "No"), "the answer");
         });
         await c.Window.Navigation.PopModalAsync(false);
+    }
+
+    // UIKit runs a tapped action's handler once the alert has gone, so the queue's barrier matters when
+    // an answer arrives earlier: the next dialog must wait until the answered alert has left the screen.
+    private static async Task DialogAnsweredBeforeItHasGone(FixtureContext c)
+    {
+#if IOS || MACCATALYST
+        var dialogs = await ShowDialogs(c);
+        var onScreenAtPresentation = new List<int>();
+        await Recording(c, _ => onScreenAtPresentation.Add(NativeDialogs.Count(c.Window)), async () =>
+        {
+            var first = dialogs.Alert("First", null, "Yes", "No");
+            var second = dialogs.Alert("Second", null, "Yes", "No");
+            await c.WaitFor(() => NativeDialogs.IsReady(c.Window, "First"), "the first dialog", NativeDialogs.Timeout);
+            await NativeDialogs.Answer(c.Window, "Yes", answerBeforeDismissal: true);
+            Equal(true, await first.WaitAsync(TimeSpan.FromSeconds(5)), "the first answer");
+            await c.WaitFor(() => NativeDialogs.IsReady(c.Window, "Second"), "the second dialog", NativeDialogs.Timeout);
+            await NativeDialogs.Answer(c.Window, "No");
+            Equal(false, await second.WaitAsync(TimeSpan.FromSeconds(5)), "the second answer");
+        });
+        Equal("0,0", string.Join(",", onScreenAtPresentation), "native dialogs on screen at each presentation");
+#else
+        await Task.CompletedTask;
+        throw new SkipException("Android's barrier is the posted turn, checked by Dialogs_TwoQueued_AreNeverShownAtOnce");
+#endif
+    }
+
+    // An alert shown outside Reactor's queue (by the app through UIKit or Android directly, or by the
+    // system) never holds Reactor's dialogs back: they show above it.
+    private static async Task DialogOverAForeignAlert(FixtureContext c)
+    {
+        var dialogs = await ShowDialogs(c);
+#if IOS || MACCATALYST
+        var top = (c.Window.Handler?.PlatformView as UIKit.UIWindow)?.RootViewController ?? throw new CheckFailedException("no root view controller");
+        while (top.PresentedViewController is { } presented) top = presented;
+        var foreign = UIKit.UIAlertController.Create("Foreign", "Not Reactor's", UIKit.UIAlertControllerStyle.Alert);
+        foreign.AddAction(UIKit.UIAlertAction.Create("Dismiss", UIKit.UIAlertActionStyle.Cancel, null));
+        top.PresentViewController(foreign, true, null);
+#elif ANDROID
+        new AndroidX.AppCompat.App.AlertDialog.Builder(Microsoft.Maui.ApplicationModel.Platform.CurrentActivity!)
+            .SetTitle("Foreign")!.SetMessage("Not Reactor's")!.SetNegativeButton("Dismiss", (_, _) => { })!.Create()!.Show();
+#endif
+        await c.WaitFor(() => NativeDialogs.IsReady(c.Window, "Foreign"), "the foreign alert", NativeDialogs.Timeout);
+        var answer = dialogs.Alert("Reactor's", null, "Yes", "No");
+        await c.WaitFor(() => NativeDialogs.IsReady(c.Window, "Reactor's"), "Reactor's dialog above the foreign one", NativeDialogs.Timeout);
+        Equal(2, NativeDialogs.Count(c.Window), "native dialogs on screen");
+        await NativeDialogs.Answer(c.Window, "Yes");
+        Equal(true, await answer.WaitAsync(TimeSpan.FromSeconds(5)), "Reactor's answer");
+        Equal(1, NativeDialogs.Count(c.Window), "the foreign alert still shown");
+        Check(await NativeDialogs.CloseAll(c.Window), $"the foreign alert closed: {NativeDialogs.Describe(c.Window)}");
     }
 
     private static async Task DialogFromABackgroundThread(FixtureContext c)

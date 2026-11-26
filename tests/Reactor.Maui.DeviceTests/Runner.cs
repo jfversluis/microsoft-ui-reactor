@@ -161,6 +161,9 @@ public static class Runner
             }
             finally
             {
+                // A dialog left on screen would hold back every later fixture's dialogs: close it first.
+                if (NativeDialogs.Count(window) > 0 && !await NativeDialogs.CloseAll(window))
+                    failure ??= $"teardown: a native dialog could not be closed: {NativeDialogs.Describe(window)}";
                 try
                 {
                     context.Unmount();

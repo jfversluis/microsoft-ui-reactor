@@ -58,7 +58,7 @@ internal interface IDialogPlatform
     /// <summary>Shows <paramref name="content"/> on <paramref name="presenter"/>; the task completes with the answer.</summary>
     Task<object?> Present(Page presenter, DialogContent content);
 
-    /// <summary>Whether a native dialog is still on screen in <paramref name="window"/> (iOS and Mac Catalyst).</summary>
+    /// <summary>Whether the queue's own last dialog is still on screen in <paramref name="window"/> (iOS and Mac Catalyst).</summary>
     bool IsDialogShown(Window window);
 
     /// <summary>
@@ -84,7 +84,17 @@ internal sealed class MauiDialogPlatform : IDialogPlatform
     // The answer is passed on inside the platform's button callback (a synchronous continuation, which
     // an await would not give on a thread with a SynchronizationContext), so AfterAnswer alone decides
     // when the next dialog may be shown.
-    public Task<object?> Present(Page presenter, DialogContent content) => content switch
+    public Task<object?> Present(Page presenter, DialogContent content)
+    {
+#if IOS || MACCATALYST
+        // The alerts already on screen aren't the queue's: only its own alert holds the next one back.
+        if (presenter.Window is { } window)
+            Tracking.GetOrCreateValue(window).Before = [.. AlertsIn(window).Select(static a => a.Handle)];
+#endif
+        return Show(presenter, content);
+    }
+
+    private static Task<object?> Show(Page presenter, DialogContent content) => content switch
     {
         AlertContent { Accept: null } alert => Map(presenter.DisplayAlertAsync(alert.Title, alert.Message, alert.Cancel), static () => false),
         AlertContent alert => Map(presenter.DisplayAlertAsync(alert.Title, alert.Message, alert.Accept, alert.Cancel)),
@@ -109,19 +119,47 @@ internal sealed class MauiDialogPlatform : IDialogPlatform
     public bool IsDialogShown(Window window)
     {
 #if IOS || MACCATALYST
-        // MAUI presents a dialog on the top view controller of the window's chain; until UIKit has
-        // finished dismissing it, it is still in that chain.
-        if (window.Handler?.PlatformView is UIKit.UIWindow { RootViewController: { } root })
+        // The queue's own last alert, until UIKit has finished dismissing it (it is in the window's
+        // presentation chain until then). An alert the app or the system shows outside the queue never
+        // holds a dialog back: MAUI presents the next one above it.
+        if (Tracking.TryGetValue(window, out var tracking))
         {
-            for (var controller = root; controller is not null; controller = controller.PresentedViewController)
-                if (controller is UIKit.UIAlertController) return true;
+            foreach (var own in tracking.Own)
+                if (own.TryGetTarget(out var alert) && alert.PresentingViewController is not null) return true;
+            tracking.Own.Clear();
         }
 #endif
         return false;
     }
 
+#if IOS || MACCATALYST
+    private sealed class AlertTracking
+    {
+        public HashSet<IntPtr> Before = [];
+        public readonly List<WeakReference<UIKit.UIAlertController>> Own = [];
+    }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Window, AlertTracking> Tracking = new();
+
+    private static IEnumerable<UIKit.UIAlertController> AlertsIn(Window window)
+    {
+        if (window.Handler?.PlatformView is not UIKit.UIWindow { RootViewController: { } root }) yield break;
+        for (var controller = root; controller is not null; controller = controller.PresentedViewController)
+            if (controller is UIKit.UIAlertController alert) yield return alert;
+    }
+#endif
+
     public void AfterAnswer(Window window, Action next)
     {
+#if IOS || MACCATALYST
+        // The answered alert, if UIKit is still dismissing it: the alerts that appeared since it was presented.
+        if (Tracking.TryGetValue(window, out var tracking))
+        {
+            tracking.Own.Clear();
+            foreach (var alert in AlertsIn(window))
+                if (!tracking.Before.Contains(alert.Handle)) tracking.Own.Add(new(alert));
+        }
+#endif
 #if ANDROID
         // AppCompat's AlertDialog runs a button's callback from one posted message and posts its
         // dismissal right after (a list row's click dismisses synchronously after its callback), so a
