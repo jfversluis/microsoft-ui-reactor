@@ -118,9 +118,10 @@ and refine them with modifiers. Elements are immutable records, so `with` works 
 | Group | Factories |
 |---|---|
 | Text and media | `Label`, `Image`, `BoxView`, `GraphicsView`, `WebView`, `HtmlView`, `ActivityIndicator`, `ProgressBar` |
+| Shapes and brushes | `Rectangle`, `Ellipse`, `RoundRectangle`, `Line`, `Polygon`, `Polyline`, `Path2D`; `LinearGradientBrush`, `RadialGradientBrush` |
 | Input | `Button`, `ImageButton`, `Entry`, `Editor`, `SearchBar`, `CheckBox`, `Switch`, `Slider`, `Stepper`, `Picker`, `DatePicker`, `TimePicker`, `RadioButton` |
 | Formatted text | `Label(Run(…), Hyperlink(…))` |
-| Layout | `VStack`, `HStack`, `Grid`, `FlexLayout`, `AbsoluteLayout`, `ScrollView`, `Border`, `RefreshView`, `SwipeView` |
+| Layout | `VStack`, `HStack`, `Grid`, `FlexLayout`, `AbsoluteLayout`, `ScrollView`, `Border`, `ContentView`, `RefreshView`, `SwipeView` |
 | Lists | `CollectionView`, `CarouselView` (virtualized; each item is its own tree) |
 | Pages and navigation | `Page`, `NavigationHost`, `NavigationStack`, `Tabs`, `Flyout`, `Shell` (`TabBar`, `FlyoutItem`, `ShellTab`, `ShellContent`, `ShellMenuItem`) |
 | Composition | `Component<T>()`, `Component<T, TProps>(props)`, `Group`, `Empty`, `Memo`, `ErrorBoundary`, `Context.Provide` |
@@ -672,6 +673,62 @@ Label(
 
 A hyperlink is underlined unless it declares `TextDecorations`. Runs are updated in place while their
 number stays the same. On the direct renderer, a label with runs renders as a Controls label.
+
+## Shapes, brushes and images
+
+Shapes use WinUI's names (`Rectangle`, `Ellipse`, `Line`, `Path2D`, so it doesn't collide with
+`System.IO.Path`) and MAUI's for the rest (`RoundRectangle`, `Polygon`, `Polyline`). They fill and
+stroke with brushes; a `Color` works wherever a brush does, and `null` removes the fill or stroke:
+
+```csharp
+// A settings radio indicator: two circles.
+Grid("auto", "auto",
+    Ellipse().Stroke(Colors.DarkGray, 0.5).Fill(Colors.White).Size(16, 16).Center(),
+    selected ? Ellipse().Stroke(Colors.SteelBlue).Fill(Colors.SteelBlue).Size(8, 8).Center() : null)
+
+Polyline([.. values.Select((v, i) => new Point(i * 8, 40 - v * 40))])
+    .Stroke(LinearGradientBrush(new(0, 0), new(1, 0), Colors.SkyBlue, Colors.Navy), 2)
+    .StrokeLineJoin(PenLineJoin.Round)
+
+Path2D("M 0,10 L 10,0 L 20,10 L 10,20 Z").Fill(Colors.Orange).Aspect(Stretch.Uniform).Size(24, 24)
+```
+
+- `Line`, `Polyline`, `Polygon` and `Path2D` take their size from their points when the layout gives
+  none; `Rectangle`, `RoundRectangle` and `Ellipse` draw into the size they're given. `Aspect` stretches
+  the geometry into the box.
+- Point and dash arrays are copied when the element is made, so changing the array later changes
+  nothing; a new array with the same values writes nothing.
+- `Path2D(markup)` converts the markup only when it changes. Markup MAUI rejects falls back to the
+  path's `Data` (or draws nothing) and logs a warning. `Data` and `RenderTransform` are MAUI objects
+  compared by reference: create them once (`UseMemo`).
+
+Gradients are brushes for `.Background(…)`, a border's `.Stroke(…)` and a shape's fill and stroke.
+Points and the radius are relative to the element's bounds (0 to 1):
+
+```csharp
+ContentView(Label("Today")).Padding(16)
+    .Background(LinearGradientBrush(new(0, 0), new(0, 1), (Colors.SkyBlue, 0), (Colors.Navy, 1)))
+
+Border(content).Stroke(RadialGradientBrush(new(0.5, 0.5), 0.5, Colors.White, Colors.Gold), 2)
+```
+
+**Brushes and image sources are values.** Solid and gradient brushes are compared by value (exactly),
+so a brush built in `Render` is written once, not on every render. Font, file and URI image sources are
+compared by value too, so an icon built in `Render` isn't reloaded. Once rendered, don't mutate a brush
+or an image source: Reactor may keep the equal one it already shows, and a mutated one can hide your
+next change. To change one, render a new one.
+
+A stream has no value to compare, so give stream images a key: a `StreamImage` with the same key is the
+same image, and its `open` isn't called again.
+
+```csharp
+Image(StreamImage($"avatar:{user.Id}", () => store.OpenAvatar(user.Id)))
+```
+
+An `ImageSource.FromStream(…)` without a key is compared by reference: create it once (`UseMemo`).
+
+`ContentView(child)` is a plain container with optional padding. Shapes, `ContentView` and a view with a
+brush background render as Controls views on the direct renderer.
 
 ## Hot reload
 

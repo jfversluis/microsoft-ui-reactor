@@ -47,6 +47,9 @@
     <Using Include="Microsoft.UI.Reactor.Core.Element" Alias="Element" />
     <!-- As the package's buildTransitive props declare for apps. -->
     <Using Include="Microsoft.UI.Reactor.Navigation.NavigationMode" Alias="NavigationMode" />
+    <Using Include="Microsoft.Maui.Controls.Shapes.PenLineCap" Alias="PenLineCap" />
+    <Using Include="Microsoft.Maui.Controls.Shapes.PenLineJoin" Alias="PenLineJoin" />
+    <Using Include="Microsoft.Maui.Controls.Shapes.FillRule" Alias="FillRule" />
   </ItemGroup>
 
   <ItemGroup>

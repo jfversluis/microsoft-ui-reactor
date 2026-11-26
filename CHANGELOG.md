@@ -101,6 +101,16 @@ Conventions for contributors:
   `onIsCheckedChanged` (WinUI's name; it was `onCheckedChanged`). `Picker(items, display, …)`
   shows a text per item, and `Label(Run(…), Hyperlink(…))` shows formatted runs, with `LineHeight` and
   `TextTransform` on the label too.
+  Shapes, brushes and images (spec 070 §4): `Rectangle`, `Ellipse`, `RoundRectangle`, `Line`,
+  `Polygon`, `Polyline` and `Path2D` (WinUI's names where WinUI has the shape), with fills, strokes,
+  dashes, caps, joins and `Aspect`; `LinearGradientBrush(…)` and `RadialGradientBrush(…)` factories;
+  `ContentView(child)`. Brushes are compared by value (exactly), so a gradient built in `Render` is
+  written once, and a `null` color clears a fill or stroke instead of writing MAUI's empty brush.
+  `Border.Stroke` is now a `Brush?` (it was a `Color?`; `.Stroke(color, thickness)` still works, and
+  `.Stroke(brush, thickness)` is new). Font, file and URI image sources are compared by value (a URI's
+  caching settings now count), so an icon built in `Render` isn't reloaded; `StreamImage(key, open)` gives
+  a stream image a key. Clearing a path's `RenderTransform` now redraws it untransformed (MAUI's path
+  handlers keep the old transform otherwise).
   Built with `Reactor.Maui.slnx` and tested in `.github/workflows/maui.yml`, including a
   device tier that runs on the real platform controls. It doesn't change the WinUI packages.
 
