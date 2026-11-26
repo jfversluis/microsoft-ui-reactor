@@ -125,8 +125,11 @@ internal sealed class DialogQueue
 
             lock (_gate)
             {
-                if (_waiting.Count == 0 || !ReferenceEquals(_waiting[0], request)) continue;
+                if (_terminal || _waiting.Count == 0 || !ReferenceEquals(_waiting[0], request)) continue;
                 _waiting.RemoveAt(0);
+                // Reserved as the dialog shown before it is presented, so a termination during the
+                // presentation (the window destroyed by it, a refused dispatch) settles it too.
+                _showing = request;
             }
             Task<object?> answer;
             try
@@ -137,10 +140,13 @@ internal sealed class DialogQueue
             }
             catch (Exception ex)
             {
+                lock (_gate)
+                {
+                    if (ReferenceEquals(_showing, request)) _showing = null;
+                }
                 request.Fail(ex);
                 continue;
             }
-            _showing = request;
             answer.ContinueWith(t => OnDispatcher(() => Answered(request, t), () =>
                 {
                     // Nothing more can run on the dispatcher: settle this answer and everything queued.

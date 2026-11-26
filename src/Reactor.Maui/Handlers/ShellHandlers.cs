@@ -129,7 +129,15 @@ internal sealed class ReactorShell : Shell
     {
         // On Android, MAUI's Shell adds its own back callback when an item's view is created, which can
         // sit above Reactor's: the handlers are asked here then, once per back (spec 069 §5.6).
-        if (Hosting.SystemBack.AskFromPage(Window)) return true;
+        var asked = Hosting.SystemBack.AskFromPage(Window, out var handled);
+        if (handled) return true;
+        var result = ShellBack();
+        if (asked && !result) Hosting.SystemBack.ExpectPassedOnBack(Window);
+        return result;
+    }
+
+    private bool ShellBack()
+    {
         if (BackKeyIsModelBack && CurrentItem?.CurrentItem is { } section && section.Navigation.ModalStack.Count == 0
             && ShellNatives.GetNavigator(section) is { } navigator)
         {

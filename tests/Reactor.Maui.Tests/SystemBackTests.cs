@@ -224,7 +224,7 @@ public class SystemBackTests
     }
 
     [Fact]
-    public void AShellsOwnBackCallback_AndReactors_AskTheHandlersOncePerBack()
+    public void EachBack_AsksTheHandlersOnce_WhicheverEntryItTakes_AndASecondBackAsksAgain()
     {
         var pagesAsked = SystemBack.PagesAsk;
         SystemBack.PagesAsk = true;
@@ -232,35 +232,33 @@ public class SystemBackTests
         {
             var log = new BackLog();
             var shown = new Shown(Shell("a", null, TabBar(ShellTab("a", "A", ProbePage("a", log)))));
-
-            // While Reactor passes the key on, the Shell doesn't ask, even where a back's turn ends at once.
-            Assert.False(shown.BackKey());
-            Assert.Equal("a", log.Take());
-
-            // The Shell's own back path asks the handlers (a Shell's callback can be asked before Reactor's).
-            log.Handles.Add("a");
-            Assert.True(shown.View<ReactorShell>().SendBackButtonPressed());
-            Assert.Equal("a", log.Take());
-            log.Handles.Clear();
-
+            var shell = shown.View<ReactorShell>();
+            // Posted work waits: everything below happens within one turn of the UI thread.
             var turns = new TurnDispatcher();
             SystemBack.UseDispatcher(shown.Window, turns);
 
-            // Reactor's callback first: it asks, then passes the key on to MAUI, whose Shell doesn't ask again.
+            // Two distinct backs in one turn: each asks.
+            Assert.False(SystemBack.HandleBackKey(shown.Window, () => false));
+            Assert.False(SystemBack.HandleBackKey(shown.Window, () => false));
+            Assert.Equal("a,a", log.Take());
+
+            // One back through Reactor's callback, passed on to MAUI, whose Shell doesn't ask again.
             Assert.False(shown.BackKey());
             Assert.Equal("a", log.Take());
-            turns.EndTurn();
 
-            // The Shell's own callback first (MAUI adds it above Reactor's): the Shell asks; Reactor's
-            // callback, which the Shell's reaches when it passes the key on in the same back, doesn't.
-            Assert.False(shown.View<ReactorShell>().SendBackButtonPressed());
+            // One back through the Shell's own callback first (MAUI's can be above Reactor's), which
+            // passes it on to Reactor's: asked once. The next back asks again.
+            Assert.False(shell.SendBackButtonPressed());
+            Assert.False(SystemBack.HandleBackKey(shown.Window, () => false));
+            Assert.Equal("a", log.Take());
             Assert.False(SystemBack.HandleBackKey(shown.Window, () => false));
             Assert.Equal("a", log.Take());
 
-            // The next back asks again.
-            turns.EndTurn();
-            Assert.False(SystemBack.HandleBackKey(shown.Window, () => false));
-            Assert.Equal("a", log.Take());
+            // The Shell's path handling the back passes nothing on.
+            log.Handles.Add("a");
+            Assert.True(shell.SendBackButtonPressed());
+            Assert.True(SystemBack.HandleBackKey(shown.Window, () => false));
+            Assert.Equal("a,a", log.Take());
         }
         finally
         {

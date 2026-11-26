@@ -21,8 +21,16 @@ internal sealed class FakeDialogPlatform : IDialogPlatform
     /// <summary>Thrown by the next presentation.</summary>
     public Exception? Throw { get; set; }
 
+    /// <summary>Runs inside the next presentation, before it returns.</summary>
+    public Action? OnPresent { get; set; }
+
     public Task<object?> Present(Page presenter, DialogContent content)
     {
+        if (OnPresent is { } during)
+        {
+            OnPresent = null;
+            during();
+        }
         if (Throw is { } error)
         {
             Throw = null;
@@ -420,6 +428,22 @@ public class DialogTests
 
         public bool DispatchDelayed(TimeSpan delay, Action action) => Dispatch(action);
         public IDispatcherTimer CreateTimer() => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public async Task ATerminationDuringThePresentation_SettlesThatDialogOnce()
+    {
+        var h = new Harness();
+        var dialogs = h.Dialogs();
+        // The window is destroyed while MAUI is presenting the dialog.
+        h.Platform.OnPresent = () => Destroy(h.Window);
+        var presenting = dialogs.Alert("being presented", null, "Yes", "No");
+        Assert.False(await Soon(presenting));
+        Assert.True(h.Queue.IsTerminal);
+        Assert.Null(h.Queue.Showing);
+        // The platform's late answer changes nothing.
+        h.Platform.Answer(true);
+        Assert.False(await Soon(presenting));
     }
 
     [Fact]

@@ -41,7 +41,7 @@ internal static class SystemBack
     public static bool HandleBackKey(Window window, Func<bool> passOn)
     {
         if (StateOf(window, create: false) is not { } state) return passOn();
-        if (state.BeginAsk() && Ask(window)) return true;
+        if (state.TakeAskTurn() && Ask(window)) return true;
         state.PassingOn++;
         try
         {
@@ -61,11 +61,26 @@ internal static class SystemBack
     internal static bool PagesAsk { get; set; } = OperatingSystem.IsAndroid();
 
     /// <summary>
-    /// The back reached a Reactor page that MAUI asks directly (the Shell): asks the handlers unless this
-    /// back has already asked them (through Reactor's callback, which then passes the key on to MAUI).
+    /// The back reached a Reactor page that MAUI asks directly (the Shell): asks the handlers, unless
+    /// Reactor's callback asked them for this back and is passing it on to MAUI. Returns whether it
+    /// asked, and in <paramref name="handled"/> whether a handler handled the back.
     /// </summary>
-    public static bool AskFromPage(Window? window) =>
-        PagesAsk && window is not null && StateOf(window, create: false) is { Count: > 0 } state && state.BeginAsk() && Ask(window);
+    public static bool AskFromPage(Window? window, out bool handled)
+    {
+        handled = false;
+        if (!PagesAsk || window is null || StateOf(window, create: false) is not { Count: > 0, PassingOn: 0 }) return false;
+        handled = Ask(window);
+        return true;
+    }
+
+    /// <summary>
+    /// The Shell asked the handlers for this back and didn't handle it either: MAUI's Shell callback now
+    /// passes the same back on to the activity's dispatcher, where Reactor's callback mustn't ask again.
+    /// </summary>
+    public static void ExpectPassedOnBack(Window? window)
+    {
+        if (window is not null) StateOf(window, create: false)?.ExpectPassedOnBack();
+    }
 
     /// <summary>Makes <paramref name="dispatcher"/> end each back's turn in <paramref name="window"/> (tests).</summary>
     internal static void UseDispatcher(Window window, IDispatcher dispatcher) => StateOf(window, create: true)!.Dispatcher = dispatcher;
@@ -204,23 +219,29 @@ internal static class SystemBack
         /// <summary>Set while Reactor passes a back on to MAUI, so the pages it reaches don't ask again.</summary>
         public int PassingOn { get; set; }
 
-        private bool _askedThisBack;
+        // Set when the Shell's back path asked the handlers and passed the back on: that same back
+        // reaches Reactor's callback next, which takes the mark instead of asking.
+        private bool _passedOnByShell;
 
-        /// <summary>
-        /// Whether this back may ask the handlers: once per back. A back is one turn of the UI thread, so
-        /// the mark is cleared from a posted turn (a back whose MAUI path reaches Reactor's callback after
-        /// a page already asked, as a Shell's callback does when it passes the key on, asks once).
-        /// </summary>
-        public bool BeginAsk()
+        /// <summary>Whether Reactor's callback asks the handlers for this back (once per back, not per turn).</summary>
+        public bool TakeAskTurn()
         {
-            if (PassingOn > 0 || _askedThisBack) return false;
-            _askedThisBack = true;
-            if ((Dispatcher ?? _window.Dispatcher) is not { IsDispatchRequired: false } dispatcher || !dispatcher.Dispatch(() => _askedThisBack = false))
-                _askedThisBack = false;
-            return true;
+            if (PassingOn > 0) return false;
+            if (!_passedOnByShell) return true;
+            _passedOnByShell = false;
+            return false;
         }
 
-        /// <summary>The dispatcher that ends a back's turn: the window's; tests replace it.</summary>
+        public void ExpectPassedOnBack()
+        {
+            _passedOnByShell = true;
+            // MAUI's Shell callback passes the back on at once; if it didn't reach Reactor's callback, the
+            // mark mustn't outlive this turn.
+            if ((Dispatcher ?? _window.Dispatcher) is not { IsDispatchRequired: false } dispatcher || !dispatcher.Dispatch(() => _passedOnByShell = false))
+                _passedOnByShell = false;
+        }
+
+        /// <summary>The dispatcher that ends a turn of the UI thread: the window's; tests replace it.</summary>
         public IDispatcher? Dispatcher { get; set; }
 
         public IReadOnlyList<Registration> Registrations => _registrations;
