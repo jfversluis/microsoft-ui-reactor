@@ -9,6 +9,23 @@ namespace Microsoft.UI.Reactor.Maui.Handlers;
 /// <summary>One entry of the native items list: the item and the key it is matched by.</summary>
 internal sealed record ItemBox(string Key, object? Item);
 
+/// <summary>One group of a grouped list: an observable list of item boxes, as MAUI's grouped sources expect.</summary>
+internal sealed class GroupBox(string key, object? group) : ObservableCollection<ItemBox>
+{
+    public string Key { get; } = key;
+
+    /// <summary>The app's group object, updated in place so a header re-renders without a section reload.</summary>
+    public object? Group { get; set; } = group;
+}
+
+/// <summary>What a <see cref="ReactorCell"/> renders.</summary>
+internal enum CellRole
+{
+    Item,
+    GroupHeader,
+    GroupFooter,
+}
+
 /// <summary>
 /// Shared by the CollectionView and CarouselView handlers: keeps the native items list in step
 /// with the element's items, and renders each realized cell through a child tree.
@@ -17,6 +34,7 @@ internal sealed class ItemsHost
 {
     private readonly Func<Action<object?>, ReactorRoot> _createRoot;
     private readonly HashSet<ReactorCell> _cells = [];
+    private readonly Dictionary<string, (ItemBox Box, GroupBox? Group)> _byKey = [];
 
     public ItemsHost(Func<Action<object?>, ReactorRoot> createRoot)
     {
@@ -24,12 +42,21 @@ internal sealed class ItemsHost
     }
 
     public ObservableCollection<ItemBox> Items { get; } = [];
-    public Func<object?, Element?> Template { get; set; } = static _ => null;
+    public ObservableCollection<GroupBox> Groups { get; } = [];
+    public Func<object?, ItemState, Element?> Template { get; set; } = static (_, _) => null;
+    public Func<object?, Element?>? GroupHeaderTemplate { get; set; }
+    public Func<object?, Element?>? GroupFooterTemplate { get; set; }
     public bool ReuseItemTrees { get; set; }
+
+    /// <summary>The state an item renders with (spec 070 §3.3); set by the list's handler on every apply.</summary>
+    public Func<string, ItemState> StateOf { get; set; } = static _ => default;
+
+    /// <summary>Whether item cells keep the platform's selection highlight. Fixed for the list's lifetime.</summary>
+    public bool ShowsSelectionHighlight { get; init; } = true;
 
     public ReactorRoot CreateRoot(Action<object?> setRootNative) => _createRoot(setRootNative);
 
-    public DataTemplate CreateDataTemplate() => new(() => new ReactorCell(this));
+    public DataTemplate CreateDataTemplate(CellRole role = CellRole.Item) => new(() => new ReactorCell(this, role));
 
     /// <summary>
     /// True once the list's element is unmounted. The platform can still create or bind cells after
@@ -49,32 +76,86 @@ internal sealed class ItemsHost
     /// </summary>
     public void Sync(IReadOnlyList<object?> items, Func<object?, string> keyOf)
     {
+        var keys = KeysOf(items, keyOf, new HashSet<string>(items.Count));
+        var replaced = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        SyncItems(Items, items, keys, replaced);
+        Index();
+        RenderKept(replaced);
+    }
+
+    /// <summary>
+    /// Brings <see cref="Groups"/> to <paramref name="groups"/>, groups by key, then each group's items by
+    /// key. Item keys are unique across the list. An item that moves to another group is removed from
+    /// one and inserted in the other (a new box), as MAUI's grouped sources have no cross-section move.
+    /// </summary>
+    public void SyncGroups(IReadOnlyList<ItemGroup> groups, Func<object?, string> keyOf)
+    {
+        var groupKeys = new string[groups.Count];
+        var wantedGroups = new HashSet<string>(groups.Count);
+        var allItems = new HashSet<string>();
+        var itemKeys = new string[groups.Count][];
+        for (var g = 0; g < groups.Count; g++)
+        {
+            groupKeys[g] = groups[g].Key ?? throw new InvalidOperationException("A group's key must not be null.");
+            if (!wantedGroups.Add(groupKeys[g]))
+                throw new InvalidOperationException($"Two groups have the key '{groupKeys[g]}'. Group keys must be unique.");
+            itemKeys[g] = KeysOf(groups[g].Items, keyOf, allItems);
+        }
+
+        for (var i = Groups.Count - 1; i >= 0; i--)
+            if (!wantedGroups.Contains(Groups[i].Key)) Groups.RemoveAt(i);
+        for (var g = 0; g < groups.Count; g++)
+        {
+            var at = IndexOf(Groups, groupKeys[g], g);
+            if (at < 0) Groups.Insert(g, new GroupBox(groupKeys[g], groups[g].Group));
+            else if (at != g) Groups.Move(at, g);
+            Groups[g].Group = groups[g].Group;
+        }
+
+        var replaced = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        for (var g = 0; g < groups.Count; g++) SyncItems(Groups[g], groups[g].Items, itemKeys[g], replaced);
+        Index();
+        RenderKept(replaced);
+    }
+
+    private static string[] KeysOf(IReadOnlyList<object?> items, Func<object?, string> keyOf, HashSet<string> seen)
+    {
         var keys = new string[items.Count];
-        var wanted = new HashSet<string>(items.Count);
         for (var i = 0; i < items.Count; i++)
         {
             keys[i] = keyOf(items[i]);
-            if (!wanted.Add(keys[i]))
+            if (!seen.Add(keys[i]))
                 throw new InvalidOperationException($"Two items have the key '{keys[i]}'. Item keys must be unique.");
         }
+        return keys;
+    }
 
-        for (var i = Items.Count - 1; i >= 0; i--)
-            if (!wanted.Contains(Items[i].Key)) Items.RemoveAt(i);
+    private static int IndexOf(ObservableCollection<GroupBox> groups, string key, int from)
+    {
+        for (var j = from; j < groups.Count; j++)
+            if (groups[j].Key == key) return j;
+        return -1;
+    }
 
-        var replaced = new HashSet<ItemBox>(ReferenceEqualityComparer.Instance);
+    private static void SyncItems(ObservableCollection<ItemBox> target, IReadOnlyList<object?> items, string[] keys, HashSet<object> replaced)
+    {
+        var wanted = new HashSet<string>(keys);
+        for (var i = target.Count - 1; i >= 0; i--)
+            if (!wanted.Contains(target[i].Key)) target.RemoveAt(i);
+
         for (var i = 0; i < items.Count; i++)
         {
             var key = keys[i];
-            if (i < Items.Count && Items[i].Key == key)
+            if (i < target.Count && target[i].Key == key)
             {
-                if (!Equals(Items[i].Item, items[i])) Replace(i, new ItemBox(key, items[i]), replaced);
+                if (!Equals(target[i].Item, items[i])) Replace(target, i, new ItemBox(key, items[i]), replaced);
                 continue;
             }
 
             var found = -1;
-            for (var j = i + 1; j < Items.Count; j++)
+            for (var j = i + 1; j < target.Count; j++)
             {
-                if (Items[j].Key == key)
+                if (target[j].Key == key)
                 {
                     found = j;
                     break;
@@ -84,33 +165,58 @@ internal sealed class ItemsHost
             if (found < 0)
             {
                 var box = new ItemBox(key, items[i]);
-                Items.Insert(i, box);
+                target.Insert(i, box);
                 replaced.Add(box);
             }
             else
             {
-                Items.Move(found, i);
-                if (!Equals(Items[i].Item, items[i])) Replace(i, new ItemBox(key, items[i]), replaced);
+                target.Move(found, i);
+                if (!Equals(target[i].Item, items[i])) Replace(target, i, new ItemBox(key, items[i]), replaced);
             }
         }
-
-        // The template may read state that changed, so cells that kept their item re-render too.
-        foreach (var cell in _cells)
-            if (cell.BindingContext is ItemBox box && !replaced.Contains(box)) cell.Render();
     }
 
-    private void Replace(int index, ItemBox box, HashSet<ItemBox> replaced)
+    private static void Replace(ObservableCollection<ItemBox> target, int index, ItemBox box, HashSet<object> replaced)
     {
-        Items[index] = box;
+        target[index] = box;
         replaced.Add(box);
     }
 
-    public ItemBox? Find(string? key)
+    private void Index()
     {
-        if (key is null) return null;
-        foreach (var box in Items)
-            if (box.Key == key) return box;
-        return null;
+        _byKey.Clear();
+        foreach (var box in Items) _byKey[box.Key] = (box, null);
+        foreach (var group in Groups)
+            foreach (var box in group) _byKey[box.Key] = (box, group);
+    }
+
+    // The templates may read state that changed, so cells that kept their item (and group cells)
+    // re-render too.
+    private void RenderKept(HashSet<object> replaced)
+    {
+        foreach (var cell in _cells)
+            if (cell.BindingContext is { } bound && !replaced.Contains(bound)) cell.Render();
+    }
+
+    public ItemBox? Find(string? key) => key is not null && _byKey.TryGetValue(key, out var found) ? found.Box : null;
+
+    public (ItemBox Box, GroupBox? Group)? FindWithGroup(string? key) =>
+        key is not null && _byKey.TryGetValue(key, out var found) ? found : null;
+
+    /// <summary>The native position of a box: its group's index (or 0) and its index in the group or list.</summary>
+    public (int Section, int Item)? PositionOf(ItemBox box)
+    {
+        if (FindWithGroup(box.Key) is not { } found || !ReferenceEquals(found.Box, box)) return null;
+        if (found.Group is { } group) return (Groups.IndexOf(group), group.IndexOf(box));
+        return (0, Items.IndexOf(box));
+    }
+
+    /// <summary>The box at a native position, or <see langword="null"/>.</summary>
+    public ItemBox? At(int section, int item)
+    {
+        if (Groups.Count > 0)
+            return section >= 0 && section < Groups.Count && item >= 0 && item < Groups[section].Count ? Groups[section][item] : null;
+        return section == 0 && item >= 0 && item < Items.Count ? Items[item] : null;
     }
 
     public void UnmountAll()
@@ -121,16 +227,31 @@ internal sealed class ItemsHost
     }
 }
 
-/// <summary>A cell of a virtualized list. Its content is a child Reactor tree rendering the cell's item.</summary>
+/// <summary>A cell of a virtualized list. Its content is a child Reactor tree rendering the cell's item or group.</summary>
 internal sealed class ReactorCell : ContentView
 {
     private readonly ItemsHost _host;
+    private readonly CellRole _role;
     private ReactorRoot? _root;
 
-    public ReactorCell(ItemsHost host)
+    public ReactorCell(ItemsHost host, CellRole role = CellRole.Item)
     {
         _host = host;
+        _role = role;
+        // MAUI skips the platform's selection highlight when the item's root view has a Selected visual
+        // state that sets a background (iOS TemplatedCell2, Android TemplatedItemViewHolder).
+        if (role == CellRole.Item && !host.ShowsSelectionHighlight) VisualStateManager.SetVisualStateGroups(this, SelectionStates());
         host.Register(this);
+    }
+
+    internal static VisualStateGroupList SelectionStates()
+    {
+        var selected = new VisualState { Name = VisualStateManager.CommonStates.Selected };
+        selected.Setters.Add(new Setter { Property = VisualElement.BackgroundColorProperty, Value = Colors.Transparent });
+        var group = new VisualStateGroup { Name = nameof(VisualStateManager.CommonStates) };
+        group.States.Add(new VisualState { Name = VisualStateManager.CommonStates.Normal });
+        group.States.Add(selected);
+        return [group];
     }
 
     protected override void OnBindingContextChanged()
@@ -142,19 +263,34 @@ internal sealed class ReactorCell : ContentView
     public void Render()
     {
         if (_host.Stopped) return;
-        if (BindingContext is not ItemBox box)
+        Element? element;
+        string key;
+        switch (_role, BindingContext)
         {
-            // Retired: MAUI cleared the cell's item (iOS and Mac Catalyst's TemplatedCell2.Unbind sets
-            // it to null). Its tree unmounts, running cleanups and releasing refs; a later item mounts
-            // a fresh one, with or without ReuseItemTrees (spec 070 §2.4).
-            Unmount();
-            return;
+            case (CellRole.Item, ItemBox box):
+                element = _host.Template(box.Item, _host.StateOf(box.Key));
+                key = box.Key;
+                break;
+            case (CellRole.GroupHeader, GroupBox group):
+                element = _host.GroupHeaderTemplate?.Invoke(group.Group);
+                key = group.Key;
+                break;
+            case (CellRole.GroupFooter, GroupBox group):
+                element = _host.GroupFooterTemplate?.Invoke(group.Group);
+                key = group.Key;
+                break;
+            default:
+                // Retired: MAUI cleared the cell's item (iOS and Mac Catalyst's TemplatedCell2.Unbind sets
+                // it to null). Its tree unmounts, running cleanups and releasing refs; a later item mounts
+                // a fresh one, with or without ReuseItemTrees (spec 070 §2.4).
+                Unmount();
+                return;
         }
         _root ??= _host.CreateRoot(native => Content = native is null ? null : Props.AsView(native));
-        var element = _host.Template(box.Item) ?? EmptyElement.Instance;
+        element ??= EmptyElement.Instance;
         // Keyed by item, so a cell recycled for another item remounts instead of keeping that
         // item's component state.
-        if (!_host.ReuseItemTrees) element = element with { Key = box.Key };
+        if (!_host.ReuseItemTrees) element = element with { Key = key };
         _root.Render(element);
     }
 
@@ -192,10 +328,47 @@ internal sealed class SlotRoot(ItemsHost host, Action<View?> assign)
     }
 }
 
+/// <summary>The declared selection, by spec 070 §3.3's rules, shared by the item state and the selection write.</summary>
+internal static class SelectionRules
+{
+    /// <summary>Whether a key is selected by the declaration, existing or not.</summary>
+    public static Func<string, bool> Declared(CollectionViewElement element)
+    {
+        switch (element.SelectionMode)
+        {
+            case SelectionMode.Single when element.SelectedKey is { } selected:
+                return key => key == selected;
+            case SelectionMode.Multiple when element.SelectedKeys is { Count: > 0 } keys:
+                var set = new HashSet<string>(keys);
+                return set.Contains;
+            default:
+                return static _ => false;
+        }
+    }
+
+    /// <summary>The boxes the declaration selects that exist, in declared order.</summary>
+    public static List<ItemBox> Effective(CollectionViewElement element, ItemsHost host)
+    {
+        var boxes = new List<ItemBox>();
+        switch (element.SelectionMode)
+        {
+            case SelectionMode.Single:
+                if (host.Find(element.SelectedKey) is { } box) boxes.Add(box);
+                break;
+            case SelectionMode.Multiple:
+                foreach (var key in element.SelectedKeys ?? [])
+                    if (host.Find(key) is { } found && !boxes.Contains(found)) boxes.Add(found);
+                break;
+        }
+        return boxes;
+    }
+}
+
 internal sealed class ReactorCollectionView : MauiCollectionView
 {
     public ItemsHost Host = null!;
     public SlotRoot HeaderSlot = null!, FooterSlot = null!, EmptySlot = null!;
+    public NativeSelectionVerifier Verifier = null!;
 }
 
 internal sealed class CollectionViewHandler : ViewHandler<CollectionViewElement, ReactorCollectionView>
@@ -203,18 +376,24 @@ internal sealed class CollectionViewHandler : ViewHandler<CollectionViewElement,
     protected override ReactorCollectionView Create(HandlerContext<CollectionViewElement> context, CollectionViewElement element)
     {
         var view = new ReactorCollectionView();
-        var host = new ItemsHost(context.CreateChildRoot);
+        var host = new ItemsHost(context.CreateChildRoot) { ShowsSelectionHighlight = element.ShowsSelectionHighlight };
         view.Host = host;
         view.HeaderSlot = new SlotRoot(host, header => view.Header = header);
         view.FooterSlot = new SlotRoot(host, footer => view.Footer = footer);
         view.EmptySlot = new SlotRoot(host, empty => view.EmptyView = empty);
-        view.ItemsSource = host.Items;
+        view.IsGrouped = element.Groups is not null;
+        view.ItemsSource = element.Groups is null ? host.Items : host.Groups;
         view.ItemTemplate = host.CreateDataTemplate();
+        var liveContext = context;
+        view.Verifier = new NativeSelectionVerifier(view, () => liveContext.Live, write => liveContext.WriteSuppressed(view, write));
 
         view.SelectionChanged += (_, e) =>
         {
             if (context.IsEchoing(view)) return;
+            // Captured from the notification's arguments, never read back later (spec 070 §3.4). User
+            // input makes any pending native correction stale.
             var keys = e.CurrentSelection.OfType<ItemBox>().Select(static b => b.Key).ToArray();
+            view.Verifier.Invalidate();
             context.Live?.OnSelectionChanged?.Invoke(keys);
             context.RestoreAfterEvent();
         };
@@ -222,32 +401,58 @@ internal sealed class CollectionViewHandler : ViewHandler<CollectionViewElement,
         return view;
     }
 
+    public override bool CanUpdate(CollectionViewElement oldElement, CollectionViewElement newElement) =>
+        (oldElement.Groups is null) == (newElement.Groups is null)
+        && oldElement.ShowsSelectionHighlight == newElement.ShowsSelectionHighlight;
+
     protected override void Apply(HandlerContext<CollectionViewElement> context, ReactorCollectionView view, CollectionViewElement? previous, CollectionViewElement next)
     {
         var host = view.Host;
         host.Template = next.ItemTemplate;
+        host.GroupHeaderTemplate = next.GroupHeaderTemplate;
+        host.GroupFooterTemplate = next.GroupFooterTemplate;
         host.ReuseItemTrees = next.ReuseItemTrees;
+        var declared = SelectionRules.Declared(next);
+        host.StateOf = key => new ItemState(declared(key));
 
         if (previous is null || previous.Arrangement != next.Arrangement || previous.Span != next.Span || previous.ItemSpacing != next.ItemSpacing)
             view.ItemsLayout = CreateLayout(next);
-        if (view.SelectionMode != next.SelectionMode) view.SelectionMode = next.SelectionMode;
         if (view.RemainingItemsThreshold != next.RemainingItemsThreshold) view.RemainingItemsThreshold = next.RemainingItemsThreshold;
         Props.Set(view, MauiCollectionView.ItemSizingStrategyProperty, previous?.ItemSizingStrategy, next.ItemSizingStrategy);
+        if (next.Groups is not null)
+        {
+            if ((previous?.GroupHeaderTemplate is null) != (next.GroupHeaderTemplate is null))
+                view.GroupHeaderTemplate = next.GroupHeaderTemplate is null ? null : host.CreateDataTemplate(CellRole.GroupHeader);
+            if ((previous?.GroupFooterTemplate is null) != (next.GroupFooterTemplate is null))
+                view.GroupFooterTemplate = next.GroupFooterTemplate is null ? null : host.CreateDataTemplate(CellRole.GroupFooter);
+        }
 
         context.WriteSuppressed(view, () =>
         {
+            // MAUI raises SelectionChanged when a mode change changes the effective selection.
+            if (view.SelectionMode != next.SelectionMode) view.SelectionMode = next.SelectionMode;
             // Restoring a controlled value re-applies the same element; the items did not change then.
-            if (!ReferenceEquals(previous, next)) host.Sync(next.Items, next.ItemKey);
+            if (!ReferenceEquals(previous, next))
+            {
+                if (next.Groups is { } groups) host.SyncGroups(groups, next.ItemKey);
+                else host.Sync(next.Items, next.ItemKey);
+            }
             ApplySelection(view, next);
         });
 
         view.HeaderSlot.Render(next.Header);
         view.FooterSlot.Render(next.Footer);
         view.EmptySlot.Render(next.EmptyView);
+
+        // Every commit of a list with a selection, accepting or refusing, and entering None, verifies the
+        // native selection behind MAUI's pending batches (spec 070 §3.4).
+        if ((previous?.SelectionMode ?? SelectionMode.None) != SelectionMode.None || next.SelectionMode != SelectionMode.None)
+            view.Verifier.Schedule();
     }
 
     public override void Unmount(ReactorCollectionView control)
     {
+        control.Verifier.Retire();
         control.Host.UnmountAll();
         control.HeaderSlot.Unmount();
         control.FooterSlot.Unmount();
@@ -256,19 +461,20 @@ internal sealed class CollectionViewHandler : ViewHandler<CollectionViewElement,
 
     private static void ApplySelection(ReactorCollectionView view, CollectionViewElement element)
     {
+        var wanted = SelectionRules.Effective(element, view.Host);
         switch (element.SelectionMode)
         {
             case SelectionMode.Single:
             {
-                var wanted = view.Host.Find(element.SelectedKey);
-                if (!ReferenceEquals(view.SelectedItem, wanted)) view.SelectedItem = wanted;
+                var box = wanted.Count > 0 ? wanted[0] : null;
+                if (!ReferenceEquals(view.SelectedItem, box)) view.SelectedItem = box;
                 break;
             }
             case SelectionMode.Multiple:
             {
-                var wanted = (element.SelectedKeys ?? []).Select(view.Host.Find).OfType<ItemBox>().ToList();
-                var current = view.SelectedItems?.OfType<ItemBox>().ToList() ?? [];
-                if (!wanted.SequenceEqual(current)) view.SelectedItems = [.. wanted];
+                // Compared as sets: a native order that differs from the declared one isn't a change.
+                var current = view.SelectedItems?.OfType<ItemBox>() ?? [];
+                if (!new HashSet<ItemBox>(current, ReferenceEqualityComparer.Instance).SetEquals(wanted)) view.SelectedItems = [.. wanted];
                 break;
             }
         }
@@ -316,7 +522,8 @@ internal sealed class CarouselViewHandler : ViewHandler<CarouselViewElement, Rea
 
     protected override void Apply(HandlerContext<CarouselViewElement> context, ReactorCarouselView view, CarouselViewElement? previous, CarouselViewElement next)
     {
-        view.Host.Template = next.ItemTemplate;
+        var template = next.ItemTemplate;
+        view.Host.Template = (item, _) => template(item);
         if (view.Loop != next.Loop) view.Loop = next.Loop;
         Props.Set(view, MauiCarouselView.PeekAreaInsetsProperty, previous?.PeekAreaInsets, next.PeekAreaInsets);
         // The default carousel layout is a shared static instance, so spacing gets a layout of its own.

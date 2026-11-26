@@ -28,6 +28,9 @@ internal abstract class ViewHandler<TElement, TView> : Reactor.Hosting.IElementH
 
     public virtual void Unmount(TView control) { }
 
+    /// <summary>Whether the new element can update the mounted view; <c>false</c> remounts it.</summary>
+    public virtual bool CanUpdate(TElement oldElement, TElement newElement) => true;
+
     public virtual IChildrenStrategy<TElement, TView>? Children => null;
 
     /// <summary>Creates the view and subscribes its events. Events invoke callbacks through <c>context.Live</c>.</summary>

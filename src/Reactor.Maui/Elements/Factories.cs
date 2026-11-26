@@ -262,7 +262,49 @@ public static class Factories
 
     /// <summary>A virtualized list of <paramref name="items"/>, matched across renders by <paramref name="key"/>.</summary>
     public static CollectionViewElement CollectionView<T>(IReadOnlyList<T> items, Func<T, string> key, Func<T, Element?> itemTemplate) =>
-        new(new ItemsAdapter<T>(items), item => key((T)item!), item => itemTemplate((T)item!));
+        new(new ItemsAdapter<T>(items), item => key((T)item!), (item, _) => itemTemplate((T)item!));
+
+    /// <summary>
+    /// A virtualized list whose template also gets the item's <see cref="ItemState"/> (its declared
+    /// selection), to draw the selection itself; the platform's own selection highlight is turned off.
+    /// </summary>
+    public static CollectionViewElement CollectionView<T>(IReadOnlyList<T> items, Func<T, string> key, Func<T, ItemState, Element?> itemTemplate) =>
+        new(new ItemsAdapter<T>(items), item => key((T)item!), (item, state) => itemTemplate((T)item!, state)) { ShowsSelectionHighlight = false };
+
+    /// <summary>
+    /// A grouped virtualized list. <paramref name="groupKey"/> and <paramref name="key"/> match groups and
+    /// items across renders; item keys are unique across all groups.
+    /// </summary>
+    public static CollectionViewElement CollectionView<TGroup, T>(
+        IReadOnlyList<TGroup> groups, Func<TGroup, string> groupKey, Func<TGroup, IReadOnlyList<T>> groupItems,
+        Func<T, string> key, Func<T, Element?> itemTemplate,
+        Func<TGroup, Element?>? groupHeader = null, Func<TGroup, Element?>? groupFooter = null) =>
+        Grouped(groups, groupKey, groupItems, key, (item, _) => itemTemplate((T)item!), groupHeader, groupFooter);
+
+    /// <summary>A grouped list whose template gets the item's <see cref="ItemState"/>; the platform highlight is turned off.</summary>
+    public static CollectionViewElement CollectionView<TGroup, T>(
+        IReadOnlyList<TGroup> groups, Func<TGroup, string> groupKey, Func<TGroup, IReadOnlyList<T>> groupItems,
+        Func<T, string> key, Func<T, ItemState, Element?> itemTemplate,
+        Func<TGroup, Element?>? groupHeader = null, Func<TGroup, Element?>? groupFooter = null) =>
+        Grouped(groups, groupKey, groupItems, key, (item, state) => itemTemplate((T)item!, state), groupHeader, groupFooter)
+            with { ShowsSelectionHighlight = false };
+
+    private static CollectionViewElement Grouped<TGroup, T>(
+        IReadOnlyList<TGroup> groups, Func<TGroup, string> groupKey, Func<TGroup, IReadOnlyList<T>> groupItems,
+        Func<T, string> key, Func<object?, ItemState, Element?> template,
+        Func<TGroup, Element?>? groupHeader, Func<TGroup, Element?>? groupFooter)
+    {
+        ArgumentNullException.ThrowIfNull(groups);
+        var built = new ItemGroup[groups.Count];
+        for (var i = 0; i < built.Length; i++)
+            built[i] = new ItemGroup(groupKey(groups[i]), groups[i], new ItemsAdapter<T>(groupItems(groups[i])));
+        return new([], item => key((T)item!), template)
+        {
+            Groups = built,
+            GroupHeaderTemplate = groupHeader is null ? null : group => groupHeader((TGroup)group!),
+            GroupFooterTemplate = groupFooter is null ? null : group => groupFooter((TGroup)group!),
+        };
+    }
 
     public static CarouselViewElement CarouselView<T>(
         IReadOnlyList<T> items, Func<T, string> key, Func<T, Element?> itemTemplate, int position, Action<int>? onPositionChanged = null) =>

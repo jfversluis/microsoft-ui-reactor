@@ -324,6 +324,16 @@ public enum ItemsArrangement
 }
 
 /// <summary>
+/// The state an item template can render (spec 070 §3.3). <see cref="IsSelected"/> is the declared
+/// selection: <c>SelectionMode.None</c> selects nothing; <c>Single</c> compares the item's key with
+/// <c>SelectedKey</c>; <c>Multiple</c> looks it up in <c>SelectedKeys</c>.
+/// </summary>
+public readonly record struct ItemState(bool IsSelected);
+
+/// <summary>A group of a grouped <c>CollectionView</c>: its key, the app's group object and its items.</summary>
+public sealed record ItemGroup(string Key, object? Group, IReadOnlyList<object?> Items);
+
+/// <summary>
 /// A virtualized list. Each visible item is rendered by <see cref="ItemTemplate"/> into its own
 /// tree, which inherits this element's context. Items are matched across renders by
 /// <see cref="ItemKey"/>, so changes animate and scroll position is kept. Create it with the generic
@@ -332,7 +342,7 @@ public enum ItemsArrangement
 public sealed record CollectionViewElement(
     IReadOnlyList<object?> Items,
     Func<object?, string> ItemKey,
-    Func<object?, Element?> ItemTemplate) : ViewElement
+    Func<object?, ItemState, Element?> ItemTemplate) : ViewElement
 {
     public ItemsArrangement Arrangement { get; init; }
     public int Span { get; init; } = 1;
@@ -342,7 +352,7 @@ public sealed record CollectionViewElement(
     /// <summary>The key of the selected item (single selection). Controlled.</summary>
     public string? SelectedKey { get; init; }
 
-    /// <summary>The keys of the selected items (multiple selection). Controlled.</summary>
+    /// <summary>The keys of the selected items (multiple selection), compared as a set. Controlled.</summary>
     public IReadOnlyList<string>? SelectedKeys { get; init; }
 
     public Action<IReadOnlyList<string>>? OnSelectionChanged { get; init; }
@@ -359,6 +369,27 @@ public sealed record CollectionViewElement(
     /// item templates to reuse the native views across items, which scrolls faster.
     /// </summary>
     public bool ReuseItemTrees { get; init; }
+
+    /// <summary>
+    /// Whether the platform draws its own highlight on a selected item (iOS's gray background,
+    /// Android's activated color). The factory overload whose template takes an
+    /// <see cref="ItemState"/> sets it to <c>false</c>, since that template draws the selection
+    /// itself. Changing it remounts the list.
+    /// </summary>
+    public bool ShowsSelectionHighlight { get; init; } = true;
+
+    /// <summary>
+    /// The groups of a grouped list (<see cref="Items"/> is then unused). Item keys are unique across
+    /// the whole list. Switching between grouped and flat remounts the list. Create it with the
+    /// grouped <c>CollectionView</c> factory.
+    /// </summary>
+    public IReadOnlyList<ItemGroup>? Groups { get; init; }
+
+    /// <summary>Renders a group's header from its group object; <c>null</c> shows none.</summary>
+    public Func<object?, Element?>? GroupHeaderTemplate { get; init; }
+
+    /// <summary>Renders a group's footer from its group object; <c>null</c> shows none.</summary>
+    public Func<object?, Element?>? GroupFooterTemplate { get; init; }
 }
 
 /// <summary>A swipeable carousel of items, rendered like <see cref="CollectionViewElement"/>. Controlled by <see cref="Position"/>.</summary>
