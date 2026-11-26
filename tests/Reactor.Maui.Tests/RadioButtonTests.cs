@@ -490,6 +490,40 @@ public class RadioTransactionTests
     }
 
     [Fact]
+    public void AThrowInTheDrain_LeavesTheRestQueuedForAnotherTurn()
+    {
+        var log = new List<string>();
+        var c = TypedElementRef.Create<MauiRadioButton>();
+        var d = TypedElementRef.Create<MauiRadioButton>();
+        var e = TypedElementRef.Create<MauiRadioButton>();
+        var b = TypedElementRef.Create<MauiRadioButton>();
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(VStack(
+            VStack(
+                RadioButton("b", false, v =>
+                {
+                    log.Add($"b {v}");
+                    if (!v) return;
+                    // Both queue: C's (group g) throws while unchecking its peer D; E's (group h) must run.
+                    ((IRadioButton)c.Current!).IsChecked = true;
+                    ((IRadioButton)e.Current!).IsChecked = true;
+                }, "h").Ref(b),
+                RadioButton("c", false, v => log.Add($"c {v}"), "g").Ref(c),
+                RadioButton("d", true, v => log.Add($"d {v}"), "g").Ref(d)),
+            RadioButton("e", false, v => log.Add($"e {v}"), "i").Ref(e)));
+        host.Scheduler.Drain();
+        d.Current!.CheckedChanged += (_, args) => { if (!args.Value) throw new InvalidOperationException("app handler"); };
+
+        Tap(b);
+        Assert.Throws<InvalidOperationException>(() => host.Scheduler.Drain());
+        host.Scheduler.Drain();
+
+        Assert.Contains("e True", log);
+        Assert.DoesNotContain("c True", log);
+        // E isn't left queued: its declaration (unchecked) is written back again.
+        Assert.False(e.Current!.IsChecked);
+    }
+
+    [Fact]
     public void AQueuedCheck_IsNotOverwrittenByARenderBeforeItRuns()
     {
         var (host, p) = MountQueueing("state");

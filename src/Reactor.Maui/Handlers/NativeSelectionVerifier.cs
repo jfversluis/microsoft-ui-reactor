@@ -33,6 +33,7 @@ internal sealed class NativeSelectionVerifier(
     private bool _outstanding;
     private int _fixedGeneration = -1;
     private bool _pending;
+    private bool _inputAwaitingCommit;
     private bool _retired;
     private ISelectionPort? _port;
     private bool _portResolved;
@@ -69,17 +70,25 @@ internal sealed class NativeSelectionVerifier(
     /// </summary>
     public void Schedule(bool wroteSelection)
     {
-        if (wroteSelection) _pending = true;
+        // The first commit after input (accepting or refusing it) always verifies, whatever completed
+        // in between: the input marker is consumed here and nowhere else.
+        if (wroteSelection || _inputAwaitingCommit) _pending = true;
+        _inputAwaitingCommit = false;
         if (_retired || !_pending || Port is null) return;
-        _generation++;
+        // An outstanding barrier compares against the element live when it completes, so a commit that
+        // wrote nothing doesn't make it stale (input already did, in Invalidate).
+        if (wroteSelection || !_outstanding) _generation++;
         if (!_outstanding) Issue();
     }
 
-    /// <summary>User input arrived: any pending correction was computed before it and is stale.</summary>
+    /// <summary>
+    /// User input arrived: any pending correction was computed before it and is stale, and the
+    /// declaration is stale until the next commit, which verifies.
+    /// </summary>
     public void Invalidate()
     {
         _generation++;
-        _pending = true;
+        _inputAwaitingCommit = true;
     }
 
     public void Retire() => _retired = true;
@@ -104,7 +113,9 @@ internal sealed class NativeSelectionVerifier(
             Issue();
             return;
         }
-        // 3. Current: compare the native selection with the declared effective one, as sets.
+        // 3. Input awaits its commit: the declaration is stale, so nothing compares; that commit issues.
+        if (_inputAwaitingCommit) return;
+        // 4. Current: compare the native selection with the declared effective one, as sets.
         var wanted = SelectionRules.Effective(element, view.Host);
         var native = port.Selected();
         var wantedSet = new HashSet<ItemBox>(wanted, ReferenceEqualityComparer.Instance);

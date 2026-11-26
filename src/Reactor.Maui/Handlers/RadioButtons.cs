@@ -207,14 +207,27 @@ internal sealed class RadioGroups
     private void Drain()
     {
         _drainPosted = false;
-        while (_queued.Count > 0 && !_dispatching)
+        try
         {
-            var (view, value) = _queued.Dequeue();
-            if (!_entries.TryGetValue(view, out var entry)) continue;
-            // Re-read the native state: an entry a later write superseded is dropped, and the declaration
-            // the render skipped while it was queued is restored.
-            if (view.IsChecked == value) Process(view, value);
-            else if (entry.Context.IsMounted) entry.Context.RestoreAfterEvent();
+            while (_queued.Count > 0 && !_dispatching)
+            {
+                var (view, value) = _queued.Dequeue();
+                if (!_entries.TryGetValue(view, out var entry)) continue;
+                // Re-read the native state: an entry a later write superseded is dropped, and the
+                // declaration the render skipped while it was queued is restored.
+                if (view.IsChecked == value) Process(view, value);
+                else if (entry.Context.IsMounted) entry.Context.RestoreAfterEvent();
+            }
+        }
+        finally
+        {
+            // A throw (a platform write, an app's own CheckedChanged handler) leaves the rest queued,
+            // and a queued button's controlled writes are skipped: the rest runs on another turn.
+            if (_queued.Count > 0 && !_drainPosted)
+            {
+                _drainPosted = true;
+                _root.Post(Drain);
+            }
         }
     }
 

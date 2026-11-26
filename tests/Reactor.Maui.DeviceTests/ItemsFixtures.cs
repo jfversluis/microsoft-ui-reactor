@@ -526,7 +526,9 @@ public static partial class Fixtures
         SwipeViewElement Swipe(string generation, bool contentItem) => SwipeView(Label("row").AutomationId("row").Height(80).BackgroundColor(Colors.LightGray)) with
         {
             LeftItems = [contentItem
-                ? new SwipeItemData("Done", () => calls.Add($"done {generation}")) { Content = Label("✓").AutomationId("done-content").BackgroundColor(Colors.Green) }
+                // MAUI caps Threshold at an Execute side's open distance, which for content items is
+                // their width: the content is wider than the threshold, so 100 applies on every platform.
+                ? new SwipeItemData("Done", () => calls.Add($"done {generation}")) { Content = Label("✓").AutomationId("done-content").Width(120).BackgroundColor(Colors.Green) }
                 : new SwipeItemData("Done", () => calls.Add($"done {generation}")) { BackgroundColor = Colors.Green }],
             LeftItemsMode = SwipeMode.Execute,
             RightItems = [new SwipeItemData("Archive", () => calls.Add($"archive {generation}")) { BackgroundColor = Colors.Orange }],

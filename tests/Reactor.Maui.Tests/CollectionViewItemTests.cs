@@ -404,6 +404,61 @@ public class NativeSelectionVerificationTests
         Assert.Equal(["b"], Assert.Single(reports));
     }
 
+    private static void UserSelects(ReactorCollectionView view, StubPort port, SelectionMode mode, string key)
+    {
+        var box = Cells.Box(view, key);
+        port.Native.Clear();
+        port.Native.Add(box);
+        if (mode == SelectionMode.Multiple) view.SelectedItems = [box];
+        else view.SelectedItem = box;
+    }
+
+    // Every barrier completes before the accepting render runs (the order that once ended the
+    // verification on a declaration the input had made stale).
+    [Theory]
+    [InlineData(SelectionMode.Single, true)]
+    [InlineData(SelectionMode.Multiple, true)]
+    [InlineData(SelectionMode.Single, false)]
+    [InlineData(SelectionMode.Multiple, false)]
+    public void CompletionsBeforeTheAcceptingRender_NeitherEndNorUndoIt(SelectionMode mode, bool deferredA)
+    {
+        var (host, view, port, reports, _, _) = Mount(mode);
+        Recommit(host); // a barrier is queued
+        Assert.Single(port.Queue);
+        if (deferredA) port.Queue.Insert(0, ("maui", () => { port.Native.Clear(); port.Native.Add(Cells.Box(view, "a")); }));
+
+        UserSelects(view, port, mode, "b");
+        port.RunAll(); // MAUI's A (if any), the stale barrier and its replacement, all before the render
+        Assert.Equal(deferredA ? "a" : "b", Native(port)); // the stale declaration (a) was never applied
+        Assert.Equal(0, view.Verifier.Corrections);
+
+        host.Scheduler.Drain(); // the accepting render writes nothing virtual (already b)
+        port.RunAll();
+
+        Assert.Equal("b", Native(port));
+        Assert.Equal(deferredA ? 1 : 0, view.Verifier.Corrections);
+        Assert.Equal(["b"], Assert.Single(reports));
+    }
+
+    [Theory]
+    [InlineData(SelectionMode.Single)]
+    [InlineData(SelectionMode.Multiple)]
+    public void AnAcceptedTap_CostsOneBarrier(SelectionMode mode)
+    {
+        var (host, view, port, reports, _, _) = Mount(mode);
+        Recommit(host);
+        port.RunAll();
+        var issued = view.Verifier.Issued;
+
+        UserSelects(view, port, mode, "b");
+        host.Scheduler.Drain(); // the accepting render and the restore both commit
+        port.RunAll();
+
+        Assert.Equal(issued + 1, view.Verifier.Issued);
+        Assert.Equal("b", Native(port));
+        Assert.Equal(["b"], Assert.Single(reports));
+    }
+
     [Fact]
     public void AUsersSelection_IsNeverUndone_ByACorrectionComputedBeforeIt()
     {
@@ -441,7 +496,10 @@ public class NativeSelectionVerificationTests
         Assert.Equal(issued + 1, view.Verifier.Issued);
         Assert.Single(port.Queue);
         Assert.Equal("", Native(port));
-        port.RunNext();
+        port.RunNext(); // the replacement: the input's commit hasn't run, so nothing compares
+        Assert.Equal("", Native(port));
+        Recommit(host); // the input's commit verifies
+        port.RunAll();
         Assert.Equal("b", Native(port));
     }
 
