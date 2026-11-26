@@ -706,6 +706,9 @@ Path2D("M 0,10 L 10,0 L 20,10 L 10,20 Z").Fill(Colors.Orange).Aspect(Stretch.Uni
 - `Path2D(markup)` converts the markup only when it changes. Markup MAUI rejects falls back to the
   path's `Data` (or draws nothing) and logs a warning. `Data` and `RenderTransform` are MAUI objects
   compared by reference: create them once (`UseMemo`).
+- A path whose `RenderTransform` goes away, however it's cleared (the element, a style or class style,
+  a parent's resources, a ref), is redrawn untransformed. The path is MAUI's own `Path`, so implicit
+  styles apply as usual.
 
 Gradients are brushes for `.Background(…)`, a border's `.Stroke(…)` and a shape's fill and stroke.
 A stroke given a brush keeps the current thickness unless you pass one; a border's stroke given a color

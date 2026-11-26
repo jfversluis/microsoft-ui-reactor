@@ -110,9 +110,9 @@ Conventions for contributors:
   `.Stroke(brush, thickness)` is new and keeps the current thickness when none is given). The package's
   global usings add `PenLineCap`, `PenLineJoin` and `FillRule` aliases. Font, file and URI image sources
   are compared by value (a URI by its original string, with its caching settings), so an icon built in
-  `Render` isn't reloaded; `StreamImage(key, open)` gives a stream image a key. Clearing a path's
-  `RenderTransform`, or removing the style that provided it, now redraws it untransformed (MAUI's path
-  handlers keep the old transform otherwise).
+  `Render` isn't reloaded; `StreamImage(key, open)` gives a stream image a key. A path whose
+  `RenderTransform` goes away, however it's cleared (the element, a style, a parent's resources, a ref),
+  is redrawn untransformed (MAUI's path handlers keep the old transform otherwise).
   Built with `Reactor.Maui.slnx` and tested in `.github/workflows/maui.yml`, including a
   device tier that runs on the real platform controls. It doesn't change the WinUI packages.
 

@@ -1794,18 +1794,22 @@ also treat `Brush.Default` as unset, so `with { Fill = nullColor }` clears too.
   `FormatException`) falls back to `Data`, or to no geometry, and logs one `DiagnosticLog` warning per
   path view and string (not per render). `Data` and `RenderTransform` are MAUI objects compared by
   reference: build them once (`UseMemo`) or use the string. No value equality for geometries (§4.11).
-- **Clearing `RenderTransform` (review round 1).** MAUI's iOS and Android `PathHandler.MapRenderTransform`
-  updates the drawable's matrix only when the transform is non-null, so clearing the property leaves
-  the old transform drawn. Reactor clears it by first writing an identity `MatrixTransform` (which the
-  mapper installs) and then clearing the value (which the mapper ignores, leaving the identity). It runs
-  after the shared modifiers whenever the path showed a transform when the apply started and shows none
-  after it, so a transform a removed style provided is reset too, and one a remaining style provides is
-  left alone (review of `566796fa`). The observation is taken at the start of each apply, not kept from
-  the last one, since a class or implicit style resolves only once the path is attached (after its
-  mount's apply) and a ref or a visual state can set a transform between renders (verification of
-  `aa16b547`). Verified
-  on devices with an asymmetric path, set then cleared; if it can't be made to work, `RenderTransform`
-  is left out rather than advertised as clearable.
+- **Clearing `RenderTransform`.** MAUI's iOS and Android `PathHandler.MapRenderTransform` updates the
+  drawable's matrix only when the transform is non-null, so clearing the property leaves the old
+  transform drawn. Reactor watches each path's `RenderTransform` (MAUI's own `Path`, which is sealed,
+  through its `PropertyChanging` and `PropertyChanged` events) and, whenever it goes from a transform to
+  none by any route, clears the transform MAUI's `ShapeDrawable` keeps (`UpdateRenderTransform(null)`,
+  public) and invalidates the platform view. The routes: the element's own transform removed, a style or
+  class style removed or swapped (a class style resolves only once the path is attached), a parent's
+  resources replaced outside any render, a visual state, a write through a ref. A transform that
+  remains (a style still provides one) is left alone; nothing is written to the property. History: the
+  design wrote an identity transform and cleared it, first in the transform entry, then after the
+  modifiers with apply-boundary snapshots (reviews of `566796fa` and `aa16b547`); a snapshot can't see a
+  change outside an apply (verification of `b2718714`), and an identity written inside the notification
+  that cleared the transform reached the property but not the drawing on any of the three platforms
+  (§4.13). Since this is MAUI's own `Path`, an implicit `Path` style applies as usual (no
+  `ApplyToDerivedTypes`, unlike 4c-1's `ScrollView` subclass). Verified on devices with an asymmetric
+  path for each route.
 - **Size.** MAUI sizes `Line`, `Polyline`, `Polygon` and `Path` from their geometry when the layout
   gives no size (`Shape.MeasureOverride`), and draws `Rectangle`, `RoundRectangle` and `Ellipse` into
   the size they are given. Reactor adds nothing: the README says so, and the device fixture pins it.
@@ -2280,9 +2284,8 @@ pixel samples at a per-channel tolerance with the raw values logged. No question
 - **Handlers** (`Handlers/Visuals.cs`): `BrushComparer` (exact, with a matching hash; `Brush.Default`
   as unset), `SequenceComparer<T>`, the descriptor helpers `BrushProperty`, `ListProperty` (the
   projected entry, on `OneWay`) and `ShapeProperties`, a descriptor per shape and for `ContentView`,
-  `PathData` (markup conversion with its fallback and warning, and the identity-then-clear
-  transform reset, run after the modifiers through an internal `ControlDescriptor.WithAfterModifiers`
-  hook that observes the view before each apply's entries and can be set once), and `ImageSources` (value equality and `StreamImage` keys in a `ConditionalWeakTable`).
+  `PathData` (markup conversion with its fallback and warning, and the transform watch that resets
+  the platform drawable's transform), and `ImageSources` (value equality and `StreamImage` keys in a `ConditionalWeakTable`).
   `Props.SetBrush` serves `.Background` and the border stroke; `Props.SameImage` forwards to
   `ImageSources.Same`; a page's back button compares its icon with it.
 - **Factories and modifiers**: the shapes, `ContentView`, `StreamImage`, the gradient factories;
@@ -2396,6 +2399,21 @@ previous design restored (the class-swap test on both registries, the ref test, 
 `Shapes_UpdateInPlace`'s class-swapped path stayed rotated), the observation taken after the modifiers
 (also the declared and style clears), and the hook silently replaced. Headless 683; the visual device
 fixtures on all three platforms passed again.
+
+Verification of `b2718714` (gpt, reproduced on both registries): replacing a parent's class-style
+resources cleared the path's transform outside any render, so no apply-boundary snapshot saw it. The
+reset moved to the property (above) and the after-modifiers hook was removed from `ControlDescriptor`.
+A first version wrote the identity transform and cleared it inside the clearing notification: the
+property went rotation, none, identity, none (and for a `null` written through a ref, where MAUI
+queues the identity behind its own setter, too), yet on Mac Catalyst, iOS and Android the path
+stayed rotated, at the class swap and at the resource replacement alike. Clearing the drawable's own
+transform works on all three. Tests: the resource replacement, the class swap after mount, the
+declared clear, the style removal, a ref write cleared by a render, a `null` written through a ref, a
+style still providing a transform (no reset), equal renders (no write, no reset); both registries where
+a registry matters; device: `Shapes_UpdateInPlace` replaces a parent's resources outside any render.
+Headless oracles count the resets the watch requests (an internal event; nothing is drawn headlessly).
+Mutation checks (all red): no watch, a reset although a transform remains, and on Android the drawable
+not reset (`Shapes_UpdateInPlace`). Headless 686; the visual device fixtures passed on all three.
 
 **Benchmark** (Mac Catalyst, one pair against `7281bf4d`, base first): total time within noise or
 lower in every scenario on both renderers (−4% to +0.03%, and −13% and −35% on the 40-ms `UpdateOne`),
