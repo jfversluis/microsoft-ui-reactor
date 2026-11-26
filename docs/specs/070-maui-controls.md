@@ -1499,6 +1499,12 @@ device assertions, §3.6), the carousel (deferred). No question is open.
 7. **Two equivalent mutants**: the per-callback membership recheck and the restores in `finally` can't
    be told apart by any test, because a render (the only way membership changes) can't run inside a
    dispatch and callback exceptions are caught one by one. Both are kept as defense in depth.
+8. **MAUI caps `Threshold` at an Execute side's open distance**, which for content items is their
+   width (UIKit's `ValidateSwipeThreshold` takes `Math.Min(Threshold, GetSwipeOpenDistance())`): a
+   narrow content item executes at a swipe far below `Threshold`. Measured when the first run of the
+   below-threshold Execute check invoked a one-character content item (narrower than 40 points) at 40 points on Mac Catalyst.
+   That is MAUI's behavior, not Reactor's; the fixture's content item is now wider than the
+   threshold. Worth a sentence in user docs if content-item Execute sides become common.
 
 **Characterization (device; gates on plain MAUI):**
 
@@ -1514,15 +1520,16 @@ device assertions, §3.6), the carousel (deferred). No question is open.
 | Highlight with `ItemState`; item-only list | none; shown | none; shown | none; shown |
 | Radio tap: native state inside the tap; reports | peers unchecked; peer `false`, then `true` | same | same |
 | Radio accessibility (checked; unchecked) | label, value 1; value 0 | label, `Button`, value 1; value 0 | `RadioButton`, checkable, checked true; false |
-| Swipe below the threshold; Reveal above; Execute above | closed, nothing; open at the items' width, nothing; the current callback once | same | same |
+| Swipe below the threshold (Reveal and Execute sides); Reveal above; Execute above | closed, nothing; open at the items' width, nothing; the current callback once | same | same |
+| Swipe content item opened through a ref; re-rendered while open; invoked | realized with a size and its text; updated in place, still open; the current callback once | same | same |
 
-**Tests.** Headless `Reactor.Maui.Tests`: 406 (328 before 4c-2), in `LabelAndPickerTests.cs`,
+**Tests.** Headless `Reactor.Maui.Tests`: 428 after the review rounds (406 before them; 328 before 4c-2), in `LabelAndPickerTests.cs`,
 `CollectionViewItemTests.cs`, `SwipeViewTests.cs`, `RadioButtonTests.cs` and
 `ReadmeItemsSnippetTests.cs` (the README's snippets). Engine `Reactor.Maui.Engine.Tests`: 80
-(unchanged). Device: 40 new fixtures (4 gates, 17 behaviors on both registries, 2 characterizations)
-in `ItemsCharacterization.cs`, `ItemsFixtures.cs`, `ItemsPlatformInput.cs`. Full device suites: Mac
-Catalyst 154 passed, 7 skipped; iOS simulator 154 passed, 7 skipped; Android emulator 156 passed, 5
-skipped. Two earlier full Android runs each failed one 4c-1 fixture of code 4c-2 doesn't touch,
+(unchanged). Device: 42 new fixtures (4 gates, 18 behaviors on both registries, 2 characterizations)
+in `ItemsCharacterization.cs`, `ItemsFixtures.cs`, `ItemsPlatformInput.cs`. Full device suites at the
+review rounds' head: Mac Catalyst 156 passed, 7 skipped; iOS simulator 156 passed, 7 skipped; Android
+emulator 158 passed, 5 skipped (before them: 154/7, 154/7, 156/5). Two earlier full Android runs each failed one 4c-1 fixture of code 4c-2 doesn't touch,
 `WebView_Navigations_AreAttemptedAndCompleted` (once a refused back wasn't asked within 10 s, once
 the fixture ran past 30 s after its back case); it passed alone twice and in the grouped ref and echo
 runs, and the base commit's one full run passed it. The cause was two races in that fixture, timing
@@ -1568,6 +1575,18 @@ it, after every commit of a selecting list).
 - **Native verification only when needed** (§3.4 changed): a commit schedules it only when it wrote
   the selection or its mode, or input arrived since the native selection was last found as declared;
   an unrelated re-render issues no batch update. The stale-completion reissue is unchanged.
+- **Input awaits its commit** (second verification round, reproduced headlessly by the reviewer): user
+  B, MAUI's deferred A, then the stale barrier and its replacement completing before the accepting
+  render; the replacement compared native A with the still-declared A, cleared the pending work, and
+  B's render (no virtual write) issued nothing, leaving native A under virtual B. Input now sets a
+  marker that only the next commit of the list consumes (accepting or refusing, which then always
+  verifies); a completion while it is set compares nothing and clears nothing, since the declaration
+  it would compare is stale. A commit that wrote no selection no longer bumps the generation of an
+  outstanding barrier (it compares against the element live when it completes), so an accepted tap
+  costs one barrier, not two.
+- **The radio queue survives a throw**: a throwing platform write or app `CheckedChanged` handler in a
+  drained check leaves the rest queued, re-posted, instead of stuck (a queued button skips its
+  controlled writes).
 - **Run decorations** toggle one flag of the effective value (a hyperlink starts underlined), so
   `.Strikethrough(false)` keeps a hyperlink's underline and `.Underline().Strikethrough()` keeps both.
 - `Label` gained `.LineHeight(...)` and `.TextTransform(...)`; a swipe content item no longer rebuilds
@@ -1580,7 +1599,9 @@ More tests: an unnamed group across a component boundary, MAUI's own grouping as
 registries (Controls unchecks the peer, direct doesn't), a ref uncheck outside a transaction, queued
 checks superseded or unmounted before they run, two queued checks where the first unchecks the
 second, swipe mode-only and icon-only rebuilds, content items unmounted with the swipe view, header
-replacement with new text, a group header cell's state across rebinds. Device fixture code (to run):
+replacement with new text, a group header cell's state across rebinds; every barrier completing
+before the accepting render (single and multiple, with and without MAUI's deferred A), one barrier
+per accepted tap, a throw in the radio drain. Device fixture code, run in the full suites above:
 `SwipeView_ContentItems` (new), the Execute side below its threshold, the overlap precondition and a
 correction count on iOS and Mac Catalyst, MAUI's real iOS label tap dispatch, exact events in gate 1
 and exact selections in the selection characterization, radio accessibility before and after a
@@ -1592,15 +1613,29 @@ keys unique per group only, the cell tree keyed by box, a tree kept across retir
 passing the key, the radio name scope widened to the root, the unnamed scope walking `ContextParent`,
 peers by parent node (red since the component-boundary test), a kept empty group, a render writing a
 queued button, the description written before the modifiers, scheduling regardless of writes, only
-virtual writes scheduling, a notification that doesn't make verification pending, entering `None`
+virtual writes scheduling, `Schedule` ignoring the input marker, a completion comparing while input
+awaits its commit, a completion consuming the marker, every commit bumping the generation, the drain
+not re-posted after a throw, entering `None`
 unverified (it survived at first: the stub port arrived after mount and left verification pending,
 so the test now settles the mount first and counts issued barriers), the decoration replacing the
 whole value, content items comparing color and icon, the mode not compared, a queued check
 superseding every group (the per-group generation mutant moved there: transactions never nest, so
 bumping every group in `Process` was equivalent). One more equivalent mutant: not restoring a dropped
 queue entry, because the transaction that unchecked it restores it on a posted turn, after the drain.
-Every earlier mutant still dies. Device-only and not yet run: the radio content template set after
-the handler.
+Every earlier mutant still dies (`Invalidate` no longer sets pending itself, the marker does, so the
+earlier "a notification doesn't make verification pending" mutant no longer applies).
+
+Device mutation checks (each built and run on the device with the fixture filter, restored and
+touched; all red): the radio content template set after the handler (`RadioButton_Content`, Android
+and Mac Catalyst: the content-only width); swipe sides rebuilt on every render
+(`SwipeView_ContentItems`, Android and Mac Catalyst); `Threshold` written as 10
+(`SwipeView_Threshold`, Android: the Reveal side opened below 100, so the Execute side's +40 check is
+guarded by its +160 positive control rather than killed alone); no native verification port
+(`CollectionView_OverlappingSelection_*`, Mac Catalyst and iOS: native `0:0`); the hyperlink recognizer
+also installed on the label (`Label_Spans_Platform`, Mac Catalyst and iOS: the other-run tap invoked
+it, which the earlier span-only tap helper could not see); a declared radio check not written after
+mount (`RadioButton_Accessibility`, Android and Mac Catalyst); the selection written as the first
+item (`CollectionView_SelectionInItems_Recycling`, Android: native `0:0`).
 
 **Open issues.**
 
