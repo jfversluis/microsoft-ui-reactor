@@ -672,10 +672,11 @@ and a declarative one like WinUI's `ContentDialog`. Both feed the same queue.
   a non-Reactor app, the window is the page's, followed as it changes (§5.4), as `UseWindowSize` does.
 - **One native dialog at a time, per window.**
   - The next dialog is presented only once the previous one's native UI has gone, not when its
-    answer arrives: MAUI completes the answer before UIKit finishes dismissing.
+    answer arrives (the answer can arrive before the dismissal has finished; see §5.6 for when).
   - The barrier is the platform reporting no presented dialog:
-    - iOS and Mac Catalyst: the presenting view controller has no `PresentedViewController` that is
-      an alert;
+    - iOS and Mac Catalyst: the queue's own last alert has left the window's presentation chain. An
+      alert shown outside the queue (by the app through UIKit or `DisplayAlertAsync` directly, or by
+      the system) never holds a Reactor dialog back: MAUI presents the next one above it;
     - Android: the dialog is dismissed. AppCompat's dialog dismisses itself in the looper turn after
       the button's callback (a list row's click, right after it), so the next dialog is shown from a
       turn the queue posts when the answer arrives;
@@ -842,8 +843,13 @@ modals. Other platforms ignore it, and it is not applied on Mac Catalyst (§5.6)
   the answer arrives inside that callback, and shows the next dialog from a turn it posts then: after
   the dismissal. Nothing waits on the window focus, so an earlier dialog never delays a later one (a
   MAUI modal, itself a focused dialog window on Android, shows the next dialog promptly). On iOS and
-  Mac Catalyst the barrier is as designed (no `UIAlertController` in the window's presentation
-  chain), checked before every dialog and then once per frame (`DispatchDelayed(16 ms)`).
+  Mac Catalyst the barrier waits only for the queue's own last alert: the alerts that appeared in the
+  window's presentation chain between its presentation and its answer, until each has left the chain
+  (checked once per frame, `DispatchDelayed(16 ms)`). It used to wait for any alert in the chain, so an
+  alert the app showed outside the queue (or one that never went) held every Reactor dialog back
+  forever; that was a product bug, fixed in the CI round. UIKit's tap runs an action's handler only
+  once the alert has gone (iOS 27), so for a tap the barrier is already met when the answer arrives;
+  it matters for an answer that arrives earlier, which a fixture produces on purpose.
 - **A navigation transition is one of Reactor's navigators running**: the window page's navigation
   stack, those in its tabs or flyout, a Shell section's, or one in a modal page, as
   `WindowPageSetter` finds them. The queue waits for that navigator's `BecameIdle` (posted), then
@@ -913,11 +919,17 @@ modals. Other platforms ignore it, and it is not applied on Mac Catalyst (§5.6)
   at once failed a Shell test now and then. Device: the dialogs are answered through their native
   buttons in process on every platform: on Android the alert's window is found with
   `WindowInspector` (a window with an alert's buttons; a MAUI modal is a dialog window too) and its
-  button clicked; on iOS and Mac Catalyst the alert is dismissed and the chosen `UIAlertAction`'s own
-  handler block runs (UIKit exposes no public tap), so no Appium run was needed. UIKit occasionally
-  ignores that in-process dismissal when it lands as another transition finishes (2 of about 15 iOS
-  runs), which a tap never meets, so the helper dismisses once more if the alert is still on screen,
-  not dismissing, after 2 s. A recording platform
+  button clicked; on iOS and Mac Catalyst through UIKit's own tap path, so no Appium run was needed:
+  the button view's `accessibilityActivate` when an accessibility client is running (UIKit implements
+  it only then), else the alert's dismiss-for-action method the button calls on a tap, which
+  dismisses the alert and then runs the action. The action's private handler with a separate
+  dismissal is the last resort (the first helper used it, and on CI's slower simulator UIKit dropped
+  that dismissal, leaving an answered alert on screen that held back every later dialog). The helper
+  returns only once the alert has left the chain (`PresentingViewController` null), dismissing once
+  more without animation after 3 s, and fails with what is still shown after 10 s. Every dialog
+  fixture, and the runner's teardown for any fixture, closes whatever dialog is still on screen and
+  waits until it has gone, so one failure can't hold back the next fixture. Dialog waits allow 10 s
+  for CI's simulator. A recording platform
   checks that no native dialog is on screen when the next is presented (on Android no frame could
   show two at once even without the barrier). The back key on a modal and in a Shell is a real key
   event: an app can't inject one into itself (`INJECT_EVENTS`), so the fixture logs

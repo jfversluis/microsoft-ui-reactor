@@ -69,7 +69,8 @@ Conventions for contributors:
   stable `Dialogs` whose `Alert`, `ActionSheet` and `Prompt` are awaitable and never throw (a dialog
   that can't be answered completes with the cancel answer), and the `Alert`, `ActionSheet` and
   `Prompt` elements open with `IsOpen` and report to `OnClosed` for the content shown; a window shows
-  one dialog at a time, after the previous one has left the screen and while no navigation runs, and
+  one dialog at a time, after its previous one has left the screen (an alert shown outside the queue
+  doesn't hold them back) and while no navigation runs, and
   settles them when it is destroyed. `UseSystemBackButton(onBack)` and `UseSystemBackButton(nav)`
   handle Android's back key on the page on screen, through an AndroidX back callback enabled only
   while a handler is registered (and on each modal's own dialog), before a `NavigationHost`'s or
