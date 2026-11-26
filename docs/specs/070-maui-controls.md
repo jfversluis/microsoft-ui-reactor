@@ -1498,9 +1498,11 @@ device assertions, §3.6), the carousel (deferred). No question is open.
 `ReadmeItemsSnippetTests.cs` (the README's snippets). Engine `Reactor.Maui.Engine.Tests`: 80
 (unchanged). Device: 40 new fixtures (4 gates, 17 behaviors on both registries, 2 characterizations)
 in `ItemsCharacterization.cs`, `ItemsFixtures.cs`, `ItemsPlatformInput.cs`. Full device suites: Mac
-Catalyst 154 passed, 7 skipped; iOS simulator 154 passed, 7 skipped; Android emulator 155 passed, 5
-skipped, 1 failed in the full run (`WebView_Navigations_AreAttemptedAndCompleted`, a 4c-1 fixture of
-code 4c-2 didn't touch: a back navigation wasn't asked within 10 s), which passed alone twice.
+Catalyst 154 passed, 7 skipped; iOS simulator 154 passed, 7 skipped; Android emulator 156 passed, 5
+skipped. Two earlier full Android runs each failed one 4c-1 fixture of code 4c-2 doesn't touch,
+`WebView_Navigations_AreAttemptedAndCompleted` (once a refused back wasn't asked within 10 s, once
+the fixture ran past 30 s after its back case); it passed alone twice and in the grouped ref and echo
+runs, and the base commit's one full run passed it. The cause isn't established.
 
 **Mutation checks** (each broke the code, ran the class's tests, restored and touched the file): all
 red but the two equivalent mutants of deviation 7. Label: rebuilding on every change, invoking
@@ -1529,7 +1531,8 @@ batch update.
 - Android: plain MAUI's infinite loop on a text radio button written from its own notification
   (deviation 4), and MAUI's iOS `ValidateAndSelectItem` not checking that its item is still the
   selected one (§3.4): both to file upstream.
-- The Android WebView flake above (4c-1's fixture), seen once in a full run.
+- The Android WebView flake above (4c-1's fixture): 2 of 3 full runs on this branch, 0 of 1 on the
+  base commit, never in isolation; to watch in CI.
 - Not in 4c-2, as designed: CarouselView and IndicatorView (§5), the spec 068 gaps of §3.11, Windows
   (4g).
 
