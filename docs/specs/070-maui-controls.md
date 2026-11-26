@@ -1765,9 +1765,10 @@ public sealed record PathElement : ShapeElement
 **Modifiers**, generic over `T : ShapeElement` so they chain: `.Fill(Brush?)` and `.Fill(Color?)`,
 `.Stroke(Brush?, double? thickness = null)` and `.Stroke(Color?, double? thickness = null)` (a
 thickness leaves the current one when `null`; `.Stroke(brush)` is WinUI's call),
-`.StrokeThickness(double)`, `.StrokeDashArray(params double[])`, `.StrokeLineCap(PenLineCap)`,
-`.StrokeLineJoin(PenLineJoin)`, `.Aspect(Stretch)`; `.Radius(double x, double? y = null)` on
-`RectangleElement`. The `Color?` overloads exist because MAUI's implicit `Color` to `Brush` conversion
+`.StrokeThickness(double)`, `.StrokeDashArray(params double[])`, `.StrokeDashOffset(double)`,
+`.StrokeMiterLimit(double)` (WinUI's names), `.StrokeLineCap(PenLineCap)`, `.StrokeLineJoin(PenLineJoin)`,
+`.Aspect(Stretch)`; `.Radius(double x, double? y = null)` on `RectangleElement`; `.FillRule(FillRule)` on
+`PolygonElement` and `PolylineElement` (WinUI's name, on its path). The `Color?` overloads exist because MAUI's implicit `Color` to `Brush` conversion
 turns a `null` color into `Brush.Default` (`Brush.cs` 110), a written empty brush rather than a
 cleared property; the overloads map `null` to clearing, and a literal `null` binds to them (a `Color`
 converts to a `Brush`, not the reverse, so `Color` is the better conversion target). The brush entries
@@ -1796,7 +1797,10 @@ also treat `Brush.Default` as unset, so `with { Fill = nullColor }` clears too.
 - **Clearing `RenderTransform` (review round 1).** MAUI's iOS and Android `PathHandler.MapRenderTransform`
   updates the drawable's matrix only when the transform is non-null, so clearing the property leaves
   the old transform drawn. Reactor clears it by first writing an identity `MatrixTransform` (which the
-  mapper installs) and then clearing the value (which the mapper ignores, leaving the identity). Verified
+  mapper installs) and then clearing the value (which the mapper ignores, leaving the identity). It runs
+  after the shared modifiers whenever the path showed a transform and now shows none, so a transform a
+  removed style provided is reset too, and one a remaining style provides is left alone (review of
+  `566796fa`). Verified
   on devices with an asymmetric path, set then cleared; if it can't be made to work, `RenderTransform`
   is left out rather than advertised as clearable.
 - **Size.** MAUI sizes `Line`, `Polyline`, `Polygon` and `Path` from their geometry when the layout
@@ -2131,7 +2135,7 @@ Counts are positive witnesses; zero oracles have a positive control in the same 
 
 | Test | Oracle | Mutation |
 |---|---|---|
-| Shape properties (matrix) | every `ShapeElement` property on each of the seven shapes, and each shape's own (`RadiusX`, `RadiusY`, `CornerRadius`, `X1`…`Y2`, `Points`, `FillRule`, `PathDataString`, `Data`, `RenderTransform`): set, updated in place with one write, an equal re-render with no write (for `StrokeDashArray` and `Points` a new equal array), reapplied, cleared to MAUI's default with no local value | compare the arrays by reference; skip the clear; write every render |
+| Shape properties (matrix) | every `ShapeElement` property on each of the seven shapes, and each shape's own (`RadiusX`, `RadiusY`, `CornerRadius`, `X1`…`Y2`, `Points`, `FillRule`, `PathDataString`, `Data`, `RenderTransform`): set, updated in place with one write, an equal re-render with no write (for `StrokeDashArray` and `Points` a new equal array), reapplied, and unset: nullable properties cleared to MAUI's default with a fresh view's local-value state; the non-nullable `X1`…`Y2` and `CornerRadius` write their default (§4.13 deviation 10) | compare the arrays by reference; skip the clear; write every render |
 | Collections are values | after rendering, the app mutates its points (and dash) array and renders a **new** array equal to the mutated one: the native collection is updated (the retained declaration was a copy, so the change is seen); the app reuses one array instance, mutated between renders: each render's content is written; mutating the array after the last render changes nothing natively | keep the app's array (no copy); compare by reference |
 | Brush and color overloads | `.Stroke(null)` and `.Fill(null)` (literal), and a `Color?` variable holding `null`, clear the property (no local value, so a `Style` setter for it applies afterwards); `with { Fill = nullColor }` (`Brush.Default`) clears too | drop the `Color?` overload; write `Brush.Default` |
 | `RenderTransform` clear | set a rotation, then clear: the identity transform was written before the clear (the native's value sequence is rotation, identity, unset), and the property ends unset | plain `ClearValue` |
@@ -2274,16 +2278,22 @@ pixel samples at a per-channel tolerance with the raw values logged. No question
   as unset), `SequenceComparer<T>`, the descriptor helpers `BrushProperty`, `ListProperty` (the
   projected entry, on `OneWay`) and `ShapeProperties`, a descriptor per shape and for `ContentView`,
   `PathData` (markup conversion with its fallback and warning, and the identity-then-clear
-  transform), and `ImageSources` (value equality and `StreamImage` keys in a `ConditionalWeakTable`).
+  transform reset, run after the modifiers through an internal `ControlDescriptor.WithAfterModifiers`
+  hook), and `ImageSources` (value equality and `StreamImage` keys in a `ConditionalWeakTable`).
   `Props.SetBrush` serves `.Background` and the border stroke; `Props.SameImage` forwards to
   `ImageSources.Same`; a page's back button compares its icon with it.
 - **Factories and modifiers**: the shapes, `ContentView`, `StreamImage`, the gradient factories;
-  `.Fill`, `.Stroke` (brush and color), `.StrokeThickness`, `.StrokeDashArray`, `.StrokeLineCap`,
-  `.StrokeLineJoin`, `.Aspect`, `.Radius`; `ContentView.Padding`; the border's two `.Stroke`s.
-- **The census** (`PropertyMatrix.cs`, `MatrixCases.cs`, `CensusBaseline.Pending.cs`): 58 element types
-  and value records, every public settable property claimed: 89 property cases and 1 event case, each
-  run on both registries (180 theory rows), 2 covered-by claims (the content slots), and a pending baseline of 348 properties
-  (ceiling 348) for 4c-3b.
+  `.Fill`, `.Stroke` (brush and color), `.StrokeThickness`, `.StrokeDashArray`, `.StrokeDashOffset`,
+  `.StrokeMiterLimit`, `.StrokeLineCap`, `.StrokeLineJoin`, `.Aspect`, `.Radius`, `.FillRule`;
+  `ContentView.Padding`; the border's two `.Stroke`s (a color 1 unit thick unless given, as before; a
+  brush keeps the current thickness, as on shapes).
+- **The census** (`PropertyMatrix.cs`, `MatrixCases.cs`, `CensusBaseline.*.cs`): 58 element types
+  and value records, every public settable property claimed: 89 property cases (most built by a typed
+  `Case(make, name, set, a, b, …)` from fresh factory calls through the modifiers) and 1 event case,
+  each run on both registries (180 theory rows), 2 covered-by claims (the content slots), and 348
+  pending properties for 4c-3b. The pending list must equal its ceiling and be a subset of
+  `CensusBaseline.Original`, the list as generated, whose SHA-256 is pinned; no property of an element
+  4c-3a covered (the shapes, `ContentView`, `Border`, `Image`, `ImageButton`) may be pending.
 
 **Deviations from §4, and why:**
 
@@ -2296,8 +2306,9 @@ pixel samples at a per-channel tolerance with the raw values logged. No question
    with an app's own `Brush` subclass.
 3. **The package's global usings alias `PenLineCap`, `PenLineJoin` and `FillRule`**: they live in
    `Microsoft.Maui.Controls.Shapes`, whose `Path` and `Rectangle` a namespace import would bring into
-   every component file. (`Stretch` is in `Microsoft.Maui.Controls`.) The test projects declare the
-   same aliases.
+   every component file. (`Stretch` is in `Microsoft.Maui.Controls`.) The test projects, the
+   benchmark and the sample import the shipped props file instead of copying its `Using` items, so a
+   change to it is compiled there.
 4. **Rejected path markup warns once per change** of the (markup, data) pair, the only time the
    entry converts, rather than once per view and string: rendering the same bad string again warns
    nothing, changing it (or the fallback `Data`) warns again.
@@ -2318,6 +2329,16 @@ pixel samples at a per-channel tolerance with the raw values logged. No question
    (`StrokeDashArray`, `Padding`), so the matrix reads `IsSet` before reading the value. On Android a
    layout that touches the status bar lays its children below it (`SafeAreaEdges`), so pixel and
    geometry fixtures stage their subjects 120 points down and capture the subject itself.
+10. **`LineElement`'s coordinates and `RoundRectangleElement.CornerRadius` are non-nullable**, as on
+    WinUI (and `RoundRectangle(radius)` takes one), so they are always written: unset means 0, written
+    as a local value, and a `Style` setter for them can't apply. The matrix marks them as writing their
+    default instead of clearing.
+11. **Review of `566796fa`.** A style that provided a path's transform, removed while neither
+    declaration has one, left the transform drawn (the entry skipped an unchanged `null`): the reset
+    moved after the modifiers (§4.3). URI sources compare `OriginalString` ordinally, since `Uri`'s
+    `==` ignores the user info and the fragment. `ViewModifiers.NeedsControls` treats a `null`-color
+    background (`Brush.Default`) as no brush, so it no longer forces a Controls view. The internal
+    `ReferenceEqualityComparer<T>` gave way to the BCL's.
 
 **Characterization (device; plain MAUI):**
 
@@ -2329,7 +2350,7 @@ pixel samples at a per-channel tolerance with the raw values logged. No question
 | One mount of a stream source; a new instance | opened once, decoded 24×12; opened again, a new platform image | same | same |
 | `Border` content inset (padding 10, stroke 6) | 16 on every side; the padding area transparent | same | same |
 
-**Tests.** Headless `Reactor.Maui.Tests`: 675 (429 before), in `PropertyMatrix.cs` (the runner and the
+**Tests.** Headless `Reactor.Maui.Tests`: 679 (429 before), in `PropertyMatrix.cs` (the runner and the
 census, 4 census facts), `MatrixCases.cs`, `VisualsTests.cs`, `PathDataWarningTests` and
 `ReadmeVisualsSnippetTests.cs`. Engine `Reactor.Maui.Engine.Tests`: 80 (unchanged). Device: 18 new
 fixtures (4 characterizations, 7 behaviors on both registries) in `VisualsCharacterization.cs` and

@@ -57,9 +57,14 @@ The package adds global usings for `Microsoft.UI.Reactor.Core`, `Microsoft.UI.Re
 `Microsoft.UI.Reactor.Maui.Hosting`, `Microsoft.UI.Reactor.Maui.Direct` and `Microsoft.UI.Reactor.Input`
 (element refs), plus `Element` and
 `NavigationMode` aliases, because MAUI's own `Microsoft.Maui.Controls.Element` and
-`Microsoft.Maui.ApplicationModel.NavigationMode` would otherwise make the bare names ambiguous. The factories are a `using static` you add per file, since names such as `Grid` and
+`Microsoft.Maui.ApplicationModel.NavigationMode` would otherwise make the bare names ambiguous. It also
+aliases `PenLineCap`, `PenLineJoin` and `FillRule` for shapes: they live in
+`Microsoft.Maui.Controls.Shapes`, and importing that namespace would bring in its `Path` and `Rectangle`
+too. The factories are a `using static` you add per file, since names such as `Grid` and
 `Label` would otherwise shadow MAUI's types everywhere. Set
-`<ReactorImplicitUsings>false</ReactorImplicitUsings>` in the project to opt out of the global usings.
+`<ReactorImplicitUsings>false</ReactorImplicitUsings>` in the project to opt out of the global usings;
+then add the namespaces you use per file, and the aliases as file-level ones, for example
+`using PenLineJoin = Microsoft.Maui.Controls.Shapes.PenLineJoin;`.
 
 ## Two renderers
 
@@ -703,6 +708,8 @@ Path2D("M 0,10 L 10,0 L 20,10 L 10,20 Z").Fill(Colors.Orange).Aspect(Stretch.Uni
   compared by reference: create them once (`UseMemo`).
 
 Gradients are brushes for `.Background(…)`, a border's `.Stroke(…)` and a shape's fill and stroke.
+A stroke given a brush keeps the current thickness unless you pass one; a border's stroke given a color
+is 1 unit thick unless you pass one.
 Points and the radius are relative to the element's bounds (0 to 1):
 
 ```csharp

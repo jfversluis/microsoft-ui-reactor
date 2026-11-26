@@ -107,9 +107,11 @@ Conventions for contributors:
   `ContentView(child)`. Brushes are compared by value (exactly), so a gradient built in `Render` is
   written once, and a `null` color clears a fill or stroke instead of writing MAUI's empty brush.
   `Border.Stroke` is now a `Brush?` (it was a `Color?`; `.Stroke(color, thickness)` still works, and
-  `.Stroke(brush, thickness)` is new). Font, file and URI image sources are compared by value (a URI's
-  caching settings now count), so an icon built in `Render` isn't reloaded; `StreamImage(key, open)` gives
-  a stream image a key. Clearing a path's `RenderTransform` now redraws it untransformed (MAUI's path
+  `.Stroke(brush, thickness)` is new and keeps the current thickness when none is given). The package's
+  global usings add `PenLineCap`, `PenLineJoin` and `FillRule` aliases. Font, file and URI image sources
+  are compared by value (a URI by its original string, with its caching settings), so an icon built in
+  `Render` isn't reloaded; `StreamImage(key, open)` gives a stream image a key. Clearing a path's
+  `RenderTransform`, or removing the style that provided it, now redraws it untransformed (MAUI's path
   handlers keep the old transform otherwise).
   Built with `Reactor.Maui.slnx` and tested in `.github/workflows/maui.yml`, including a
   device tier that runs on the real platform controls. It doesn't change the WinUI packages.
