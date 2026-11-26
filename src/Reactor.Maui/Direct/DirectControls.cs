@@ -265,8 +265,13 @@ public sealed class DirectCheckBox : DirectControl, ICheckBox
         Remap(nameof(ICheckBox.IsChecked));
     }
 
-    internal void Apply(CheckBoxElement element) =>
-        Update(ref _foreground, element.Color?.AsPaint()!, nameof(ICheckBox.Foreground));
+    internal void Apply(CheckBoxElement element)
+    {
+        // Compared by color: a new paint per render would remap the foreground every time.
+        if (Equals(_foreground is SolidPaint solid ? solid.Color : null, element.Color)) return;
+        _foreground = element.Color?.AsPaint()!;
+        Remap(nameof(ICheckBox.Foreground));
+    }
 }
 
 public sealed class DirectSwitch : DirectControl, ISwitch
