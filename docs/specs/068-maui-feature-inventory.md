@@ -136,7 +136,7 @@ their sources. It sets the order in §4.
 | Essentials (device, sensors, preferences, …) | ⛔ | not UI; apps call them directly |
 | Hot reload (`dotnet watch`, VS) | 🟡 | re-renders every live root. Verified headlessly only (spec 065 §7); real edits from an IDE on devices in 4g |
 | Analyzers (hook rules) on MAUI code | ⬜ 4g | |
-| Windows (WinUI-backed MAUI) | ⬜ 4g | Dev Box runner |
+| Windows (WinUI-backed MAUI) | ⬜ 4g | Dev Box runner. Includes the path transform reset's `WINDOWS` branch (`W2DGraphicsView { Drawable: ShapeDrawable }` → `UpdateRenderTransform(null)`, `Invalidate()`), since MAUI's Windows `PathHandler.MapRenderTransform` also ignores a `null` transform, verified with `Shapes_UpdateInPlace` (spec 070 §4.13) |
 
 ## 3. Open issues carried into phase 4
 

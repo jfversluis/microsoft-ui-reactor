@@ -2423,8 +2423,14 @@ behind every icon.
 
 **Open issues.**
 
-- MAUI's iOS and Android `PathHandler.MapRenderTransform` ignore a `null` transform, so clearing one
-  keeps the old one drawn (worked around here): to file upstream with the 4c-2 issues.
+- **Upstream (MAUI):** `PathHandler.MapRenderTransform` ignores a `null` transform on iOS, Mac
+  Catalyst, Android and Windows (each platform's handler updates the `ShapeDrawable` only for a non-null
+  matrix), so a cleared transform stays drawn. Worked around here on iOS, Mac Catalyst and Android; to
+  file upstream with the 4c-2 issues.
+- **Windows (4g):** the workaround's drawable reset is `#if IOS || MACCATALYST || ANDROID`; Windows isn't
+  compiled in this phase's CI, so no uncompiled branch was added. 4g adds the `WINDOWS` branch
+  (`PlatformView is W2DGraphicsView { Drawable: ShapeDrawable d }` → `d.UpdateRenderTransform(null);
+  view.Invalidate();`) and verifies it on the Dev Box with `Shapes_UpdateInPlace`'s routes.
 - 4c-3b: the 348 pending properties, the remaining 🧪 rows and the flyout's split mode (§4.7).
 
 ## 5. 4c-4: CarouselView and IndicatorView
