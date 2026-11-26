@@ -489,38 +489,74 @@ public class RadioTransactionTests
         Assert.Equal((false, false, true), (b.Current!.IsChecked, c.Current!.IsChecked, d.Current!.IsChecked));
     }
 
+    // The error goes to the boundary above the checked button, which replaces it; its peers sit outside
+    // the boundary (one named group on the page), so their final state is observable. The peer whose
+    // handler throws can't be asserted: MAUI's BindableObject leaves the property marked as being set
+    // when a change handler throws, so every later write to it is queued forever (MAUI 4e6582f
+    // BindableObject.cs:675-702 has no finally). The peer unchecked before it must be restored.
+    private static Element Bounded(Element child, List<Exception> errors) =>
+        ErrorBoundary(child, error => { if (!errors.Contains(error)) errors.Add(error); return Label($"fallback {error.Message}"); });
+
     [Fact]
-    public void AThrowInTheDrain_LeavesTheRestQueuedForAnotherTurn()
+    public void AThrowInAQueuedTransaction_IsReported_AndTheGroupAndTheRestOfTheQueueSettle()
     {
         var log = new List<string>();
+        var errors = new List<Exception>();
         var c = TypedElementRef.Create<MauiRadioButton>();
         var d = TypedElementRef.Create<MauiRadioButton>();
         var e = TypedElementRef.Create<MauiRadioButton>();
         var b = TypedElementRef.Create<MauiRadioButton>();
+        var p = TypedElementRef.Create<MauiRadioButton>();
         var host = new TestHost(MauiHandlers.CreateRegistry()).Render(VStack(
-            VStack(
-                RadioButton("b", false, v =>
-                {
-                    log.Add($"b {v}");
-                    if (!v) return;
-                    // Both queue: C's (group g) throws while unchecking its peer D; E's (group h) must run.
-                    ((IRadioButton)c.Current!).IsChecked = true;
-                    ((IRadioButton)e.Current!).IsChecked = true;
-                }, "h").Ref(b),
-                RadioButton("c", false, v => log.Add($"c {v}"), "g").Ref(c),
-                RadioButton("d", true, v => log.Add($"d {v}"), "g").Ref(d)),
+            RadioButton("b", false, v =>
+            {
+                log.Add($"b {v}");
+                if (!v) return;
+                // Both queue: C's (group g) unchecks P, then throws unchecking D; E's (group i) must run.
+                ((IRadioButton)c.Current!).IsChecked = true;
+                ((IRadioButton)e.Current!).IsChecked = true;
+            }, "h").Ref(b),
+            Bounded(RadioButton("c", false, v => log.Add($"c {v}"), "g").Ref(c), errors),
+            RadioButton("p", true, v => log.Add($"p {v}"), "g").Ref(p),
+            RadioButton("d", true, v => log.Add($"d {v}"), "g").Ref(d),
             RadioButton("e", false, v => log.Add($"e {v}"), "i").Ref(e)));
         host.Scheduler.Drain();
         d.Current!.CheckedChanged += (_, args) => { if (!args.Value) throw new InvalidOperationException("app handler"); };
 
-        Tap(b);
-        Assert.Throws<InvalidOperationException>(() => host.Scheduler.Drain());
+        Tap(b); // doesn't throw into the platform's dispatcher
         host.Scheduler.Drain();
 
+        Assert.Equal("app handler", Assert.Single(errors).Message);
         Assert.Contains("e True", log);
         Assert.DoesNotContain("c True", log);
-        // E isn't left queued: its declaration (unchecked) is written back again.
-        Assert.False(e.Current!.IsChecked);
+        Assert.Null(c.Current); // replaced by the boundary's fallback
+        // Back at their declarations: P in the failed group, B and E.
+        Assert.Equal((false, true, false), (b.Current!.IsChecked, p.Current!.IsChecked, e.Current!.IsChecked));
+    }
+
+    [Fact]
+    public void AThrowInATapsTransaction_IsReported_AndTheGroupReturnsToItsDeclarations()
+    {
+        var log = new List<string>();
+        var errors = new List<Exception>();
+        var a = TypedElementRef.Create<MauiRadioButton>();
+        var b = TypedElementRef.Create<MauiRadioButton>();
+        var c = TypedElementRef.Create<MauiRadioButton>();
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(VStack(
+            RadioButton("a", true, v => log.Add($"a {v}"), "g").Ref(a),
+            RadioButton("b", true, v => log.Add($"b {v}"), "g").Ref(b),
+            Bounded(RadioButton("c", false, v => log.Add($"c {v}"), "g").Ref(c), errors)));
+        host.Scheduler.Drain();
+        // A is unchecked, then B throws while it is unchecked.
+        b.Current!.CheckedChanged += (_, args) => { if (!args.Value) throw new InvalidOperationException("app handler"); };
+
+        Tap(c); // doesn't throw into the platform's dispatcher
+        host.Scheduler.Drain();
+
+        Assert.Equal("app handler", Assert.Single(errors).Message);
+        Assert.Empty(log);
+        Assert.Null(c.Current);
+        Assert.True(a.Current!.IsChecked);
     }
 
     [Fact]

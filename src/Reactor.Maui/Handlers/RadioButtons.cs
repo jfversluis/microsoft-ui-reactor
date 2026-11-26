@@ -236,24 +236,41 @@ internal sealed class RadioGroups
         if (!_entries.TryGetValue(view, out var entry)) return;
         var group = entry.Group;
         var generation = ++group.Generation;
-        if (!value)
+        var participants = new List<Entry> { entry };
+        // One transaction: the native settling and the dispatch. Whatever throws (a platform write, an
+        // app's own CheckedChanged handler on a peer) goes to the error boundary, and every participant
+        // gets its declaration back, so the group is never left half-settled.
+        try
         {
-            // An uncheck outside a write (a ref): reported and restored, as any input.
-            Run([entry], [(entry, false)], group, generation);
-            return;
+            if (!value)
+            {
+                // An uncheck outside a write (a ref): reported and restored, as any input.
+                Run([(entry, false)], group, generation);
+                return;
+            }
+            var peers = new List<Entry>();
+            foreach (var member in group.Members)
+                if (!ReferenceEquals(member, view) && member.IsChecked && _entries.TryGetValue(member, out var peer)) peers.Add(peer);
+            participants.AddRange(peers);
+            // The native group is settled before any callback, in MAUI's order: peers unchecked first.
+            foreach (var peer in peers) peer.Context.WriteSuppressed(peer.View, () => peer.View.IsChecked = false);
+            var reports = new List<(Entry, bool)>(peers.Count + 1);
+            foreach (var peer in peers) reports.Add((peer, false));
+            reports.Add((entry, true));
+            Run(reports, group, generation);
         }
-        var peers = new List<Entry>();
-        foreach (var member in group.Members)
-            if (!ReferenceEquals(member, view) && member.IsChecked && _entries.TryGetValue(member, out var peer)) peers.Add(peer);
-        // The native group is settled before any callback, in MAUI's order: peers unchecked first.
-        foreach (var peer in peers) peer.Context.WriteSuppressed(peer.View, () => peer.View.IsChecked = false);
-        var reports = new List<(Entry, bool)>(peers.Count + 1);
-        foreach (var peer in peers) reports.Add((peer, false));
-        reports.Add((entry, true));
-        Run([.. peers, entry], reports, group, generation);
+        catch (Exception ex)
+        {
+            if (entry.Context.IsMounted) entry.Context.ReportError(ex);
+        }
+        finally
+        {
+            foreach (var participant in participants)
+                if (participant.Context.IsMounted) participant.Context.RestoreAfterEvent();
+        }
     }
 
-    private void Run(List<Entry> participants, List<(Entry Entry, bool Value)> reports, Group group, int generation)
+    private void Run(List<(Entry Entry, bool Value)> reports, Group group, int generation)
     {
         _dispatching = true;
         try
@@ -275,8 +292,6 @@ internal sealed class RadioGroups
         finally
         {
             _dispatching = false;
-            foreach (var participant in participants)
-                if (participant.Context.IsMounted) participant.Context.RestoreAfterEvent();
         }
     }
 
