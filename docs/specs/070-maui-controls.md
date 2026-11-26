@@ -2376,6 +2376,15 @@ ignored (`Image_EqualSourceDoesNotReload`, Mac Catalyst: 2 opens became 8), font
 same, Android direct: a new font image), the dash list not cleared (`Shapes_UpdateInPlace`, iOS
 direct: the dashes stayed).
 
+Review of `566796fa`, mutation checks (all red): no reset after the modifiers (the style and the
+local transform tests; on Android, `Shapes_UpdateInPlace`'s styled path stayed rotated), a reset
+whenever a transform was shown (a transform a remaining style provides was overwritten), the pending
+list with a same-size swap, the original list edited, the ceiling raised, `.StrokeMiterLimit` and
+`.FillRule` as no-ops, URIs by `Uri`'s `==` (the user-info and fragment rules), a brush stroke
+resetting the border's thickness to 1, the back button ignoring its text, and `NeedsControls` on any
+background (the `null`-color label stayed Controls). Full device suites afterwards: Mac Catalyst 174
+passed, 7 skipped; iOS 174 passed, 7 skipped; Android 176 passed, 5 skipped.
+
 **Benchmark** (Mac Catalyst, one pair against `7281bf4d`, base first): total time within noise or
 lower in every scenario on both renderers (−4% to +0.03%, and −13% and −35% on the 40-ms `UpdateOne`),
 allocations identical to the kilobyte. The benchmark sets no brushes or images, so it measures the
