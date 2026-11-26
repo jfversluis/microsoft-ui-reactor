@@ -1523,13 +1523,14 @@ device assertions, §3.6), the carousel (deferred). No question is open.
 | Swipe below the threshold (Reveal and Execute sides); Reveal above; Execute above | closed, nothing; open at the items' width, nothing; the current callback once | same | same |
 | Swipe content item opened through a ref; re-rendered while open; invoked | realized with a size and its text; updated in place, still open; the current callback once | same | same |
 
-**Tests.** Headless `Reactor.Maui.Tests`: 428 after the review rounds (406 before them; 328 before 4c-2), in `LabelAndPickerTests.cs`,
+**Tests.** Headless `Reactor.Maui.Tests`: 429 after the review rounds (406 before them; 328 before 4c-2), in `LabelAndPickerTests.cs`,
 `CollectionViewItemTests.cs`, `SwipeViewTests.cs`, `RadioButtonTests.cs` and
 `ReadmeItemsSnippetTests.cs` (the README's snippets). Engine `Reactor.Maui.Engine.Tests`: 80
 (unchanged). Device: 42 new fixtures (4 gates, 18 behaviors on both registries, 2 characterizations)
 in `ItemsCharacterization.cs`, `ItemsFixtures.cs`, `ItemsPlatformInput.cs`. Full device suites at the
 review rounds' head: Mac Catalyst 156 passed, 7 skipped; iOS simulator 156 passed, 7 skipped; Android
-emulator 158 passed, 5 skipped (before them: 154/7, 154/7, 156/5). Two earlier full Android runs each failed one 4c-1 fixture of code 4c-2 doesn't touch,
+emulator 158 passed, 5 skipped (before them: 154/7, 154/7, 156/5); after the last fix (a radio
+transaction's try/catch/finally), the radio fixtures (`RadioButton*`, 9) passed again on all three. Two earlier full Android runs each failed one 4c-1 fixture of code 4c-2 doesn't touch,
 `WebView_Navigations_AreAttemptedAndCompleted` (once a refused back wasn't asked within 10 s, once
 the fixture ran past 30 s after its back case); it passed alone twice and in the grouped ref and echo
 runs, and the base commit's one full run passed it. The cause was two races in that fixture, timing
@@ -1587,6 +1588,15 @@ it, after every commit of a selecting list).
 - **The radio queue survives a throw**: a throwing platform write or app `CheckedChanged` handler in a
   drained check leaves the rest queued, re-posted, instead of stuck (a queued button skips its
   controlled writes).
+- **A radio transaction is one try/catch/finally** (third verification round): a throw while
+  settling the native group (an app's `CheckedChanged` handler on a peer, a platform write) skipped
+  the restores and escaped into the platform dispatcher. Now the native phase and the dispatch share
+  one `try`: the error goes to the checked button's boundary (`ReportError`), and every participant
+  gets a restore, on the tap path and the queued path. The peer whose handler threw stays where MAUI
+  left it: MAUI's `BindableObject` doesn't clear a property's "being set" flag when a change handler
+  throws (4e6582f `BindableObject.cs` 675-702 has no `finally`), so every later write to it is queued
+  forever. That's MAUI's, and goes upstream with the others. The drain's re-post after a throw is now
+  unreachable (a transaction no longer throws) and kept as defense in depth.
 - **Run decorations** toggle one flag of the effective value (a hyperlink starts underlined), so
   `.Strikethrough(false)` keeps a hyperlink's underline and `.Underline().Strikethrough()` keeps both.
 - `Label` gained `.LineHeight(...)` and `.TextTransform(...)`; a swipe content item no longer rebuilds
@@ -1615,7 +1625,8 @@ peers by parent node (red since the component-boundary test), a kept empty group
 queued button, the description written before the modifiers, scheduling regardless of writes, only
 virtual writes scheduling, `Schedule` ignoring the input marker, a completion comparing while input
 awaits its commit, a completion consuming the marker, every commit bumping the generation, the drain
-not re-posted after a throw, entering `None`
+not re-posted after a throw (red when added; equivalent since the transaction catches), a throwing
+transaction escaping, restoring nothing, or reporting nothing, entering `None`
 unverified (it survived at first: the stub port arrived after mount and left verification pending,
 so the test now settles the mount first and counts issued barriers), the decoration replacing the
 whole value, content items comparing color and icon, the mode not compared, a queued check
