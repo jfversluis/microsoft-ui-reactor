@@ -701,6 +701,8 @@ and a declarative one like WinUI's `ContentDialog`. Both feed the same queue.
   - **The dispatcher refused the work** (the app is shutting down): the request is settled where it
     is, and so is everything the queue holds (the dialog shown included); the queue is then terminal,
     settling every later request at once, until MAUI creates the window again. Nothing is left waiting.
+  - **A dialog being presented when the queue terminates** (the presentation destroyed the window, say)
+    is settled too: it is reserved as the dialog shown, under the queue's lock, before it is presented.
   - **A failure report that can't be delivered** (the render thread refuses it) is logged; the task
     has already completed, and the queue goes on.
   - **Declarative `OnClosed`** runs at most once per open, and only while that open is still the
@@ -870,10 +872,12 @@ modals. Other platforms ignore it, and it is not applied on Mac Catalyst (§5.6)
   until it exists) and adds its callback to that dispatcher, after MAUI's, enabled with the window's.
   MAUI's Shell adds a back callback when an item's view is created; `ReactorShell.OnBackButtonPressed`
   asks the handlers (on Android only: iOS calls it for the navigation-bar back), in case that callback
-  is asked first. A back asks the handlers at most once: Reactor marks the window while it passes a
-  key on to MAUI, and until the end of the UI thread's turn (cleared by a posted turn) after it
-  asked. Two back keys queued within one turn would ask once; not observed. On the emulator Reactor's
-  callback was asked before the Shell's in every order tried, so the Shell path is covered headlessly.
+  is asked first. A back asks the handlers at most once, and every back asks them: the mark is scoped
+  to one back's dispatch, not to a turn of the UI thread. While Reactor's callback passes a back on to
+  MAUI, the Shell doesn't ask; when the Shell's path asked and passed the back on (it didn't handle
+  it), Reactor's callback, which that same back reaches next, takes the mark instead of asking (a
+  posted turn clears a mark nothing took). On the emulator Reactor's callback was asked before the
+  Shell's in every order tried, so the Shell path is covered headlessly.
 - **A handler belongs to the page it renders, else the nearest page above it.** A route's component
   usually returns `Page(…)`, so the page is below the component: the walk first follows the
   component's rendered chain (components, providers and boundaries with one child) down to a host,

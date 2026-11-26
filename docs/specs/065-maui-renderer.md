@@ -248,7 +248,7 @@ shared navigation model (spec 069): the stack's operations and guard order, `Pop
 state restored without guards, the lifecycle hook's order and lookup, and a handle over an injected
 scheduler (including one that refuses).
 
-**Renderer, headless** (`tests/Reactor.Maui.Tests`, 212 tests). Real Controls objects and direct
+**Renderer, headless** (`tests/Reactor.Maui.Tests`, 213 tests). Real Controls objects and direct
 views, no platform handlers: modifiers, every control's props and echo-free events, the hybrid
 fallback and mixed trees, `CollectionView` cells as child roots, pages, toolbar items, the
 navigation stack's reconcile, the user-pop rule (below), tabs and flyout (including swapping the
@@ -289,7 +289,7 @@ dialog at a time per window, the dismissal barrier (and Android's posted turn) a
 navigation until the navigator is idle (in the page and in a modal), a failed presentation completing
 with the cancel answer (reported to the caller's boundary when it has one) while the queue moves on,
 a destroyed window completing its dialogs and settling later requests until it is created again, a
-refused dispatch (of a request or of an answer) settling everything and making the queue terminal, a
+refused dispatch (of a request or of an answer) or a termination during a presentation settling everything and making the queue terminal, a
 failure report the render thread refuses still completing the task, the presenter resolved at dequeue (the top modal), a late
 window and a hosted page leaving its window; declarative dialogs queued once per open, their stale
 answers dropped (unmounted, closed, re-opened, closed in the render that brings the window), a stale
@@ -299,7 +299,7 @@ presentation errors reaching the element's boundary; back handlers asked only on
 deselected tab, a covered `ReactorPage` or a list cell in a deselected tab), deepest first, then the
 most recent, each once, across two trees, with the root's handlers asked over a modal, falling
 through to MAUI and the host's guarded back, once per back whether Reactor's callback or the Shell's
-back path asks first, the handle overload consuming a refused back, a throwing
+back path asks first (and twice for two backs in one turn), the handle overload consuming a refused back, a throwing
 handler, and a page's own `SendBackButtonPressed` asking none; the window's lifecycle subscribed,
 refreshed and unsubscribed, found late, left when a hosted page leaves its window, and `onDestroying`
 running before the teardown, with its errors held until after it; `ModalPresentationStyle` written
