@@ -252,8 +252,18 @@ internal static class Range
     public static void Write(BindableObject view, BindableProperty minimum, BindableProperty maximum, BindableProperty value, double min, double max, double current)
     {
         if (min > max) throw new ArgumentException($"Minimum ({min}) is greater than maximum ({max}).");
-        view.SetValue(minimum, min);
-        view.SetValue(maximum, max);
+        // A control may refuse a minimum above its current maximum (Stepper does), so a range moving up
+        // writes its maximum first.
+        if (min > (double)view.GetValue(maximum))
+        {
+            view.SetValue(maximum, max);
+            view.SetValue(minimum, min);
+        }
+        else
+        {
+            view.SetValue(minimum, min);
+            view.SetValue(maximum, max);
+        }
         view.SetValue(value, Math.Clamp(current, min, max));
     }
 }
@@ -311,8 +321,18 @@ internal sealed class DatePickerHandler : ViewHandler<DatePickerElement, MauiDat
         {
             context.WriteSuppressed(view, () =>
             {
-                Props.Set(view, MauiDatePicker.MinimumDateProperty, previous?.MinimumDate, next.MinimumDate);
-                Props.Set(view, MauiDatePicker.MaximumDateProperty, previous?.MaximumDate, next.MaximumDate);
+                // MAUI refuses a minimum after the current maximum, so a range moving later writes its
+                // maximum first.
+                if (next.MinimumDate > view.MaximumDate)
+                {
+                    Props.Set(view, MauiDatePicker.MaximumDateProperty, previous?.MaximumDate, next.MaximumDate);
+                    Props.Set(view, MauiDatePicker.MinimumDateProperty, previous?.MinimumDate, next.MinimumDate);
+                }
+                else
+                {
+                    Props.Set(view, MauiDatePicker.MinimumDateProperty, previous?.MinimumDate, next.MinimumDate);
+                    Props.Set(view, MauiDatePicker.MaximumDateProperty, previous?.MaximumDate, next.MaximumDate);
+                }
                 view.Date = next.Date;
             });
         }
