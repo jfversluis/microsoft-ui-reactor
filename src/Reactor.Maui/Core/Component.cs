@@ -38,6 +38,12 @@ public abstract class Component : ReactorComponent
     protected new Action UseCallback<T1, T2, T3>(Action callback, T1 d1, T2 d2, T3 d3)
         => Context.UseCallback(callback, d1, d2, d3);
 
+    /// <inheritdoc cref="MauiCoreHooks.UseElementRef{T}(RenderContext)"/>
+    protected Microsoft.UI.Reactor.Input.ElementRef<T> UseElementRef<T>() where T : class, IView => Context.UseElementRef<T>();
+
+    /// <inheritdoc cref="MauiCoreHooks.UseElementFocus(RenderContext)"/>
+    protected (Microsoft.UI.Reactor.Input.ElementRef<IView> Ref, Action RequestFocus) UseElementFocus() => Context.UseElementFocus();
+
     /// <summary>The app's current theme (light or dark). Re-renders when it changes.</summary>
     protected AppTheme UseAppTheme() => Context.UseAppTheme();
 

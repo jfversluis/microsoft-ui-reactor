@@ -4,10 +4,12 @@ using Microsoft.UI.Reactor.Core;
 namespace Microsoft.UI.Reactor.Maui;
 
 /// <summary>Base of every MAUI view element. Shared properties live in <see cref="Modifiers"/>.</summary>
-public abstract record ViewElement : Element
+public abstract record ViewElement : Element, Microsoft.UI.Reactor.Hosting.IRefTarget
 {
     /// <summary>Layout, appearance, accessibility and gesture settings set through the fluent modifiers.</summary>
     public ViewModifiers? Modifiers { get; init; }
+
+    Microsoft.UI.Reactor.Hosting.ElementRefCell? Microsoft.UI.Reactor.Hosting.IRefTarget.RefCell => Modifiers?.Ref;
 }
 
 /// <summary>Base of elements that show text with a font.</summary>
@@ -88,6 +90,9 @@ public sealed record ViewModifiers
 
     /// <summary>Runs against the native MAUI view after every mount and update; the escape hatch for anything not modelled.</summary>
     public Action<object>? Configure { get; init; }
+
+    /// <summary>The ref <c>.Ref(...)</c> attached; the engine binds it to the mounted view.</summary>
+    internal Microsoft.UI.Reactor.Hosting.ElementRefCell? Ref { get; init; }
 
     /// <summary>Whether a setting that only a <c>Microsoft.Maui.Controls</c> view supports is used.</summary>
     internal bool NeedsControls =>

@@ -75,8 +75,10 @@ differs.
 The direct renderer covers Label, Button, Entry, CheckBox, Switch, Slider, ProgressBar,
 ActivityIndicator, Image, the two stacks and Grid. Every other element, and any element that uses
 a setting only Controls implements (styles, gestures, shadows, clipping, brushes, Flex/Absolute
-placement, `.Set()`; per element, for example Label `MaxLines`), falls back to the Controls
-renderer in the same tree (`HybridHandler`). Mixing works in both directions because Controls
+placement, `.Set()`, a ref typed to a Controls type such as `ElementRef<Entry>`; per element, for
+example Label `MaxLines`), falls back to the Controls renderer in the same tree (`HybridHandler`).
+A ref typed to a Core interface (`ElementRef<IView>`) keeps the direct view, which can be focused
+(spec 070 §2.5). Mixing works in both directions because Controls
 layouts accept any `IView` child. The one boundary is a Controls slot typed as `View` (page or
 scroll view content), where a direct view is hosted in a reused `DirectViewHost` grid. A Controls
 view inside a direct tree gets that host as its logical parent, so resources reach it. The sample
@@ -93,7 +95,9 @@ supplies has to be re-derived.
 
 Direct views implement `IVisualTreeElement`, so MAUI's visual-tree tools, inspectors and
 test drivers see them. Controls layouts list only Controls elements as visual children, so
-`DirectViewHost` re-implements the interface to list its direct child.
+`DirectViewHost` re-implements the interface to list its direct child. A Controls view's logical parent skips the direct layouts above it, so MAUI's
+`ScrollView.ScrollToAsync(Element, …)` computes a wrong position through them; Reactor's
+`ScrollToAsync(ElementRef<T>, …)` walks the visual parents instead (spec 070 §2.6.1).
 
 ### 4.1 Benchmark results
 

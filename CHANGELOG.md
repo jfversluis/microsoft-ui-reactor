@@ -80,6 +80,14 @@ Conventions for contributors:
   window; a `ReactorWindow` now unmounts its tree in `OnDestroying`, after the `Destroying` event's
   handlers. `PageElement.ModalPresentationStyle` sets an iOS modal's presentation (not on Mac
   Catalyst, spec 069 §5.6).
+  Element refs and the calls they enable (spec 070 §2): WinUI's `UseElementRef<T>()`, `.Ref(...)`,
+  `TypedElementRef.Create<T>()` and `UseElementFocus()` in `Microsoft.UI.Reactor.Input`, with `T : IView`
+  (a ref typed to a Controls view such as `ElementRef<Entry>` renders that element as a Controls
+  view, and direct views can be focused); `ScrollToAsync(ElementRef<T>, …)` scrolls to an element in
+  direct layouts too and always completes; `WebView.OnNavigating` can cancel, and `OnNavigated` now
+  passes MAUI's `WebNavigatedEventArgs` with the result (it passed the URL); `Entry.CursorPosition`,
+  `SelectionLength` and `OnSelectionChanged` with WinUI's semantics. The `ScrollView` element renders a
+  `ScrollView` subclass, so an implicit style for it needs `ApplyToDerivedTypes`.
   Built with `Reactor.Maui.slnx` and tested in `.github/workflows/maui.yml`, including a
   device tier that runs on the real platform controls. It doesn't change the WinUI packages.
 

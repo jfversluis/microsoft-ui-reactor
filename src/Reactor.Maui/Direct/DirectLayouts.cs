@@ -101,8 +101,16 @@ public abstract class DirectLayout : DirectView, Microsoft.Maui.ILayout, IList<I
         foreach (var child in _children) AnchorChild(child, anchor);
     }
 
+    // A Controls child's Parent stays the Controls anchor (styles and resources); its visual parent,
+    // which scrolling to it needs (spec 070 §2.6.1), is recorded here.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IView, DirectLayout> VisualParents = new();
+
+    /// <summary>The direct layout a Controls view was attached to, or <see langword="null"/>.</summary>
+    internal static DirectLayout? VisualParentOf(IView child) => VisualParents.TryGetValue(child, out var layout) ? layout : null;
+
     private void Attach(IView child)
     {
+        if (child is not DirectView) VisualParents.AddOrUpdate(child, this);
         if (child is DirectView direct) direct.Parent = this;
         if (ControlsAnchor is { } anchor) AnchorChild(child, anchor);
     }
@@ -123,6 +131,9 @@ public abstract class DirectLayout : DirectView, Microsoft.Maui.ILayout, IList<I
 
     private void Detach(IView child)
     {
+        // Only while it still names this layout: a child moved to another layout in the same pass
+        // may have been attached there first.
+        if (VisualParents.TryGetValue(child, out var owner) && ReferenceEquals(owner, this)) VisualParents.Remove(child);
         if (child is DirectView direct && direct.Parent == this) direct.Parent = null;
         if (child is ControlsElement element && element.Parent is not null && element.Parent == ControlsAnchor) element.Parent = null;
     }

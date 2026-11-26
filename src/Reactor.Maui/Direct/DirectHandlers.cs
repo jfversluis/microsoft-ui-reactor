@@ -116,13 +116,21 @@ public static class DirectHandlers
                 context.RestoreAfterEvent();
             };
             view.OnCompleted = () => context.Live?.OnCompleted?.Invoke();
+            view.OnSelectionChanged = () => SelectionTracker.Find(view)?.Notified(context);
+            view.HandlerChanged += () => SelectionTracker.Find(view)?.ObservePlatform(context);
         }
 
-        protected override void Apply(HandlerContext<EntryElement> context, DirectEntry view, EntryElement? previous, EntryElement next)
-        {
-            view.Apply(next);
-            if (view.Text != next.Text) context.WriteSuppressed(view, () => view.SetText(next.Text));
-        }
+        protected override void Apply(HandlerContext<EntryElement> context, DirectEntry view, EntryElement? previous, EntryElement next) =>
+            SelectionTracker.Apply(context, view, previous, next,
+                applyRest: () =>
+                {
+                    view.Apply(next);
+                    if (view.Text == next.Text) return false;
+                    context.WriteSuppressed(view, () => view.SetText(next.Text));
+                    return true;
+                },
+                writeSelection: view.SetSelection,
+                readSelection: () => (view.CursorPosition, view.SelectionLength, view.Text));
     }
 
     private sealed class CheckBoxHandler : DirectHandler<CheckBoxElement, DirectCheckBox>
@@ -265,7 +273,10 @@ internal sealed class HybridHandler<TElement, TDirect, TControls> : Reactor.Host
         Children = _directChildren is null && _controlsChildren is null ? null : new HybridChildren(this);
     }
 
-    private bool UseDirect(TElement element) => !(element.Modifiers?.NeedsControls ?? false) && !_needsControls(element);
+    // A ref whose type the direct view isn't (ElementRef<Entry>) needs the Controls view (spec 070 §2.5).
+    private bool UseDirect(TElement element) =>
+        !(element.Modifiers?.NeedsControls ?? false) && !_needsControls(element)
+        && (element.Modifiers?.Ref is not { } cell || cell.ExpectedType.IsAssignableFrom(typeof(TDirect)));
 
     public object Mount(HandlerContext<TElement> context, TElement element) =>
         UseDirect(element) ? _direct.Mount(context, element) : _controls.Mount(context, element);

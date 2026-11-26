@@ -25,6 +25,31 @@ public static class MauiCoreHooks
         }
 
         /// <summary>
+        /// Returns a ref to attach to an element with <c>.Ref(...)</c>; the same instance every render.
+        /// Read its <c>Current</c> in event handlers and effects to call the mounted view
+        /// (<c>Focus()</c>, <c>ScrollToAsync(...)</c>, a web view's <c>GoBack()</c>).
+        /// </summary>
+        public Microsoft.UI.Reactor.Input.ElementRef<T> UseElementRef<T>() where T : class, IView =>
+            context.UseMemo(static () => new Microsoft.UI.Reactor.Input.ElementRef<T>(), Array.Empty<object>());
+
+        /// <summary>
+        /// A ref to attach to a view with <c>.Ref(...)</c>, and a <c>RequestFocus</c> that focuses it as
+        /// soon as it can: at once when the view is on screen, otherwise when it gets there (Android
+        /// can't focus a view in the first effect of a newly shown tree; spec 070 §2.6.2): a Controls
+        /// view's <c>Loaded</c>, a direct view's platform view joining a window (Android's
+        /// <c>ViewAttachedToWindow</c>; on iOS and Mac Catalyst, checked at growing intervals up to a
+        /// second). Callable from any thread: it runs on the root's render thread. A request is
+        /// dropped when the element unmounts or the ref moves to another view, and replaced by a newer
+        /// one. WinUI's name and shape.
+        /// </summary>
+        public (Microsoft.UI.Reactor.Input.ElementRef<IView> Ref, Action RequestFocus) UseElementFocus()
+        {
+            var slot = context.UseRef<ElementFocus?>(null);
+            var focus = slot.Current ??= new ElementFocus(context.RenderThreadEnqueue);
+            return (focus.Ref, focus.Request);
+        }
+
+        /// <summary>
         /// Root mode: creates a navigation stack with the given initial route and returns a
         /// <see cref="Navigation.NavigationHandle{TRoute}"/> that is stable across re-renders. Render it
         /// with <c>NavigationHost</c>, which also provides it to descendants, so a child component can
