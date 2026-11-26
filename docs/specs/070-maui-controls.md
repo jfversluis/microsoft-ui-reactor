@@ -1855,7 +1855,8 @@ write either (it compares with the same `Equals`): every render re-maps the back
 - two brushes of the same `LinearGradientBrush` or `RadialGradientBrush` type: equal start and end
   points, or center and radius, and equal stop sequences (same count, in order, each stop's float
   offset and float color components exactly equal);
-- anything else (`ImageBrush`, an app's own subclass, two kinds): by reference.
+- anything else (an app's own `Brush` subclass, two kinds): by reference. (MAUI's `ImageBrush` is
+  internal in 11.0, §4.13.)
 
 **Exact, never approximate** (review round 1). MAUI's `GradientStop.Equals` allows 1e-5 on the
 offset and `Color.Equals` compares bytes; a tolerance isn't transitive, and the descriptor compares
@@ -2257,10 +2258,114 @@ pixel samples at a per-channel tolerance with the raw values logged. No question
 - **Docs**: README sections for the flyout's split mode and toolbar items; spec 068's "not modeled"
   gaps (§4.7) written into their rows.
 
-### 4.13 As built (4c-3)
+### 4.13 As built (4c-3a)
 
-To be written as 4c-3a and 4c-3b land: what was built, deviations and why, the characterizations,
-test counts, mutation runs and the benchmark.
+4c-3b's as-built section is written when it lands.
+
+**What was built** (commits after `168a42f0`, each step its own commit):
+
+- **Characterizations first** (`VisualsCharacterization.cs`, plain MAUI): the pixel sampler gate, a
+  path's `RenderTransform` clear, a stream source's open count, and a `Border`'s content inset; table
+  below. Nothing was built on them before they passed.
+- **Elements** (`Elements/Visuals.cs`): `ShapeElement` and the seven shapes, `ContentViewElement`, and
+  `ValueList`, the owned storage the `init` accessors copy point and dash lists into (C#'s `field`
+  keyword, so `with` copies too). `BorderElement.Stroke` is a `Brush?`.
+- **Handlers** (`Handlers/Visuals.cs`): `BrushComparer` (exact, with a matching hash; `Brush.Default`
+  as unset), `SequenceComparer<T>`, the descriptor helpers `BrushProperty`, `ListProperty` (the
+  projected entry, on `OneWay`) and `ShapeProperties`, a descriptor per shape and for `ContentView`,
+  `PathData` (markup conversion with its fallback and warning, and the identity-then-clear
+  transform), and `ImageSources` (value equality and `StreamImage` keys in a `ConditionalWeakTable`).
+  `Props.SetBrush` serves `.Background` and the border stroke; `Props.SameImage` forwards to
+  `ImageSources.Same`; a page's back button compares its icon with it.
+- **Factories and modifiers**: the shapes, `ContentView`, `StreamImage`, the gradient factories;
+  `.Fill`, `.Stroke` (brush and color), `.StrokeThickness`, `.StrokeDashArray`, `.StrokeLineCap`,
+  `.StrokeLineJoin`, `.Aspect`, `.Radius`; `ContentView.Padding`; the border's two `.Stroke`s.
+- **The census** (`PropertyMatrix.cs`, `MatrixCases.cs`, `CensusBaseline.Pending.cs`): 58 element types
+  and value records, every public settable property claimed: 89 property cases and 1 event case, each
+  run on both registries (180 theory rows), 2 covered-by claims (the content slots), and a pending baseline of 348 properties
+  (ceiling 348) for 4c-3b.
+
+**Deviations from §4, and why:**
+
+1. **MAUI's rectangles and ellipse construct with `Aspect = Fill`** (`Rectangle`, `RoundRectangle` and
+   `Ellipse` constructors), so clearing the property would draw with the property's default, `None`.
+   Unsetting `Aspect` on them writes `Fill` back (`ShapeProperties(constructedAspect:)`). Found by the
+   matrix, whose clear step now compares the property's local-value state with a fresh view's (a
+   fresh rectangle has a local `Aspect`) instead of requiring none.
+2. **`ImageBrush` is internal in MAUI 11**, so an app can't make one; the by-reference rule is tested
+   with an app's own `Brush` subclass.
+3. **The package's global usings alias `PenLineCap`, `PenLineJoin` and `FillRule`**: they live in
+   `Microsoft.Maui.Controls.Shapes`, whose `Path` and `Rectangle` a namespace import would bring into
+   every component file. (`Stretch` is in `Microsoft.Maui.Controls`.) The test projects declare the
+   same aliases.
+4. **Rejected path markup warns once per change** of the (markup, data) pair, the only time the
+   entry converts, rather than once per view and string: rendering the same bad string again warns
+   nothing, changing it (or the fallback `Data`) warns again.
+5. **A literal `null` binds to the `Color?` overloads**, as designed; their `null`-to-clear mapping is
+   redundant with the comparer's `Brush.Default` normalization (equivalent mutant M15). Both kept: the
+   overload documents intent, the normalization covers `with { Fill = nullColor }`.
+6. **Mutating a rendered brush can also hide a later change**, found writing the immutability test:
+   the mutated brush is the retained declaration, so a new brush equal to the mutation compares equal
+   to it and isn't written. The README says so; the test uses a different color for its positive
+   control.
+7. **Shell item icons** go through the same `Props.SetImage` as page icons and aren't in the
+   consumer test, which covers images (both registries), image buttons, button images, page,
+   toolbar, swipe and back-button icons.
+8. **The census enumerates the `Microsoft.UI.Reactor.Maui*` namespaces**: the shared composition
+   records (`Microsoft.UI.Reactor.Core`) and the members dialog elements inherit from
+   `ComponentElement` (`ComponentType`, `Props`) are the engine's, not this census's.
+9. **Instrument notes.** A bindable property with a default-value creator counts as set once read
+   (`StrokeDashArray`, `Padding`), so the matrix reads `IsSet` before reading the value. On Android a
+   layout that touches the status bar lays its children below it (`SafeAreaEdges`), so pixel and
+   geometry fixtures stage their subjects 120 points down and capture the subject itself.
+
+**Characterization (device; plain MAUI):**
+
+| | Mac Catalyst | iOS | Android |
+|---|---|---|---|
+| Sampler: a red/blue box with a white margin, then a changed color | exact (240 px at scale 2, the view hierarchy drawn into sRGB) | exact (360 px at scale 3) | exact (315 px, `View.Draw` into ARGB_8888) |
+| Path `RenderTransform`: rotated, then `ClearValue` | the rotation stays drawn | same | same |
+| Path `RenderTransform`: rotated, then an identity transform and `ClearValue` | the original drawing | same | same |
+| One mount of a stream source; a new instance | opened once, decoded 24×12; opened again, a new platform image | same | same |
+| `Border` content inset (padding 10, stroke 6) | 16 on every side; the padding area transparent | same | same |
+
+**Tests.** Headless `Reactor.Maui.Tests`: 675 (429 before), in `PropertyMatrix.cs` (the runner and the
+census, 4 census facts), `MatrixCases.cs`, `VisualsTests.cs`, `PathDataWarningTests` and
+`ReadmeVisualsSnippetTests.cs`. Engine `Reactor.Maui.Engine.Tests`: 80 (unchanged). Device: 18 new
+fixtures (4 characterizations, 7 behaviors on both registries) in `VisualsCharacterization.cs` and
+`VisualsFixtures.cs`, with `Pixels.cs` (the sampler) and `TestPng.cs`. Full device suites: Mac Catalyst
+174 passed, 7 skipped; iOS simulator 174 passed, 7 skipped; Android emulator 176 passed, 5 skipped
+(before: 156/7, 156/7, 158/5). `Reactor.Maui.slnx` builds in Release with no warnings.
+
+**Mutation checks** (each broke the code, ran the class's tests, restored and touched the file; all
+red but M15): stops compared as a set (M1), the end point ignored (M2), the radius ignored (M3),
+gradients by reference (M4, 33 red across rules, matrix and background), MAUI's tolerant stop
+equality (M5: the 1e-6 and float-step rules and the cumulative test), `.Background` by `Equals` (M6),
+the fill entry without the comparer (M7), no list copy (M8), lists by reference (M9), lists not
+cleared (M10), a plain transform clear (M11), markup converted every render (M12), `Data` winning
+(M13), `Brush.Default` written (M14), the `Color?` overload writing `Brush.Default` (M15: survived,
+equivalent, deviation 5), fonts by reference (M16), URI caching ignored (M17), keys ignored (M18), no
+type check (M19, red once the subclass rule was added), a button image by reference (M20), the back
+button by record equality (M21), no constructed aspect (M22), content not cleared on `null` in a
+`ContentView` (M23) and a `Border` (M25), a remount on every update of each (M24, M26); the census:
+a claim deleted, a covered claim at a non-test method, a 4c-3a property pending, the baseline grown
+(C1 to C4). On devices (each built and run with the fixture filter, restored and touched; all red): a
+plain transform clear (`Shapes_UpdateInPlace`, all three platforms: the rotated pattern stayed), keys
+ignored (`Image_EqualSourceDoesNotReload`, Mac Catalyst: 2 opens became 8), fonts by reference (the
+same, Android direct: a new font image), the dash list not cleared (`Shapes_UpdateInPlace`, iOS
+direct: the dashes stayed).
+
+**Benchmark** (Mac Catalyst, one pair against `7281bf4d`, base first): total time within noise or
+lower in every scenario on both renderers (−4% to +0.03%, and −13% and −35% on the 40-ms `UpdateOne`),
+allocations identical to the kilobyte. The benchmark sets no brushes or images, so it measures the
+changed paths' cost when unused: `ViewApplier`'s background comparison and the image comparison
+behind every icon.
+
+**Open issues.**
+
+- MAUI's iOS and Android `PathHandler.MapRenderTransform` ignore a `null` transform, so clearing one
+  keeps the old one drawn (worked around here): to file upstream with the 4c-2 issues.
+- 4c-3b: the 348 pending properties, the remaining 🧪 rows and the flyout's split mode (§4.7).
 
 ## 5. 4c-4: CarouselView and IndicatorView
 
