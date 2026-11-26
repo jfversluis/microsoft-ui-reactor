@@ -39,6 +39,19 @@ public static class Factories
 
     public static LabelElement Label(string text) => new(text);
 
+    /// <summary>A label of formatted runs: <c>Label(Run("Total ").Bold(), Run(price), Hyperlink(" details", show))</c>.</summary>
+    public static LabelElement Label(params RichTextInline[] inlines) => new("") { Inlines = inlines };
+
+    /// <summary>A run of formatted text in a label (WinUI's <c>Run</c>).</summary>
+    public static RichTextRun Run(string text) => new(text);
+
+    /// <summary>Text in a label that runs <paramref name="onClick"/> when tapped (WinUI's <c>Hyperlink</c>).</summary>
+    public static RichTextHyperlink Hyperlink(string text, Action onClick)
+    {
+        ArgumentNullException.ThrowIfNull(onClick);
+        return new(text, onClick);
+    }
+
     /// <summary>An image from a file, an embedded resource name or an <c>http(s)</c> URL.</summary>
     public static ImageElement Image(string source) => new(ToImageSource(source));
 
@@ -85,6 +98,20 @@ public static class Factories
 
     public static PickerElement Picker(IReadOnlyList<string> items, int selectedIndex, Action<int>? onSelectedIndexChanged = null, string? title = null) =>
         new(items, selectedIndex, onSelectedIndexChanged) { Title = title };
+
+    /// <summary>
+    /// A picker over <paramref name="items"/>, each shown as <paramref name="display"/> returns. The
+    /// selection is an index, as in the string overload; the texts are compared, so a re-render with
+    /// the same texts changes nothing.
+    /// </summary>
+    public static PickerElement Picker<T>(IReadOnlyList<T> items, Func<T, string> display, int selectedIndex, Action<int>? onSelectedIndexChanged = null, string? title = null)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        ArgumentNullException.ThrowIfNull(display);
+        var texts = new string[items.Count];
+        for (var i = 0; i < texts.Length; i++) texts[i] = display(items[i]);
+        return new(texts, selectedIndex, onSelectedIndexChanged) { Title = title };
+    }
 
     public static DatePickerElement DatePicker(DateTime date, Action<DateTime>? onDateSelected = null) => new(date, onDateSelected);
 

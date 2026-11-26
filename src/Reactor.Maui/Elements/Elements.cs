@@ -16,6 +16,49 @@ public sealed record LabelElement(string Text) : TextViewElement
     public Thickness? Padding { get; init; }
     public TextTransform? TextTransform { get; init; }
     public TextType? TextType { get; init; }
+
+    /// <summary>
+    /// Formatted text: runs and hyperlinks, each with its own style (MAUI's <c>FormattedText</c>
+    /// spans). When set it wins over <see cref="TextViewElement"/>'s <c>Text</c>. Create it with
+    /// <c>Label(Run(…), Hyperlink(…))</c>. Unset run properties take the label's.
+    /// </summary>
+    public RichTextInline[]? Inlines { get; init; }
+}
+
+/// <summary>
+/// A run of formatted text in a <c>Label</c> (WinUI's name; a MAUI <c>Span</c>). Properties left
+/// <see langword="null"/> take the label's.
+/// </summary>
+public abstract record RichTextInline
+{
+    private protected RichTextInline() { }
+
+    public double? FontSize { get; init; }
+    public FontAttributes? FontAttributes { get; init; }
+    public string? FontFamily { get; init; }
+    public Color? TextColor { get; init; }
+    public Color? BackgroundColor { get; init; }
+    public double? CharacterSpacing { get; init; }
+    public TextDecorations? TextDecorations { get; init; }
+    public double? LineHeight { get; init; }
+    public TextTransform? TextTransform { get; init; }
+
+    internal abstract string InlineText { get; }
+}
+
+/// <summary>Plain formatted text. Create it with <c>Run(text)</c>.</summary>
+public sealed record RichTextRun(string Text) : RichTextInline
+{
+    internal override string InlineText => Text;
+}
+
+/// <summary>
+/// Text that runs <see cref="OnClick"/> when tapped. Underlined unless it declares
+/// <c>TextDecorations</c>. Create it with <c>Hyperlink(text, onClick)</c>.
+/// </summary>
+public sealed record RichTextHyperlink(string Text, Action OnClick) : RichTextInline
+{
+    internal override string InlineText => Text;
 }
 
 public sealed record ImageElement(ImageSource? Source) : ViewElement

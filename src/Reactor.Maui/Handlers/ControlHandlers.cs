@@ -34,7 +34,7 @@ internal sealed class LabelHandler : ViewHandler<LabelElement, MauiLabel>
 
     protected override void Apply(HandlerContext<LabelElement> context, MauiLabel view, LabelElement? previous, LabelElement next)
     {
-        if (previous?.Text != next.Text) view.Text = next.Text;
+        LabelInlines.Apply(context, view, previous, next);
         Props.ApplyText(view, previous, next);
         Props.Set(view, MauiLabel.TextDecorationsProperty, previous?.TextDecorations, next.TextDecorations);
         Props.Set(view, MauiLabel.HorizontalTextAlignmentProperty, previous?.HorizontalTextAlignment, next.HorizontalTextAlignment);

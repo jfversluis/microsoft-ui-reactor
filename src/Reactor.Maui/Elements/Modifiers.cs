@@ -198,3 +198,40 @@ public static class ViewElementExtensions
     public static T Padding<T>(this T element, double horizontal, double vertical) where T : LayoutElement =>
         (T)(((LayoutElement)element) with { Padding = new Thickness(horizontal, vertical) });
 }
+
+/// <summary>Fluent modifiers for the runs of a formatted label; they keep the run's type.</summary>
+public static class RichTextInlineExtensions
+{
+    public static T FontSize<T>(this T inline, double size) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { FontSize = size });
+
+    public static T Bold<T>(this T inline) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { FontAttributes = (inline.FontAttributes ?? Microsoft.Maui.Controls.FontAttributes.None) | Microsoft.Maui.Controls.FontAttributes.Bold });
+
+    public static T Italic<T>(this T inline) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { FontAttributes = (inline.FontAttributes ?? Microsoft.Maui.Controls.FontAttributes.None) | Microsoft.Maui.Controls.FontAttributes.Italic });
+
+    public static T FontFamily<T>(this T inline, string family) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { FontFamily = family });
+
+    public static T TextColor<T>(this T inline, Color? color) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { TextColor = color });
+
+    public static T BackgroundColor<T>(this T inline, Color? color) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { BackgroundColor = color });
+
+    public static T CharacterSpacing<T>(this T inline, double spacing) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { CharacterSpacing = spacing });
+
+    public static T LineHeight<T>(this T inline, double multiple) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { LineHeight = multiple });
+
+    public static T TextTransform<T>(this T inline, TextTransform transform) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { TextTransform = transform });
+
+    public static T Underline<T>(this T inline, bool enabled = true) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { TextDecorations = enabled ? Microsoft.Maui.TextDecorations.Underline : Microsoft.Maui.TextDecorations.None });
+
+    public static T Strikethrough<T>(this T inline, bool enabled = true) where T : RichTextInline =>
+        (T)(((RichTextInline)inline) with { TextDecorations = enabled ? Microsoft.Maui.TextDecorations.Strikethrough : Microsoft.Maui.TextDecorations.None });
+}
