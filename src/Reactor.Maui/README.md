@@ -620,9 +620,10 @@ var swipe = UseElementRef<SwipeView>();
 
 Items go on four sides (`LeftItems`, `RightItems`, `TopItems`, `BottomItems`), each with its mode:
 `Reveal` leaves the items open, `Execute` runs the first one once the swipe passes `Threshold`. An
-item with `Content` shows that element, and its `Text` becomes its accessible name. Items are rebuilt
-only when their text, color, icon, kind, count or mode changes, so a re-render doesn't close an open
-swipe; an item the platform still holds after a rebuild invokes nothing. Open and close it through
+item with `Content` shows that element, and its `Text` becomes its accessible name. A side is rebuilt
+only when its count, mode, or an item's kind or text changes, or a text item's color or icon (a
+content item shows its content, so those don't count), and a re-render doesn't close an open swipe:
+content re-renders in place. An item the platform still holds after a rebuild invokes nothing. Open and close it through
 a ref with MAUI's own methods: `swipe.Current?.Open(OpenSwipeItem.RightItems)`,
 `swipe.Current?.Close()`. They do nothing before the view is shown.
 
@@ -651,7 +652,9 @@ group settled. A check made from inside such a callback (through a ref) runs on 
 the first one. Don't write a button's `IsChecked` through a ref from its own callback: MAUI delays
 that write, and on Android a text radio button then flips back and forth forever; change your state
 instead. Two buttons declared checked in one group are both shown checked, and a warning is
-logged. MAUI's `RadioButtonGroup` attached properties don't apply to Reactor's buttons.
+logged. MAUI's `RadioButtonGroup` attached properties (`GroupName`, `SelectedValue`) are not
+supported: setting them through `.Set(...)` rewrites the native group names, and peers then uncheck
+without a report. Use the `GroupName` argument.
 
 ## Pickers and formatted text
 

@@ -96,8 +96,11 @@ Conventions for contributors:
   events; `SwipeAction` is now WinUI's `SwipeItemData`. `RadioButton(Element content, …)` shows view
   content with MAUI's indicator or alone (`IsIndicatorVisible`), and Reactor now groups radio
   buttons itself on both renderers (by `GroupName` per page, or by layout), reporting a tap's peers'
-  unchecks first; the native button's `GroupName` is Reactor's own. `Picker(items, display, …)`
-  shows a text per item, and `Label(Run(…), Hyperlink(…))` shows formatted runs.
+  unchecks first; the native button's `GroupName` is Reactor's own, and MAUI's `RadioButtonGroup`
+  attached properties aren't supported. `RadioButton`'s callback parameter is now
+  `onIsCheckedChanged` (WinUI's name; it was `onCheckedChanged`). `Picker(items, display, …)`
+  shows a text per item, and `Label(Run(…), Hyperlink(…))` shows formatted runs, with `LineHeight` and
+  `TextTransform` on the label too.
   Built with `Reactor.Maui.slnx` and tested in `.github/workflows/maui.yml`, including a
   device tier that runs on the real platform controls. It doesn't change the WinUI packages.
 
