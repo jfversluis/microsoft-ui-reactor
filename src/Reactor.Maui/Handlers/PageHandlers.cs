@@ -71,9 +71,11 @@ internal sealed class PageHandler : Reactor.Hosting.IElementHandler<PageElement,
                 var index = i;
                 var action = next.ToolbarItems[i];
                 var item = new ToolbarItem { Text = action.Text, IconImageSource = action.Icon, Order = action.Order, Priority = action.Priority };
-                // Reads the current element, so a re-render that only swaps the callback keeps the item.
+                // Reads the current element, so a re-render that only swaps the callback keeps the item. An
+                // item a rebuild retired invokes nothing, though something may still hold it (spec 070 §4.14.4).
                 item.Clicked += (_, _) =>
                 {
+                    if (index >= page.ToolbarItems.Count || !ReferenceEquals(page.ToolbarItems[index], item)) return;
                     if (context.Live?.ToolbarItems is { } items && index < items.Length) items[index].OnClick();
                 };
                 page.ToolbarItems.Add(item);
@@ -597,9 +599,70 @@ internal sealed class TabsHandler : Reactor.Hosting.IElementHandler<TabsElement,
     }
 }
 
+/// <summary>
+/// The flyout page Reactor renders. While split, and while the platform changes mode, <c>IsPresented</c>
+/// is the platform's (spec 070 §4.14.3).
+/// </summary>
 internal sealed class ReactorFlyoutPage : FlyoutPage
 {
+    static ReactorFlyoutPage()
+    {
+        // The native mode change, whatever its cause: a layout-behavior write, the handler connecting, or
+        // (Android, Windows) a display change that remaps split mode and closes the drawer.
+        Microsoft.Maui.Handlers.FlyoutViewHandler.Mapper.ModifyMapping<IFlyoutView, Microsoft.Maui.Handlers.IFlyoutViewHandler>(nameof(IFlyoutView.FlyoutBehavior), (handler, view, previous) =>
+        {
+            if (view is ReactorFlyoutPage page) page.RunModeTransition(() => previous?.Invoke(handler, view));
+            else previous?.Invoke(handler, view);
+        });
+    }
+
+    /// <summary>Inside Reactor's own writes: their notifications are Reactor's.</summary>
     public bool Syncing;
+
+    /// <summary>
+    /// A mode transition has started and its reprojection hasn't run yet: notifications meanwhile are the
+    /// platform's, raised inside MAUI's mapping or deferred by the platform after it.
+    /// </summary>
+    public bool TransitionPending { get; private set; }
+
+    /// <summary>Asks for the declaration to be projected again after a mode transition (set by the handler).</summary>
+    public Action? ModeTransitioned;
+
+    public bool IsSplit => ((IFlyoutPageController)this).ShouldShowSplitMode;
+
+    internal void RunModeTransition(Action transition)
+    {
+        TransitionPending = true;
+        try
+        {
+            transition();
+        }
+        finally
+        {
+            ModeTransitioned?.Invoke();
+        }
+    }
+
+    /// <summary>
+    /// Ends a transition: unless split, writes the declared value if it differs, or else projects the
+    /// equal value to the platform again, whose own presentation can disagree (an iOS pan finishing after
+    /// split began).
+    /// </summary>
+    internal void Reproject(bool declared)
+    {
+        TransitionPending = false;
+        if (Flyout is null || Detail is null || IsSplit) return;
+        if (IsPresented != declared)
+        {
+            Syncing = true;
+            try { IsPresented = declared; }
+            finally { Syncing = false; }
+        }
+        else
+        {
+            Handler?.UpdateValue(nameof(IFlyoutView.IsPresented));
+        }
+    }
 }
 
 internal sealed class FlyoutHandler : Reactor.Hosting.IElementHandler<FlyoutElement, ReactorFlyoutPage>
@@ -609,19 +672,40 @@ internal sealed class FlyoutHandler : Reactor.Hosting.IElementHandler<FlyoutElem
         var flyout = new ReactorFlyoutPage();
         flyout.IsPresentedChanged += (_, _) =>
         {
-            if (flyout.Syncing || context.IsEchoing(flyout)) return;
+            // MAUI's enforcement while split, and the platform's during a mode change, aren't input.
+            if (flyout.Syncing || flyout.TransitionPending || flyout.IsSplit || context.IsEchoing(flyout)) return;
             context.Live?.OnIsPresentedChanged?.Invoke(flyout.IsPresented);
             context.RestoreAfterEvent();
         };
-        Props.Set(flyout, FlyoutPage.FlyoutLayoutBehaviorProperty, null, element.LayoutBehavior);
+        flyout.ModeTransitioned = () => context.PostReport(() =>
+        {
+            if (context.Live is { } live) flyout.Reproject(live.IsPresented);
+        });
+        WriteBehavior(flyout, null, element.LayoutBehavior);
         return flyout;
     }
 
     public void Update(HandlerContext<FlyoutElement> context, FlyoutElement oldElement, FlyoutElement newElement, ReactorFlyoutPage control)
     {
-        Props.Set(control, FlyoutPage.FlyoutLayoutBehaviorProperty, oldElement.LayoutBehavior, newElement.LayoutBehavior);
-        if (control.Flyout is not null && control.IsPresented != newElement.IsPresented)
-            context.WriteSuppressed(control, () => control.IsPresented = newElement.IsPresented);
+        WriteBehavior(control, oldElement.LayoutBehavior, newElement.LayoutBehavior);
+        WritePresented(control, newElement.IsPresented);
+    }
+
+    // Assigning a split behavior makes MAUI set IsPresented itself, inside the write.
+    private static void WriteBehavior(ReactorFlyoutPage flyout, FlyoutLayoutBehavior? previous, FlyoutLayoutBehavior? next)
+    {
+        flyout.Syncing = true;
+        try { Props.Set(flyout, FlyoutPage.FlyoutLayoutBehaviorProperty, previous, next); }
+        finally { flyout.Syncing = false; }
+    }
+
+    // Never while split: MAUI refuses false by throwing, which leaves the property stuck for good.
+    private static void WritePresented(ReactorFlyoutPage flyout, bool declared)
+    {
+        if (flyout.Flyout is null || flyout.IsSplit || flyout.IsPresented == declared) return;
+        flyout.Syncing = true;
+        try { flyout.IsPresented = declared; }
+        finally { flyout.Syncing = false; }
     }
 
     public IChildrenStrategy<FlyoutElement, ReactorFlyoutPage> Children { get; } = new FlyoutChildren();
@@ -647,12 +731,12 @@ internal sealed class FlyoutHandler : Reactor.Hosting.IElementHandler<FlyoutElem
                 if (ReferenceEquals(control.Flyout, detail)) control.Flyout = new ContentPage { Title = " " };
                 if (!ReferenceEquals(control.Flyout, flyout)) control.Flyout = flyout;
                 if (!ReferenceEquals(control.Detail, detail)) control.Detail = detail;
-                if (control.IsPresented != element.IsPresented) control.IsPresented = element.IsPresented;
             }
             finally
             {
                 control.Syncing = false;
             }
+            WritePresented(control, element.IsPresented);
         }
     }
 }
