@@ -54,7 +54,8 @@ public partial class App : Application
 ```
 
 The package adds global usings for `Microsoft.UI.Reactor.Core`, `Microsoft.UI.Reactor.Maui`,
-`Microsoft.UI.Reactor.Maui.Hosting` and `Microsoft.UI.Reactor.Maui.Direct`, plus `Element` and
+`Microsoft.UI.Reactor.Maui.Hosting`, `Microsoft.UI.Reactor.Maui.Direct` and `Microsoft.UI.Reactor.Input`
+(element refs), plus `Element` and
 `NavigationMode` aliases, because MAUI's own `Microsoft.Maui.Controls.Element` and
 `Microsoft.Maui.ApplicationModel.NavigationMode` would otherwise make the bare names ambiguous. The factories are a `using static` you add per file, since names such as `Grid` and
 `Label` would otherwise shadow MAUI's types everywhere. Set
@@ -213,7 +214,9 @@ sealed class Search : Component
 - **The UI thread.** Read `Current` and call the view on the UI thread.
 - **Focus when a view appears.** Android can't focus a view in the first effect of a newly shown
   tree. `UseElementFocus()` returns a ref and a `RequestFocus` that focuses as soon as the view is on
-  screen, from any thread:
+  screen (a Controls view's `Loaded`; for a direct view, its platform view joining a window), from any
+  thread. A newer request replaces a pending one, and a request is dropped when the ref stops naming
+  the view it waits for:
 
   ```csharp
   var (field, requestFocus) = UseElementFocus();
@@ -230,24 +233,33 @@ sealed class Search : Component
   the scroll wasn't confirmed there (a later request superseded it, the scroll view went away, or the
   scroll ended elsewhere); `false` doesn't mean it didn't move. Call it after layout, from an event or
   a view's `Loaded`. MAUI's own overloads can leave a superseded `await` pending; this one always
-  completes. The `ScrollView` element renders a `ScrollView` subclass, so an implicit style for it
+  completes, on any `ScrollView`, including one Reactor didn't create, and returns `false` if MAUI's
+  dispatch throws. The `ScrollView` element renders a `ScrollView` subclass, so an implicit style for it
   needs `ApplyToDerivedTypes`, as for `CollectionView`.
 
 ### Web views
 
-`OnNavigating` is asked before a navigation; set `Cancel` to refuse it, before the callback returns
-(the platform waits for the answer). It isn't exactly once (Android can ask twice), so answer the same
-way for the same URL. A throwing callback refuses the navigation and reaches the error boundaries.
+`OnNavigating` is asked for each top-level navigation; set `Cancel` to refuse it, before the callback
+returns (the platform waits for the answer). iOS, Mac Catalyst, and Android for a link or a declared
+`Url`, ask before loading; Android asks `Html`, `Reload`, `GoBack` and `GoForward` only once loading
+has started. It isn't exactly once (Android can ask twice), so answer the same way for the same URL.
+Subresources and frames aren't asked, so it is a navigation policy, not a security boundary. A
+throwing callback refuses the navigation and reaches the error boundaries.
+
 `OnNavigated` reports each completion with its `Result` (`Success`, `Cancel`, `Failure`, `Timeout`),
-after the platform callback, so `CanGoBack` is current. A refused navigation is reported as
-cancelled; iOS and Mac Catalyst ask before loading, so the page stays; Android asks a link and a
-declared `Url` before loading too, but `Html`, `Reload`, `GoBack` and `GoForward` only once loading
-has started, so what stays on screen then is the platform's.
+after the platform callback, so `CanGoBack` is current. A refused navigation never completes with
+`Success`: one refused before loading (iOS, Mac Catalyst, an Android link or declared `Url`) reports
+no completion and the page stays; one Android refuses late (`Html`, `Reload`, `GoBack`, `GoForward`)
+completes with `Cancel`, and what stays on screen is the platform's.
 
 `Url` is the page you request, not the page shown: Reactor loads it when it changes. Keep the
 current page in separate state; rendering `OnNavigated`'s URL back into `Url` loads it again.
 
 ```csharp
+static bool IsDocs(string url) =>
+    Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps
+    && string.Equals(uri.IdnHost, "learn.microsoft.com", StringComparison.OrdinalIgnoreCase);
+
 var (requested, setRequested) = UseState("https://learn.microsoft.com/dotnet/maui");
 var (current, setCurrent) = UseState<string?>(null);   // what the view shows; never fed back into Url
 var web = UseElementRef<WebView>();
@@ -255,7 +267,7 @@ return VStack(
     Button("Back", () => web.Current?.GoBack()),
     (WebView(requested) with
     {
-        OnNavigating = e => e.Cancel = !e.Url.StartsWith("https://learn.microsoft.com/"),
+        OnNavigating = e => e.Cancel = !IsDocs(e.Url),
         OnNavigated = e => { if (e.Result == WebNavigationResult.Success) setCurrent(e.Url); },
     }).Ref(web).Height(400));
 ```

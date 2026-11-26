@@ -104,7 +104,9 @@ sealed class Search : Component
             (WebView("https://learn.microsoft.com/dotnet/maui") with
             {
                 // Runs synchronously while the platform waits for the answer; may be asked more than once.
-                OnNavigating = e => e.Cancel = !e.Url.StartsWith("https://learn.microsoft.com/"),
+                OnNavigating = e => e.Cancel = !(Uri.TryCreate(e.Url, UriKind.Absolute, out var uri)
+                    && uri.Scheme == Uri.UriSchemeHttps
+                    && string.Equals(uri.IdnHost, "learn.microsoft.com", StringComparison.OrdinalIgnoreCase)),
                 // Posted after MAUI has updated the history, so CanGoBack is current.
                 OnNavigated = e => setCanGoBack(help.Current?.CanGoBack ?? false),
             }).Ref(help));
@@ -360,8 +362,11 @@ public Action<WebNavigatedEventArgs>? OnNavigated { get; init; }     // was Acti
   | Android, a script navigation (`location.href = …`) | as characterized: `ShouldOverrideUrlLoading` where Android calls it, else `OnPageStarted` | per the row that applies |
   | Android, `Html` (`LoadDataWithBaseURL`), `Reload`, `GoBack`, `GoForward` | after the load started (`OnPageStarted`; MAUI then calls `StopLoading`) | not specified: the previous page, partly loaded content or a blank page, and the history may already hold the entry |
 
-  Reactor promises that a cancelled navigation is reported as cancelled, and that the previous page
-  stays only in the rows that say so. The declared source isn't loaded again until it changes.
+  A refused navigation never completes with `Success`. One refused before loading (the first three
+  rows) reports no completion at all; one Android refuses late completes with `Cancel` (§2.15). The
+  previous page stays only in the rows that say so. The declared source isn't loaded again until it
+  changes. Subresources and frames aren't asked, so `OnNavigating` is a navigation policy, not a
+  security boundary.
 - **`OnNavigated` is a completion, with its result.** It passes MAUI's `WebNavigatedEventArgs`,
   whose `Result` is `Success`, `Cancel`, `Failure` or `Timeout`: Android reports a cancelled
   navigation as a completion with `Cancel`, and both platforms report failures. A breaking change to
@@ -405,9 +410,12 @@ public Action<string, int, int>? OnSelectionChanged { get; init; }   // selected
   differs from the previous element's, as WinUI's `SelectionStart` is; `null` is never written. It is
   never restored after user input: moving the caret twice to the same declared position needs the
   app to have taken the user's position in between, as on WinUI.
-- **One echo scope for the whole apply.** Keyboard, password, `MaxLength`, text, cursor and length are
-  written in one `WriteSuppressed`, in that order, so Android's input-type updates (which end with
-  `SetSelection`) and a `MaxLength` truncation happen inside it.
+- **The selection write in an echo scope; every notification during the apply deferred.** The text
+  keeps its own scope and keyboard, password and `MaxLength` stay outside one, exactly as without
+  selection tracking, so a text the platform changes (a `MaxLength` truncation) still reaches
+  `OnTextChanged`. Selection notifications raised anywhere in the apply (Android's input-type updates
+  end with `SetSelection`) wait for the observation posted after it. (As built; the first design put
+  the whole apply in one scope, see §2.15 deviation 8.)
 - **Text is unchanged**: `OnTextChanged` is reported synchronously and followed by a restore, as
   today. There is no text-and-selection transaction, so selection handling can never report text.
 
@@ -501,14 +509,17 @@ also asserts that the unmount, retirement or recycling it depends on happened.
 | Cell retirement: A→`null`→B, item removal, list unmount, with and without `ReuseItemTrees` | the item component's cleanup ran (count ≥ 1) and its ref is `null`; B mounts a fresh tree (a new ref); with `ReuseItemTrees`, A→B directly keeps the tree and A→`null`→B doesn't | return early on a `null` context (today's code) |
 | `ReactorPage.Unmount` | the tree's cleanups ran (count ≥ 1) and its refs are `null` | — |
 | `DirectView.Focus` | invokes the handler's `Focus` command and returns its result (stub handler) | return `false` |
+| `UseElementFocus` | a request before the direct view has a handler focuses it on the turn after the handler arrives, once; two pending requests focus once; a request is dropped when the element unmounts and when the ref moves to another view (no `Focus` command); a request from another thread runs only when the root's render queue drains; the hook returns the same pair every render | no wait for the handler; no generation; no drop; run on the calling thread |
 | Scroll bridge: coordinates and dispatch | a target in a direct `Grid` (nonzero row, margin, padding) inside a direct `VStack` inside the scroll view, with frames the test assigns: the point passed to `ScrollToAsync(x, y, …)` equals `GetScrollPositionForElement` applied to the summed rectangle, for each position; an `ElementRef<IEntry>` naming a `DirectEntry` directly in a Controls stack is computed too; an all-Controls chain calls MAUI's element overload instead (`ScrollToRequested` in element mode, with the target); `Orientation.Neither` completes `false` at once with no `ScrollToRequested` | walk `Parent` instead of the visual parent; delegate when only the layouts are Controls; let `Neither` through |
-| Scroll bridge: validation and readiness | an unrelated target (another scroll view's child) and a detached subtree throw; an empty ref, and a chain where the target, an intermediate direct layout or the scroll view has no handler or isn't arranged, return `false` and request nothing | skip the ancestry check; check only the scroll view's readiness |
+| Scroll bridge: validation and readiness | an unrelated target (another scroll view's child) and a target whose subtree was detached from the scroll view throw; an empty ref, and a chain where the target, an intermediate direct layout or the scroll view has no handler or isn't arranged, return `false` and request nothing | skip the ancestry check; check only the scroll view's readiness |
 | Weak-table ownership | a Controls child moved between two direct layouts in one pass (attached to the new before detached from the old) keeps the new layout as its visual parent | remove the entry without the owner check |
 | Scroll bridge: completion protocol | a stub drives finishes and positions. A second bridge call completes the first with `false` at once, and so do a direct `ScrollToAsync(x, y, …)` call (through `ScrollToRequested`), a handler disconnect and unmount; staggered animations: A's late finish while B animates, at A's position, doesn't complete B, and B completes `true` only on a finish at its target; a finish elsewhere with no earlier finish expected completes `false`; a target beyond the range completes `true` at the range end; a dispatch that throws completes `false` and leaves no outstanding state (the next call works) | complete on any finish; drop the expected-finish count; skip the cleanup on a throw |
+| Scroll bridge: protocol details (pr-review) | a continuation of a confirmed task that starts another MAUI scroll isn't completed by the finish that confirmed the first; a request MAUI parked before the handler and replayed (it raises `ScrollToRequested` twice) is one expected finish, and a later request that ends elsewhere then settles `false`; a request parked for geometry and dropped by a newer one (the bridge's own included) is no expected finish; a finish an interrupted animation produces inside the next request's dispatch doesn't settle that request; a stale finish followed by no other settles after the grace period, by position; a negative target is confirmed at 0, a horizontal one on x | run continuations inline; count a parked request and its replay; keep a dropped geometry-parked request; skip the drop for the bridge's own request; count after dispatch; no grace settle; no start clamp; ignore x |
+| Scroll bridge on a scroll view Reactor didn't create | a plain `ScrollView`: a finish at the target confirms, one elsewhere doesn't; a later request, a handler disconnect and a throwing dispatch complete `false`; the extension scrolls it to a Reactor target | confirm without checking the position; no supersession; no disconnect; let the throw escape |
 | WebView `OnNavigating` | `IWebView.Navigating(...)` (what the platform handlers call) returns cancel as decided; not called and allowed after unmount; a throw cancels and reaches the boundary | ignore `Cancel`; invoke through `Current` instead of `Live`; let the exception escape |
 | WebView `OnNavigated` | each `Result` is passed through, after the scheduler turn, not inside `IWebView.Navigated` | invoke synchronously |
 | WebView source | `Url`, `Html` set, replaced, cleared; re-declaring the same `Url` (a new element, equal source) writes nothing; a changed `Url` writes once; `Html` wins over `Url` | compare by element reference instead of the source |
-| `Entry` selection writes, both registries | written at mount and when the declaration changes, never when `null`, never after user input; the whole apply is one scope (a keyboard change that moves the selection is a suppressed echo) | write when it differs from the view instead of the previous element; write outside the scope |
+| `Entry` selection writes, both registries | written at mount and when the declaration changes, clamped to zero, never when `null`, never after user input; only the selection write is in the echo scope, so a text the platform changes during the apply (a `MaxLength` truncation) reaches `OnTextChanged` exactly as without selection tracking; a selection notification anywhere in the apply waits for the observation after it | write when it differs from the view instead of the previous element; the whole apply in the echo scope; no clamp |
 | `Entry` `OnSelectionChanged` | a stub platform selection drives these. Split notifications (cursor, then length) give one report with both final values; a programmatic write whose platform result equals its effective value gives zero; the review's sequence: write 8, a text write moves the caret to 20 before the flush (one report, 20), then a user's move to 8 (one report, 8); text that grows and that shrinks between the write, the deferred execution (a stub that applies the write on the next turn, clamped then) and the flush reports the actual resulting selection once, or nothing when it equals the effective value; notifications inside an apply post nothing until the apply ends; a text restore that moves the caret gives one report with the real selection; nothing after unmount | read the virtual view instead of the platform; report per notification; keep an expected-write record; post from inside the apply |
 | Posted-callback helper | the pending state is cleared before the callback (a notification raised inside it starts a new burst); a callback that unmounts the element stops the next one; a throw reaches the boundary and the next posted report still runs | clear after dispatch; check `Live` once; let the exception escape |
 | `Entry` text | still synchronous, restored when refused, unchanged by selection use | — |
@@ -528,20 +539,20 @@ only the final state.
 | Fixture | Oracle |
 |---|---|
 | `Ref_FocusFromAnEvent_FocusesThePlatformView` | `ElementRef<Entry>` and, on direct, `ElementRef<IView>`: after a tap, the platform view is first responder (iOS, Catalyst) or `IsFocused` (Android), and `Focus()` returned `true` |
-| `Ref_FocusOnMount_PerPlatform` | two independent fresh pages (§2.6.2): focus from `Loaded` works on every platform; focus from the first effect matches the result §2.15 records for this platform |
+| `Ref_FocusOnMount_PerPlatform` | two independent fresh pages (§2.6.2): focus from `Loaded` works on every platform; focus from the first effect matches the result §2.15 records for this platform; `UseElementFocus`'s request from the first effect focuses, a Controls entry exactly once (`Focused` events) |
 | `ScrollView_ScrollToFromARef_ReachesThePlatform` | content several viewports tall (no clamping): after `ScrollToAsync(0, 300, false)` the platform offset (`ContentOffset.Y`, or `ScrollY` in device-independent units) is 300 ± 1 and `OnScrolled` reported it; horizontal likewise on x |
-| `ScrollView_ScrollToAnElement_ThroughNestedDirectLayouts [direct]` | a target in a direct `Grid` (nonzero row offset, margins, padding) in a direct `VStack`, far from both ends, content several viewports tall: for each of the four positions the bridge's resulting platform offset matches the target's position measured on the platform (its platform frame converted to the content view), adjusted by the position and the inset adapter. MAUI's own element overload is also run, and the fixture records its error, showing why the bridge exists |
-| `ScrollView_ScrollToAnElement_EquivalentTrees_WithInsets [iOS, Catalyst]` | the gate for the inset adapter: a scroll view under a navigation bar with nonzero adjusted content insets, holding the same geometry once from Controls layouts and once from direct layouts; for all four positions, including `MakeVisible` from above, from below and already visible, the bridge's platform offset on the direct tree equals MAUI's own overload's on the Controls tree. Android runs it too, with no adapter, and records whether any inset appears |
+| `ScrollView_ScrollToAnElement_ThroughNestedDirectLayouts [direct]` | a target in a direct `Grid` (nonzero row offset, margins, padding) in a direct `VStack`, far from both ends, content several viewports tall: for each of the four positions the bridge's resulting platform offset matches the target's position measured on the platform (its platform frame converted to the content view), adjusted by the position; `MakeVisible` from above, from below and already visible; the content has a margin, so its origin isn't zero |
+| `ScrollView_ScrollToAnElement_EquivalentTrees_WithInsets [iOS, Catalyst]` | the gate for the inset adapter: a scroll view under a navigation bar with nonzero adjusted content insets, holding the same geometry once from Controls layouts and once from direct layouts (content with a nonzero origin); the adjusted top inset is asserted ≥ 50 and the bridge's result `true` on every iteration; for all four positions, including `MakeVisible` from above, from below and already visible, the bridge's platform offset on the direct tree equals MAUI's own overload's on the Controls tree. Android runs it too, with no adapter, and records whether any inset appears |
 | `ScrollView_ScrollToAnElement_NotReady` | called before the page is shown, it returns `false` and the offset stays 0; a target inserted by a render into an arranged scroll view returns `false` when called in that render's turn, and after the next layout pass scrolls to the right offset; an unrelated target throws |
-| `ScrollView_ScrollToAnElement_Superseded` | characterization first: how many finishes two overlapping animated requests produce on each platform (recorded in §2.15). Then two animated bridge scrolls in a row: the first task completes `false` within one second, the second completes `true` only once the platform offset is at its target, and the final offset is the second's |
+| `ScrollView_ScrollToAnElement_Superseded`, both registries | the number of finishes two overlapping animated requests produce equals what the bridge expects (recorded in §2.15). Then two animated bridge scrolls in a row: the first task completes `false` within one second, the second completes `true` only once the platform offset is at its target, and the final offset is the second's |
 | `ScrollView_ScrollBars_ReachThePlatform` | the platform's indicator flags follow the declared visibility |
-| `RefreshView_UserRefresh_IsReported_AndRefusalStopsTheSpinner` | a refresh triggered through the platform control (`UIRefreshControl` value-changed action; the `SwipeRefreshLayout` listener) is reported once; the platform spinner follows the declaration; refused, it stops, and the sequence after settling is exactly that one report. If Catalyst has no pull-to-refresh, the fixture records that and the inventory says so |
-| `WebView_Navigations_AreAttemptedAndCompleted` | bundled HTML pages (no network). Positive control: a link from page 1 to page 2 is allowed, completes with `Success`, `document.title` is page 2's, and `CanGoBack` read in `OnNavigated` is `true`. Cancelled, each started a different way (a link, `EvaluateJavaScriptAsync("location.href=…")`, `Reload()`, `GoBack()`): any completion reported carries `Result.Cancel` and none `Success`; the previous page's `document.title` is asserted only where §2.7's table promises it stays |
+| `RefreshView_UserRefresh_IsReported_AndRefusalStopsTheSpinner` | a refresh triggered through the platform control (`UIRefreshControl` value-changed action; the `SwipeRefreshLayout` listener) is reported once; the platform spinner follows the declaration (still spinning 200 ms into an accepted refresh); refused, it stops, and the sequence after settling is exactly that one report. If Catalyst has no pull-to-refresh, the fixture records that and the inventory says so |
+| `WebView_Navigations_AreAttemptedAndCompleted` | bundled HTML pages (no network). Positive control: a link from page 1 to page 2 is allowed, completes with `Success`, `document.title` is page 2's, and `CanGoBack` read in `OnNavigated` is `true`. Cancelled, each started a different way (a link, `EvaluateJavaScriptAsync("location.href=…")`, `Reload()`, `GoBack()` with `CanGoBack` asserted first): each was asked about its page; no `Success`; the exact completions §2.15 records (none, or Android's late `Cancel`); refused before loading, the previous page and its script state stay; refused late, the document is gone. Positive control: the same script navigation allowed is asked and completes with `Success` |
 | `WebView_CommandsThroughARef` | `GoBack` and `GoForward` move between the two pages; `Reload` re-runs page 1's script (a `sessionStorage` counter reads 2); `EvaluateJavaScriptAsync` returns a value |
 | `WebView_DeclaredUrlCancelled_LoadsNothing` | with page 1 shown, a changed `Url` to page 2 whose `OnNavigating` cancels: on every platform no load begins (page 2's load counter, kept in `localStorage` by its script, stays 0), `document.title` is page 1's, and any completion carries `Cancel`. Positive control: the same change allowed loads page 2 once |
 | `WebView_RedeclaredUrl_DoesNothing` | rendering the same `Url` again doesn't load (page 1's load counter stays 1); a changed `Url` loads once |
 | `Entry_Selection_Characterization` | the matrix of §2.8; per case, whether the notification was late, the final platform selection and the exact callback sequence |
-| `Entry_Selection_Sequences` | a programmatic selection write, focused and unfocused: zero callbacks; a selection set on the platform view (what a user's tap does): exactly one, with both final values; typing a character: one `OnTextChanged`, then the selection reports the characterization recorded for that platform; refused typing: the characterized per-platform sequence, and, when that sequence contains at least one `OnSelectionChanged`, the last one equal to the final platform selection; zero callbacks after settling |
+| `Entry_Selection_Sequences` | a programmatic selection write, focused and unfocused: zero callbacks; a selection set on the platform view (what a user's tap does): exactly one, with both final values; typing a character: one `OnTextChanged`, then the selection reports the characterization recorded for that platform; refused typing: the characterized per-platform sequence, and, when that sequence contains at least one `OnSelectionChanged`, the last one equal to the final platform selection; zero callbacks after settling. The exact recorded sequences are asserted (typing, refused typing, text shrinking after a write), and a `MaxLength` truncation's text is reported |
 | `Entry_ReturnType_ReachesThePlatform` | `ReturnKeyType` (iOS, Catalyst) and `ImeOptions` (Android) follow the declaration |
 | `CollectionView_RefsInItemComponents_FollowTheirCells [controls]` | scroll until at least one cell instance has rendered two different item keys (identity reuse, asserted before anything else) and at least one item component has unmounted (count ≥ 1); then every live item component's ref names a cell showing its item, and every unmounted one's ref is `null` |
 
@@ -611,7 +622,8 @@ only the final state.
 
 ### 2.15 As built (4c-1)
 
-**What was built** (commits `4099ed54`, `260b4d84`, `18404ce4`, `fdf743f3`):
+**What was built** (commits `4099ed54`, `260b4d84`, `18404ce4`, `fdf743f3`, `0b4555ab`, and the
+pr-review fixes after it):
 
 - **Refs.** `ElementRef<T> where T : class, IView`, `TypedElementRef.Create<T>()`, `UseElementRef<T>()`
   (on `RenderContext` and `Component`) and `.Ref(ElementRef<T>?)` on every `ViewElement`, in
@@ -624,10 +636,13 @@ only the final state.
   when its binding context stops being an item.
 - **Focus on mount** (§2.6.2): the effect fails on Android, so **`UseElementFocus()`** was added with
   WinUI's name and shape, `(ElementRef<IView> Ref, Action RequestFocus)` (`Core/ElementFocus.cs`).
-  `RequestFocus` marshals to the dispatcher captured at render, focuses a loaded Controls view at once
-  or on its `Loaded`, and polls a direct view (16 ms, up to 2 s) until its platform view is in a
-  window (Android `IsAttachedToWindow`, UIKit `Window`), dropping the request if the ref names
-  another view or none.
+  `RequestFocus` runs on the root's render queue when called from another thread (as a state setter
+  does), focuses a loaded Controls view at once or on its `Loaded` (one-shot), and waits for a direct
+  view's readiness signal: its `HandlerChanged` (then one more turn, since MAUI sets a Core view's
+  handler before it creates the platform view), then on Android the platform view's
+  `ViewAttachedToWindow` (one-shot); UIKit has no public event for a view joining a window, so iOS and
+  Mac Catalyst check `Window` at doubling intervals up to 1 s, with no cap while the request stands. A
+  newer request replaces a pending one; a request is dropped when the ref stops naming its view.
 - **WebView.** `OnNavigating(WebNavigatingEventArgs)` (a throw cancels and goes to the boundary);
   `OnNavigated(WebNavigatedEventArgs)`, posted. The source still loads only when the declaration
   changes.
@@ -635,11 +650,18 @@ only the final state.
   to `ReportHandlerError`, optional restore in `finally`).
 - **Entry selection** (`Handlers/EntrySelection.cs`): `SelectionTracker` per view, created only when
   the element uses the selection; `PlatformSelection.Read` reads `EditText`/`UITextField`/`TextBox`.
-  Both handlers wrap the whole apply in one echo scope and post the observation when it ends.
+  Both handlers apply through one `SelectionTracker.Apply`: everything but the selection is applied
+  as without tracking (the text in its own scope), only the selection write is suppressed, and any
+  selection notification during the apply waits for the observation posted when it ends.
 - **Scroll bridge** (`ScrollViewExtensions`, `ScrollBridge`): `ReactorScrollView` re-implements
   `IScrollView.ScrollFinished`; `DirectLayout` records Controls children's visual parent. The computed
   path arranges a handler-less `BoxView` stand-in at the target's rectangle and calls MAUI's
-  `GetScrollPositionForElement` on it.
+  `GetScrollPositionForElement` on it. `ScrollBridge.For` gives any other `ScrollView` a bridge too
+  (a conditional weak table), which settles on MAUI's task by position. The bridge mirrors MAUI 11's
+  dispatch: a request parked before the handler and replayed counts one expected finish, one parked
+  for geometry and dropped by a newer request counts none; the expected finish is counted before the
+  dispatch; tasks run continuations asynchronously; a stale finish not followed by another within
+  1.5 s settles by position.
 
 **Deviations from §2, and why:**
 
@@ -662,6 +684,26 @@ only the final state.
 6. **The posted helper's own unmount check is redundant with `Live`** (an equivalent mutant: removing
    it alone changes nothing; removing it and invoking through `Current` turns the test red). Kept as
    defense in depth.
+7. **The selection write's echo scope is redundant too** (an equivalent mutant): every selection
+   notification inside an apply already waits for the observation, which compares with the baseline
+   the write set. Kept, so a platform that raises something else from a selection write stays quiet.
+8. **The echo scope covers only the selection write** (pr-review M2), not the whole apply as §2.8
+   first said: wrapping the apply swallowed a text the platform changed (`MaxLength` truncating
+   through `setText`), so `OnTextChanged` never ran and the app's text diverged. Measured on all three
+   platforms: a truncation now reports the text, then the selection.
+9. **Scroll views Reactor didn't create get a bridge** (pr-review M1), so the extension's task always
+   completes; such a bridge sees only the finish that completes MAUI's task, and checks the position
+   then.
+10. **A stale-finish grace period** (pr-review H2): if a finish the bridge counted never arrives (a
+    request MAUI dropped in a way the bridge doesn't mirror), a non-matching finish is followed, after
+    1.5 s without another, by a settle on the position, so no task waits forever.
+11. **The nested-layouts fixture doesn't run MAUI's own overload**: its target is a direct view, which
+    MAUI's `ScrollToAsync(Element, …)` can't take. The equivalent-trees fixture is the comparison with
+    MAUI.
+12. **UIKit readiness is checked, not observed** (§2.6.2 said "through its move to a window"):
+    `MovedToWindow` is a `UIView` override, so observing it would need Reactor's own subclass of
+    every platform view. iOS and Mac Catalyst check `Window` at doubling intervals up to 1 s, with no
+    cap while the request stands; Android observes `ViewAttachedToWindow` as designed.
 
 **Characterization (device, both registries unless noted):**
 
@@ -675,19 +717,22 @@ only the final state.
 | Refused typing | text, `selection 11,0`, `selection 10,0` | same | text only (the caret ends where it was) |
 | Keyboard change, selection (12, 2) | kept, nothing reported | kept | Controls (12, 0), direct (16, 0), reported once |
 | Password toggle | unfocused: select-all (0, 16); focused: (16, 0); reported once | same | Controls (12, 0), direct (16, 0), reported once |
-| `MaxLength` 5 truncating | (5, 0), reported once | same | same |
+| `MaxLength` 5 truncating | text `abcde`, then (5, 0); each reported once | same | same |
 | Finishes from two overlapping animated `ScrollToAsync` | 2 | 2 | 2 (so `FinishesAccumulate = true` everywhere) |
+| When an interrupted animation's finish arrives | inside the next request's dispatch (found when the expected finish was counted after it) | same | later (two finishes after the first task completed) |
+| Adjusted top inset in the equivalent-trees gate | ≥ 50 | ≥ 50 | 0 (no content inset to add) |
 | A target inserted in this turn | not laid out | not laid out | not laid out |
 | Cancelled link, script navigation | asked before load, no completion, page kept | same | same |
 | Cancelled `Reload`, `GoBack` | asked before load, no completion, page kept | same | asked in `OnPageStarted`; completion `Cancel`; page state lost (back landed on page 1) |
 | Cancelled declared `Url` | no load | no load | no load (preflight in `LoadUrl`) |
+| A script navigation after a refused `GoBack` | asked as `NewPage` | same | asked as `Back`: MAUI keeps the last command's kind |
 
-**Tests.** Headless `Reactor.Maui.Tests`: 301 (213 before 4c-1), in `ElementRefTests.cs`,
+**Tests.** Headless `Reactor.Maui.Tests`: 323 (213 before 4c-1), in `ElementRefTests.cs`,
 `ControlRefTests.cs`, `ScrollBridgeTests.cs`, including the README's snippets. Engine
-`Reactor.Maui.Engine.Tests`: 80 (73 before), `RefBindingTests.cs`. Device: 25 new fixtures in
+`Reactor.Maui.Engine.Tests`: 80 (73 before), `RefBindingTests.cs`. Device: 26 new fixtures in
 `ControlRefFixtures.cs` (`RefPlatform.cs` reads the platform; `Resources/Raw/page1.html`, `page2.html`).
-Full device suites: Mac Catalyst 111 passed, 7 skipped (no back key, no in-process backgrounding);
-iOS simulator 111 passed, 7 skipped; Android emulator 114 passed, 4 skipped; none failed.
+Full device suites: Mac Catalyst 112 passed, 7 skipped (no back key, no in-process backgrounding);
+iOS simulator 112 passed, 7 skipped; Android emulator 115 passed, 4 skipped; none failed.
 
 **Mutation checks** (each broke the code, ran the named suite, restored): all red — owner check,
 release from the element instead of `BoundRef`, no release on unmount, bind after effects, no hybrid
@@ -701,7 +746,13 @@ unmount check, selection writes compared with the view, no baseline on a write, 
 per notification, reading the virtual view, posting from inside the apply, clearing the pending flag
 after dispatch, no observation after an input-type change, no posted direct baseline, focusing a
 direct view before it is ready, `IsRefreshing` outside the echo scope, no restore after a refresh, and
-loading the web source on every render. One equivalent mutant (deviation 6). A hanging mutant
+loading the web source on every render. After the pr-review: inline continuations, counting a parked
+request and its replay, no grace settle, keeping a dropped geometry-parked request, not dropping it
+for the bridge's own request, counting after dispatch, a throwing dispatch escaping, a foreign finish
+confirming anywhere, no foreign supersession or disconnect, no start clamp, ignoring x, the whole
+apply in the echo scope, no clamp of a negative selection, no wait for a direct view's handler, no
+focus generation, no drop, focusing on the calling thread, selection compared with the view. Two
+equivalent mutants (deviations 6 and 7). A hanging mutant
 (`Neither` let through) first read green when its hung test host was killed; the bridge's headless
 awaits now time out, and it reads red.
 
@@ -713,6 +764,8 @@ allocations +0.0–0.2%.
 
 - On Android an input-type change leaves the Controls entry's cursor and moves the direct entry's to
   the end (MAUI's mapping order differs for a Core view). Reported correctly either way.
+- Android reports a script navigation that follows a refused `GoBack` as `Back` (MAUI keeps the
+  last command's kind).
 - Android can't keep the previous page when it cancels a reload or a back navigation (§2.7's table);
   MAUI's own overloads can leave a superseded `ScrollToAsync` pending; both are MAUI behaviour to
   file upstream.
