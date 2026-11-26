@@ -31,6 +31,7 @@ public static partial class Fixtures
         new("Dialogs_AnAnswerArrivingBeforeTheAlertHasGone_HoldsTheNextDialog", ClosingDialogs(DialogAnsweredBeforeItHasGone)),
         new("Dialogs_TheQueuesOwnAlert_HoldsTheNextDialog_AfterACollection", ClosingDialogs(DialogOwnAlertAfterACollection)),
         new("Dialogs_AnAlertOnClosedOpens_IsNotTakenForTheQueuesOwn", ClosingDialogs(DialogOpenedByOnClosed)),
+        new("Dialogs_AForeignAlertTitledTheSame_IsNotTakenForTheQueuesOwn", ClosingDialogs(DialogSameTitleForeignAlert)),
         new("SystemBack_HandlerRunsBeforeTheNavigationHost", BackBeforeHost),
         new("SystemBack_AtTheRoot_AHandlerKeepsTheApp_AndWithoutOneTheDefaultRuns", BackAtTheRoot),
         new("SystemBack_HandleOverload_ConsumesABackTheGuardRefuses", BackHandleOverload),
@@ -371,6 +372,61 @@ public static partial class Fixtures
         await NativeDialogs.Answer(c.Window, "No");
         Equal(false, await third.WaitAsync(TimeSpan.FromSeconds(5)), "the third answer");
         Check(await NativeDialogs.CloseAll(c.Window), $"the foreign alert closed: {NativeDialogs.Describe(c.Window)}");
+#else
+        await Task.CompletedTask;
+        throw new SkipException("Android's barrier is the posted turn: no alert is tracked as the queue's own");
+#endif
+    }
+
+    // MAUI's dialogs, with an alert outside the queue opened in the middle of the first presentation:
+    // after the queue has looked at the chain, before MAUI's own presentation turn.
+    private sealed class ForeignDuringPresentation(Window window, string title) : IDialogPlatform
+    {
+        private readonly IDialogPlatform _inner = MauiDialogPlatform.Instance;
+        private bool _opened;
+
+        public Task<object?> Present(Page presenter, DialogContent content)
+        {
+            var answer = _inner.Present(presenter, content);
+            if (!_opened)
+            {
+                _opened = true;
+                NativeDialogs.PresentForeign(window, title);
+            }
+            return answer;
+        }
+
+        public bool IsDialogShown(Window w) => _inner.IsDialogShown(w);
+        public bool WaitForNavigation(Window w, Action resume) => _inner.WaitForNavigation(w, resume);
+        public bool ScheduleFrame(Window w, Action check) => _inner.ScheduleFrame(w, check);
+        public void AfterAnswer(Window w, Action next) => _inner.AfterAnswer(w, next);
+    }
+
+    // An alert outside the queue with the very title of the queue's own, opened while the queue presents
+    // it, isn't taken for the queue's: once the queue's own has gone, Reactor's next dialog is shown.
+    private static async Task DialogSameTitleForeignAlert(FixtureContext c)
+    {
+#if IOS || MACCATALYST
+        var dialogs = await ShowDialogs(c);
+        var queue = DialogQueue.For(c.Window);
+        queue.Platform = new ForeignDuringPresentation(c.Window, "Same");
+        try
+        {
+            var first = dialogs.Alert("Same", null, "Yes", "No");
+            var next = dialogs.Alert("Next", null, "Yes", "No");
+            await c.WaitFor(() => NativeDialogs.Count(c.Window) == 2 && NativeDialogs.IsReady(c.Window, "Same"), "the foreign alert and the queue's, both titled 'Same'", NativeDialogs.Timeout);
+            Check(NativeDialogs.Describe(c.Window).Contains("Dismiss", StringComparison.Ordinal), $"the foreign alert is under the queue's: {NativeDialogs.Describe(c.Window)}");
+            await NativeDialogs.Answer(c.Window, "Yes");
+            Equal(true, await first.WaitAsync(TimeSpan.FromSeconds(5)), "the queue's answer");
+            await c.WaitFor(() => NativeDialogs.IsReady(c.Window, "Next"), "Reactor's next dialog, above the foreign alert titled the same", NativeDialogs.Timeout);
+            await NativeDialogs.Answer(c.Window, "No");
+            Equal(false, await next.WaitAsync(TimeSpan.FromSeconds(5)), "the next answer");
+            Equal(1, NativeDialogs.Count(c.Window), $"the foreign alert still shown: {NativeDialogs.Describe(c.Window)}");
+        }
+        finally
+        {
+            queue.Platform = MauiDialogPlatform.Instance;
+        }
 #else
         await Task.CompletedTask;
         throw new SkipException("Android's barrier is the posted turn: no alert is tracked as the queue's own");

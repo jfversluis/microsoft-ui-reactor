@@ -88,12 +88,15 @@ internal sealed class MauiDialogPlatform : IDialogPlatform
     {
 #if IOS || MACCATALYST
         // The alerts already on screen aren't the queue's: only its own alert holds the next one back.
-        // Which alert is its own is settled as soon as MAUI has presented it (a posted turn on the main
-        // thread), before any answer, so an alert the answer's callback opens is never taken for it.
+        // MAUI presents from a turn it posts on the main thread; the queue snapshots the chain in the turn
+        // just before it and takes the one new alert in the turn just after (the same FIFO queue), before
+        // any answer, so neither an alert opened around the presentation nor one the answer's callback
+        // opens is taken for it.
         if (presenter.Window is { } window)
         {
             var tracking = Tracking.GetOrCreateValue(window);
             tracking.Begin(window, content);
+            tracking.SnapshotSoon();
             var shown = Show(presenter, content);
             tracking.CaptureSoon();
             return shown.ContinueWith(t =>
@@ -152,19 +155,31 @@ internal sealed class MauiDialogPlatform : IDialogPlatform
         private int _attempts;
         private int _generation;
 
-        // Strong references: a collected managed wrapper must not lose an alert UIKit still presents.
+        // A strong reference: a collected managed wrapper must not lose an alert UIKit still presents.
         // Released once its dismissal has been observed.
-        private readonly List<UIKit.UIAlertController> _own = [];
+        private UIKit.UIAlertController? _own;
 
         public void Begin(Window window, DialogContent content)
         {
             _window = new(window);
             _content = content;
             _before = [.. AlertsIn(window).Select(static a => a.Handle)];
-            _own.Clear();
+            _own = null;
             _capturing = true;
             _attempts = 0;
             _generation++;
+        }
+
+        /// <summary>Snapshots the chain again in the main thread turn just before MAUI's presentation turn.</summary>
+        public void SnapshotSoon()
+        {
+            var generation = _generation;
+            if (_window?.TryGetTarget(out var window) is not true || window.Handler?.PlatformView is not UIKit.UIWindow platformWindow) return;
+            platformWindow.BeginInvokeOnMainThread(() =>
+            {
+                if (generation == _generation && _capturing && _own is null)
+                    _before = [.. AlertsIn(window).Select(static a => a.Handle)];
+            });
         }
 
         /// <summary>Settles which alert is the queue's on the main thread turn after MAUI's own presentation turn.</summary>
@@ -190,9 +205,9 @@ internal sealed class MauiDialogPlatform : IDialogPlatform
         }
 
         /// <summary>
-        /// Takes the alerts that appeared since the presentation began, preferring the one showing the
-        /// request's title. A no-op once settled, so the answer (which runs this before any callback) can't
-        /// take an alert presented after the queue's own.
+        /// Takes the one alert that appeared since the snapshot (the title only breaks a tie between several
+        /// new ones; then the lowest in the chain, the first presented). A no-op once settled, so the answer
+        /// (which runs this before any callback) can't take an alert presented after the queue's own.
         /// </summary>
         public void CaptureNow()
         {
@@ -206,16 +221,14 @@ internal sealed class MauiDialogPlatform : IDialogPlatform
                 PromptContent prompt => prompt.Title,
                 _ => null,
             };
-            var matching = added.Where(a => (a.Title ?? "") == (title ?? "")).ToList();
-            _own.AddRange(matching.Count > 0 ? matching : added);
+            _own = added.Count == 1 ? added[0] : added.FirstOrDefault(a => (a.Title ?? "") == (title ?? "")) ?? added[0];
             _capturing = false;
         }
 
         public bool IsOwnShown()
         {
-            foreach (var alert in _own)
-                if (alert.PresentingViewController is not null) return true;
-            _own.Clear();
+            if (_own?.PresentingViewController is not null) return true;
+            _own = null;
             return false;
         }
     }

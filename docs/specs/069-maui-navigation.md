@@ -845,12 +845,13 @@ modals. Other platforms ignore it, and it is not applied on Mac Catalyst (§5.6)
   MAUI modal, itself a focused dialog window on Android, shows the next dialog promptly). On iOS and
   Mac Catalyst the barrier waits only for the queue's own last alert, until it has left the window's
   presentation chain (checked once per frame, `DispatchDelayed(16 ms)`). Which alert is the queue's is
-  settled right after MAUI presents it: MAUI presents from a `BeginInvokeOnMainThread` turn, and the
-  queue's capture runs in the turn it posts on that same FIFO queue right after (retried per frame if
-  the alert isn't in the chain yet, and once more inside the answer's continuation, before any
-  callback); it is the alert that appeared since the presentation began, preferring the one with the
-  request's title. So an alert the answer's own callback (an `OnClosed`) opens is never taken for the
-  queue's. The queue holds its alert's `UIAlertController` strongly until it has seen it leave the
+  settled around MAUI's presentation: MAUI presents from a `BeginInvokeOnMainThread` turn, and the
+  queue posts on that same FIFO queue a snapshot of the chain in the turn just before it and the
+  capture in the turn just after (retried per frame if the alert isn't in the chain yet, and once more
+  inside the answer's continuation, before any callback). Exactly one alert is marked: the one not in
+  the snapshot (the request's title only breaks a tie between several new ones, then the lowest in
+  the chain). So neither an alert opened around the presentation, even one with the same title, nor
+  one the answer's own callback (an `OnClosed`) opens is taken for the queue's. The queue holds its alert's `UIAlertController` strongly until it has seen it leave the
   chain: a weak managed wrapper could be collected while UIKit still presents the native alert, which
   would have released the barrier early. It used to wait for any alert in the chain, so an alert the
   app showed outside the queue (or one that never went) held every Reactor dialog back forever; that
