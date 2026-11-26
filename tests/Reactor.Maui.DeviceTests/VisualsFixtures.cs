@@ -134,6 +134,19 @@ public static partial class Fixtures
                 return style;
             });
             var styled = Path2D("M 0,0 L 100,0 L 0,100 Z").Fill(Colors.Black).Size(100, 100).HorizontalOptions(LayoutOptions.Start).AutomationId("styled");
+            // A class style resolves only when the path is attached, after its mount's apply.
+            var classed = ContentView(Path2D("M 0,0 L 100,0 L 0,100 Z").Fill(Colors.Black).Size(100, 100)
+                    .HorizontalOptions(LayoutOptions.Start).AutomationId("classed").StyleClass(step == 0 ? "spin" : "calm"))
+                .Set<ContentViewElement, ContentView>(view =>
+                {
+                    if (view.Resources.Count > 0) return;
+                    var spin = new Style(typeof(Microsoft.Maui.Controls.Shapes.Path)) { Class = "spin" };
+                    spin.Setters.Add(new Setter { Property = Microsoft.Maui.Controls.Shapes.Path.RenderTransformProperty, Value = new Shapes.RotateTransform(90, 50, 50) });
+                    var calm = new Style(typeof(Microsoft.Maui.Controls.Shapes.Path)) { Class = "calm" };
+                    calm.Setters.Add(new Setter { Property = Microsoft.Maui.Controls.Shapes.Path.FillProperty, Value = Colors.Black });
+                    view.Resources.Add(spin);
+                    view.Resources.Add(calm);
+                });
             return Stage(
                 Ellipse().Fill(step == 0 ? Colors.Blue : Colors.Green).Size(80, 60).HorizontalOptions(LayoutOptions.Start).AutomationId("ellipse"),
                 (step == 1 ? Rectangle().StrokeDashArray(1, 1) : Rectangle())
@@ -141,7 +154,8 @@ public static partial class Fixtures
                 Path2D("M 0,0 L 100,0 L 0,100 Z").Fill(Colors.Black).Size(100, 100).HorizontalOptions(LayoutOptions.Start)
                     .AutomationId("rotated") with { RenderTransform = step == 1 ? rotate : null },
                 // The transform comes from a style; both declarations have none of their own.
-                step == 1 ? styled.Style(rotating) : styled);
+                step == 1 ? styled.Style(rotating) : styled,
+                classed);
         }
     }
 
@@ -170,6 +184,8 @@ public static partial class Fixtures
         var solid = TopEdge(Snapshot.Capture(await Sized(c, "dashed")));
         var original = Pattern(Snapshot.Capture(await Sized(c, "rotated")));
         var styledOriginal = Pattern(Snapshot.Capture(await Sized(c, "styled")));
+        var classedAtMount = Pattern(Snapshot.Capture(await Sized(c, "classed")));
+        Check(classedAtMount != original, $"the class style's rotation is drawn at mount: {classedAtMount}");
         Check(solid.Other == 0, $"a solid stroke covers the edge: {solid}");
 
         UpdatingShapes.SetStep!(1);
@@ -179,6 +195,9 @@ public static partial class Fixtures
         var dashed = TopEdge(Snapshot.Capture(c.ById<IView>("dashed")));
         var rotated = Pattern(Snapshot.Capture(c.ById<IView>("rotated")));
         var styledRotated = Pattern(Snapshot.Capture(c.ById<IView>("styled")));
+        var classedCalm = Pattern(Snapshot.Capture(c.ById<IView>("classed")));
+        Console.WriteLine($"# update in place: classed path {classedAtMount} -> {classedCalm}");
+        Equal(original, classedCalm, "swapping the class on the first update draws the path untransformed");
         Check(styledRotated != styledOriginal, $"the style's rotation is drawn: {styledOriginal} -> {styledRotated}");
         Check(dashed.Stroke > 0 && dashed.Other > 0, $"a dashed stroke alternates along the edge: {dashed}");
         Check(rotated != original, $"the rotation is drawn: {original} -> {rotated}");
