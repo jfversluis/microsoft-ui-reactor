@@ -119,6 +119,7 @@ and refine them with modifiers. Elements are immutable records, so `with` works 
 |---|---|
 | Text and media | `Label`, `Image`, `BoxView`, `GraphicsView`, `WebView`, `HtmlView`, `ActivityIndicator`, `ProgressBar` |
 | Input | `Button`, `ImageButton`, `Entry`, `Editor`, `SearchBar`, `CheckBox`, `Switch`, `Slider`, `Stepper`, `Picker`, `DatePicker`, `TimePicker`, `RadioButton` |
+| Formatted text | `Label(Run(…), Hyperlink(…))` |
 | Layout | `VStack`, `HStack`, `Grid`, `FlexLayout`, `AbsoluteLayout`, `ScrollView`, `Border`, `RefreshView`, `SwipeView` |
 | Lists | `CollectionView`, `CarouselView` (virtualized; each item is its own tree) |
 | Pages and navigation | `Page`, `NavigationHost`, `NavigationStack`, `Tabs`, `Flyout`, `Shell` (`TabBar`, `FlyoutItem`, `ShellTab`, `ShellContent`, `ShellMenuItem`) |
@@ -558,7 +559,114 @@ CollectionView(contacts, c => c.Id.ToString(), c =>
 ```
 
 Each item renders its own component tree; the list only creates trees for the items on screen.
-Items are matched by key across updates, and selection is controlled.
+Items are matched by key across updates, and selection is controlled: a tap is reported, and the
+list shows what the app declares (a refused tap is undone). Multiple selection compares the keys
+as a set. On iOS and Mac Catalyst, Reactor also checks the native selection after MAUI's deferred
+batch updates and repairs it, without reporting anything.
+
+**Drawing the selection.** Give the template the item's `ItemState` to draw a selected item
+yourself, instead of MAUI's `Selected` visual state. `IsSelected` is the declared selection
+(`None` selects nothing, `Single` compares `SelectedKey`, `Multiple` looks in `SelectedKeys`), so a
+refused tap never renders selected, and a recycled cell renders its new item's state. This overload
+turns off the platform's own highlight (`ShowsSelectionHighlight = false`):
+
+```csharp
+CollectionView(products, p => p.Id, (p, state) =>
+    Border(Label(p.Name).Padding(12))
+        .Stroke(state.IsSelected ? Colors.White : Colors.Gray, state.IsSelected ? 2 : 1)
+        .CornerRadius(8))
+    with
+{
+    Arrangement = ItemsArrangement.VerticalGrid,
+    Span = 2,
+    ItemSpacing = 12,
+    SelectionMode = SelectionMode.Single,
+    SelectedKey = selected,
+    OnSelectionChanged = keys => setSelected(keys.FirstOrDefault()),
+    Header = Label("Menu").FontSize(24),
+    EmptyView = Label("Nothing on the menu today"),
+}
+```
+
+**Groups.** The grouped overload takes the groups, their keys and items, and optional header and
+footer templates. Item keys are unique across the whole list. An item that moves to another group
+is removed from one and inserted in the other; its component state survives only if MAUI rebinds
+the same cell to it directly.
+
+```csharp
+CollectionView(teams, t => t.Name, t => t.Members, m => m.Id,
+    m => Label(m.Name),
+    groupHeader: t => Label(t.Name).Bold(),
+    groupFooter: t => Label($"{t.Members.Count} members"))
+```
+
+**Scrolling from code.** Through a ref, MAUI's `ScrollTo(index, …)` works as is. To scroll to an
+item by key, in any group, use `ScrollToKey` (MAUI's `ScrollTo(item, …)` can't take your item,
+because the list holds its own boxes): `list.Current?.ScrollToKey(specialId)`.
+
+## Swipe actions
+
+```csharp
+var swipe = UseElementRef<SwipeView>();
+(SwipeView(Label(task.Title).Padding(12)) with
+{
+    LeftItems = [new SwipeItemData("Done", complete) { Content = Label("✓").Padding(16) }],
+    LeftItemsMode = SwipeMode.Execute,
+    RightItems = [new SwipeItemData("Delete", delete) { BackgroundColor = Colors.Red }],
+    Threshold = 80,
+    OnSwipeEnded = (direction, isOpen) => setOpen(isOpen),
+}).Ref(swipe)
+```
+
+Items go on four sides (`LeftItems`, `RightItems`, `TopItems`, `BottomItems`), each with its mode:
+`Reveal` leaves the items open, `Execute` runs the first one once the swipe passes `Threshold`. An
+item with `Content` shows that element, and its `Text` becomes its accessible name. Items are rebuilt
+only when their text, color, icon, kind, count or mode changes, so a re-render doesn't close an open
+swipe; an item the platform still holds after a rebuild invokes nothing. Open and close it through
+a ref with MAUI's own methods: `swipe.Current?.Open(OpenSwipeItem.RightItems)`,
+`swipe.Current?.Close()`. They do nothing before the view is shown.
+
+## Radio buttons
+
+```csharp
+VStack(8,
+    (RadioButton(ThemeCard("Light", theme == "light"), theme == "light",
+        on => { if (on) setTheme("light"); }, groupName: "theme") with { IsIndicatorVisible = false })
+        .Semantics(description: "Light theme"),
+    (RadioButton(ThemeCard("Dark", theme == "dark"), theme == "dark",
+        on => { if (on) setTheme("dark"); }, groupName: "theme") with { IsIndicatorVisible = false })
+        .Semantics(description: "Dark theme"))
+```
+
+A radio button takes a text or any element as its content (`ContentElement`). With an element it
+shows MAUI's indicator next to the content, or, with `IsIndicatorVisible = false`, only the content:
+render the checked look from your state, instead of a `ControlTemplate` with a `Checked` visual
+state. Give it an accessible name with `.Semantics(description: …)` (or the text overload's text);
+without one, a warning is logged once.
+
+Reactor groups radio buttons itself, on both renderers: buttons with the same `GroupName` on one
+page, or unnamed buttons in the same layout. A tap checks the button, unchecks its peers on the
+platform, and then reports each change (the peers' unchecks first), so a callback already sees the
+group settled. A check made from inside such a callback (through a ref) runs on the next turn, after
+the first one. Two buttons declared checked in one group are both shown checked, and a warning is
+logged. MAUI's `RadioButtonGroup` attached properties don't apply to Reactor's buttons.
+
+## Pickers and formatted text
+
+`Picker(projects, p => p.Name, index, setIndex, title: "Project")` shows a text per item; the
+selection is the index.
+
+A label of formatted runs uses WinUI's `Run` and `Hyperlink` with the label's modifiers:
+
+```csharp
+Label(
+    Run("Total ").TextColor(Colors.Gray),
+    Run($"{total:C}").FontSize(28).Bold(),
+    Hyperlink(" details", () => setShowDetails(true)))
+```
+
+A hyperlink is underlined unless it declares `TextDecorations`. Runs are updated in place while their
+number stays the same. On the direct renderer, a label with runs renders as a Controls label.
 
 ## Hot reload
 

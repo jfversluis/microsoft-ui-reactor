@@ -76,7 +76,8 @@ The direct renderer covers Label, Button, Entry, CheckBox, Switch, Slider, Progr
 ActivityIndicator, Image, the two stacks and Grid. Every other element, and any element that uses
 a setting only Controls implements (styles, gestures, shadows, clipping, brushes, Flex/Absolute
 placement, `.Set()`, a ref typed to a Controls type such as `ElementRef<Entry>`; per element, for
-example Label `MaxLines`), falls back to the Controls renderer in the same tree (`HybridHandler`).
+example Label `MaxLines` or formatted `Inlines`), falls back to the Controls renderer in the same
+tree (`HybridHandler`).
 A ref typed to a Core interface (`ElementRef<IView>`) keeps the direct view, which can be focused
 (spec 070 §2.5). Mixing works in both directions because Controls
 layouts accept any `IView` child. The one boundary is a Controls slot typed as `View` (page or
@@ -98,6 +99,9 @@ test drivers see them. Controls layouts list only Controls elements as visual ch
 `DirectViewHost` re-implements the interface to list its direct child. A Controls view's logical parent skips the direct layouts above it, so MAUI's
 `ScrollView.ScrollToAsync(Element, …)` computes a wrong position through them; Reactor's
 `ScrollToAsync(ElementRef<T>, …)` walks the visual parents instead (spec 070 §2.6.1).
+The same gap breaks MAUI's radio button groups, which search logical children: a Controls radio
+button inside a direct layout is never found as a peer. Reactor groups radio buttons itself, on both
+renderers, from its own tree (spec 070 §3.6).
 
 ### 4.1 Benchmark results
 
