@@ -91,6 +91,23 @@ public static class NativeDialogs
 #endif
     }
 
+    /// <summary>
+    /// Dismisses again an alert whose handler already ran but which is still on screen and not
+    /// dismissing: UIKit ignores a dismissal requested while another transition is finishing, which a
+    /// tap never meets but the in-process answer can. Returns whether it asked.
+    /// </summary>
+    public static bool DismissAgain(Window window)
+    {
+#if IOS || MACCATALYST
+        var stuck = Alerts(window).LastOrDefault(a => !a.IsBeingDismissed && !a.IsBeingPresented);
+        if (stuck is null) return false;
+        (stuck.PresentingViewController ?? stuck).DismissViewController(true, null);
+        return true;
+#else
+        return false;
+#endif
+    }
+
     /// <summary>Closes whatever native dialog a failed fixture left on screen, so it can't block the next one.</summary>
     public static void DismissAll(Window window)
     {

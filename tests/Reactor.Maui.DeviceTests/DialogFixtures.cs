@@ -31,6 +31,8 @@ public static partial class Fixtures
         new("SystemBack_AtTheRoot_AHandlerKeepsTheApp_AndWithoutOneTheDefaultRuns", BackAtTheRoot),
         new("SystemBack_HandleOverload_ConsumesABackTheGuardRefuses", BackHandleOverload),
         new("SystemBack_PageAndTabsRoots_TheCallbackIsEnabledOnlyWithAHandler", BackOnPageAndTabsRoots),
+        new("SystemBack_RealKeyOnAModal_AsksTheModalThenTheRoot_AndPopsWhenUnhandled", BackOnAModal),
+        new("SystemBack_RealKeyInAShell_AsksTheHandlerOnce_BeforeShellsGuardedBack", BackInAShell),
         new("WindowLifecycle_StoppedAndResumed_WhenTheAppIsBackgrounded", LifecycleBackgrounded),
         new("ModalPresentationStyle_PageSheet_OnIOS", ModalPageSheet),
     ];
@@ -82,7 +84,15 @@ public static partial class Fixtures
         var result = await answer.WaitAsync(TimeSpan.FromSeconds(5));
         try
         {
-            await c.WaitFor(() => NativeDialogs.Count(c.Window) == 0, "the native dialog to disappear");
+            try
+            {
+                await c.WaitFor(() => NativeDialogs.Count(c.Window) == 0, "the native dialog to disappear", 2000);
+            }
+            catch (CheckFailedException) when (NativeDialogs.DismissAgain(c.Window))
+            {
+                Console.WriteLine("#   the in-process dismissal was ignored by UIKit; dismissed again");
+                await c.WaitFor(() => NativeDialogs.Count(c.Window) == 0, "the native dialog to disappear");
+            }
         }
         catch (CheckFailedException e)
         {
@@ -556,6 +566,152 @@ public static partial class Fixtures
         BackDispatcher.OnBackPressed();
         await SettledAt(c, page, "home", "the accepted back");
         Equal("back:detail,guard:detail", string.Join(",", log.Entries), "the accepted back's handlers");
+#else
+        await Task.CompletedTask;
+        throw new SkipException(NoBackKey);
+#endif
+    }
+
+    private static int s_keyRequests;
+
+    /// <summary>
+    /// The back key as the user presses it: a real key event to the focused window. An app can't inject
+    /// one into itself (INJECT_EVENTS), so the fixture asks run.sh, which watches the log for
+    /// <c>REACTOR-KEY-BACK</c> and runs <c>adb shell input keyevent 4</c>. Waits until
+    /// <paramref name="arrived"/> shows the key reached the app.
+    /// </summary>
+    private static async Task PressBack(FixtureContext c, Func<bool> arrived)
+    {
+        Console.WriteLine($"REACTOR-KEY-BACK {++s_keyRequests}");
+        await c.WaitFor(arrived, "the back key from run.sh (adb shell input keyevent 4)", 8000);
+    }
+
+    private sealed record ModalBackProps(List<string> Log, HashSet<string> Handles);
+
+    /// <summary>A root that handles the back (above every page) and declares a modal with its own handler.</summary>
+    private sealed class ModalBackApp : Component<ModalBackProps>
+    {
+        public override Element Render()
+        {
+            var (log, handles) = (Props.Log, Props.Handles);
+            var (showModal, setShowModal) = UseState(true);
+            UseSystemBackButton(() =>
+            {
+                log.Add("root");
+                return handles.Contains("root");
+            });
+            return NavigationStack([Page("base", Label("base"))]) with
+            {
+                Modals = showModal ? [Component<ModalBackPage, ModalBackProps>(Props)] : [],
+                OnModalDismissed = _ => setShowModal(false),
+            };
+        }
+    }
+
+    private sealed class ModalBackPage : Component<ModalBackProps>
+    {
+        public override Element Render()
+        {
+            var (log, handles) = (Props.Log, Props.Handles);
+            UseSystemBackButton(() =>
+            {
+                log.Add("modal");
+                return handles.Contains("modal");
+            });
+            return Page("modal", Label("modal"));
+        }
+    }
+
+    // The real back key while a MAUI modal is shown: the modal's dialog has its own back dispatcher,
+    // which never reaches the activity's.
+    private static async Task BackOnAModal(FixtureContext c)
+    {
+#if ANDROID
+        var log = new List<string>();
+        var handles = new HashSet<string>();
+        c.Show(Component<ModalBackApp, ModalBackProps>(new(log, handles)));
+        await LoadedPage<NavigationPage>(c);
+        await c.WaitFor(() => c.Window.Navigation.ModalStack.Count == 1 && c.Window.Navigation.ModalStack[0].IsLoaded, "the modal to be shown");
+        await c.WaitFor(() => Microsoft.UI.Reactor.Maui.Hosting.SystemBack.ModalCallbacksOf(c.Window).Any(), "Reactor's callback on the modal's dialog");
+        await c.Settle();
+
+        handles.Add("modal");
+        await PressBack(c, () => log.Count > 0);
+        await c.Settle();
+        Equal("modal", string.Join(",", log), "the modal's handler, which handles it");
+        Equal(1, c.Window.Navigation.ModalStack.Count, "modals after a handled back");
+
+        log.Clear();
+        handles.Clear();
+        handles.Add("root");
+        await PressBack(c, () => log.Count > 1);
+        await c.Settle();
+        Equal("modal,root", string.Join(",", log), "the modal's handler, then the root's, once each");
+        Equal(1, c.Window.Navigation.ModalStack.Count, "modals after a back the root handled");
+
+        log.Clear();
+        handles.Clear();
+        await PressBack(c, () => log.Count > 1);
+        await c.WaitFor(() => c.Window.Navigation.ModalStack.Count == 0, "MAUI to pop the modal");
+        await c.Settle();
+        Equal("modal,root", string.Join(",", log), "the handlers of an unhandled back, once each");
+#else
+        await Task.CompletedTask;
+        throw new SkipException(NoBackKey);
+#endif
+    }
+
+    private sealed record ShellBackProps(BackLog Log, Action<NavigationHandle<string>> Report, Action<Action<string>> ReportSelect);
+
+    private sealed class ShellBackApp : Component<ShellBackProps>
+    {
+        public override Element Render()
+        {
+            var (tab, setTab) = UseState("b");
+            var nav = UseNavigation("home");
+            Props.Report(nav);
+            Props.ReportSelect(setTab);
+            var log = Props.Log;
+            return Shell(tab, setTab,
+                FlyoutItem("A", ShellTab("a", "A", NavigationHost(nav, route => Component<BackPage, BackPageProps>(new(route, log))))),
+                FlyoutItem("B", ShellTab("b", "B", Page("B", Label("b")))));
+        }
+    }
+
+    // The real back key in a Shell, which has a back callback of its own on Android.
+    private static async Task BackInAShell(FixtureContext c)
+    {
+#if ANDROID
+        var log = new BackLog();
+        NavigationHandle<string>? nav = null;
+        Action<string>? select = null;
+        c.Show(Component<ShellBackApp, ShellBackProps>(new(log, n => nav = n, s => select = s)));
+        var shell = await LoadedPage<Microsoft.Maui.Controls.Shell>(c);
+        await c.Settle();
+        // Reactor's callback exists before item A's view is created (MAUI's Shell adds its own back
+        // callback then). Whichever path the key takes first, the handlers run once per back.
+        Check(Microsoft.UI.Reactor.Maui.Hosting.SystemBack.CallbackOf(c.Window) is not null, "Reactor's callback exists before item A is shown");
+        select!("a");
+        await c.WaitFor(() => shell.CurrentPage is { Title: "home" } home && Platform.IsDisplayed(home), "item A");
+        await c.Settle();
+        nav!.Navigate("detail");
+        await c.WaitFor(() => shell.CurrentPage is { Title: "detail" } page && Platform.IsDisplayed(page), "the push");
+        await c.Settle();
+        log.Entries.Clear();
+
+        log.Handles.Add("detail");
+        await PressBack(c, () => log.Entries.Count > 0);
+        await c.Settle(600);
+        Equal("back:detail", string.Join(",", log.Entries), "the page's handler, once, handling the back");
+        Equal("detail", shell.CurrentPage?.Title, "the page shown after a handled back");
+
+        log.Entries.Clear();
+        log.Handles.Clear();
+        await PressBack(c, () => log.Entries.Count > 0);
+        await c.WaitFor(() => shell.CurrentPage is { Title: "home" } page && Platform.IsDisplayed(page), "Shell's guarded back");
+        await c.Settle();
+        Equal("back:detail,guard:detail", string.Join(",", log.Entries), "the handler, then the guard, once each");
+        Equal("home", nav.CurrentRoute, "the handle's route");
 #else
         await Task.CompletedTask;
         throw new SkipException(NoBackKey);

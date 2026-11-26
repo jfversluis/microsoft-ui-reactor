@@ -6,6 +6,8 @@
 #   tests/Reactor.Maui.DeviceTests/run.sh android [adb-serial]      (default: the only device)
 #
 # REACTOR_DEVICE_TEST_FILTER=<substring>[|<substring>...] runs only matching fixtures.
+# On Android, a fixture that logs REACTOR-KEY-BACK gets a real back key (adb shell input keyevent 4):
+# an app can't inject key events into itself.
 # The TAP report is written to artifacts/device-tests/<platform>.tap.
 set -euo pipefail
 
@@ -73,9 +75,17 @@ case "$platform" in
     if [[ "${REACTOR_DEVICE_TEST_FILTER:-}" == *"'"* ]]; then echo "REACTOR_DEVICE_TEST_FILTER must not contain '" >&2; exit 2; fi
     "${adb_cmd[@]}" shell am start -n "$activity" ${REACTOR_DEVICE_TEST_FILTER:+-e REACTOR_DEVICE_TEST_FILTER "'$REACTOR_DEVICE_TEST_FILTER'"} > /dev/null
     deadline=$((SECONDS + timeout_seconds))
+    # Fixtures that need a real back key (an app can't inject one into itself) log REACTOR-KEY-BACK;
+    # each one gets one key event to the focused window.
+    keys_sent=0
     until "${adb_cmd[@]}" logcat -d -s DOTNET:I | grep -q "$done_marker"; do
       if (( SECONDS > deadline )); then echo "Timed out waiting for the device tests." >&2; break; fi
-      sleep 2
+      keys_wanted="$("${adb_cmd[@]}" logcat -d -s DOTNET:I | grep -c "REACTOR-KEY-BACK" || true)"
+      while (( keys_sent < keys_wanted )); do
+        "${adb_cmd[@]}" shell input keyevent 4
+        keys_sent=$((keys_sent + 1))
+      done
+      sleep 0.3
     done
     "${adb_cmd[@]}" logcat -d -s DOTNET:I > "$out/android.log"
     extract_tap < "$out/android.log" > "$tap"
