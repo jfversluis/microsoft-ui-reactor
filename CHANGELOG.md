@@ -72,7 +72,8 @@ Conventions for contributors:
   one dialog at a time, after the previous one has left the screen and while no navigation runs, and
   settles them when it is destroyed. `UseSystemBackButton(onBack)` and `UseSystemBackButton(nav)`
   handle Android's back key on the page on screen, through an AndroidX back callback enabled only
-  while a handler is registered, before a `NavigationHost`'s or Shell's guarded back (Android's
+  while a handler is registered (and on each modal's own dialog), before a `NavigationHost`'s or
+  Shell's guarded back (Android's
   back-to-home preview is lost at the root only then, spec 065 §7).
   `UseWindowLifecycle(onActivated, onDeactivated, onStopped, onResumed, onDestroying)` follows the
   window; a `ReactorWindow` now unmounts its tree in `OnDestroying`, after the `Destroying` event's

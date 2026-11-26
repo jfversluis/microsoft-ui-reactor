@@ -699,7 +699,10 @@ and a declarative one like WinUI's `ContentDialog`. Both feed the same queue.
     component's error boundary if there is one; a declarative dialog reports the error to its
     element's boundary. The queue moves on.
   - **The dispatcher refused the work** (the app is shutting down): the request is settled where it
-    is, never left waiting.
+    is, and so is everything the queue holds (the dialog shown included); the queue is then terminal,
+    settling every later request at once, until MAUI creates the window again. Nothing is left waiting.
+  - **A failure report that can't be delivered** (the render thread refuses it) is logged; the task
+    has already completed, and the queue goes on.
   - **Declarative `OnClosed`** runs at most once per open, and only while that open is still the
     element's current one. Unmounting, turning `IsOpen` off (from the render that does it, before
     the window can take a waiting request), or re-opening makes an earlier open stale. A stale answer
@@ -724,8 +727,12 @@ and a declarative one like WinUI's `ContentDialog`. Both feed the same queue.
   handler is registered for a tree shown in that window. It routes the back as MAUI's window does
   (`IWindow.BackButtonClicked`: the top modal, else the window's `Page`), asks the handlers, and if
   none handles it, disables itself and dispatches the key again, so MAUI's own handling runs
-  unchanged. Reactor's pages don't override `OnBackButtonPressed` for this; the navigation page's
-  and the Shell's overrides from §2.4 and §4.2 stay.
+  unchanged. A MAUI modal on Android is a dialog with its own back dispatcher, which takes the key
+  while the modal is shown and never reaches the activity's, so each modal's dialog gets the same
+  callback. A Shell adds a back callback of its own, which can be asked before Reactor's, so the
+  Shell's `OnBackButtonPressed` asks the handlers too; a back asks them at most once whichever path it
+  takes. Reactor's pages don't override `OnBackButtonPressed` otherwise; the navigation page's and the
+  Shell's overrides from §2.4 and §4.2 stay.
 - **Only for the system back key, on Android.** Windows' back button joins in 4g. On iOS and Mac
   Catalyst there is no callback: MAUI calls `SendBackButtonPressed` only for Shell's navigation-bar
   back (`Shell.cs`, 11.0.0), which goes through the stack's guards (§4.2).
@@ -855,6 +862,18 @@ modals. Other platforms ignore it, and it is not applied on Mac Catalyst (§5.6)
   MAUI's `OnCreate` has added its own) when the activity is recreated. When no handler handles the
   back, it disables itself and calls `OnBackPressedDispatcher.OnBackPressed()` again, so MAUI's
   callback (or the platform's default) gets the key, then re-enables.
+- **Modals and Shell on Android (verification round).** MAUI shows a modal in a `DialogFragment`
+  whose `ComponentDialog` has its own back dispatcher, with MAUI's callback forwarding to the window:
+  a real back key while a modal was shown never reached the activity's dispatcher, so it skipped
+  every handler and MAUI popped the modal. Reactor now finds each modal's dialog among the activity's
+  fragments (the dialog whose window holds the modal page's view, looked for again on `ModalPushed`
+  until it exists) and adds its callback to that dispatcher, after MAUI's, enabled with the window's.
+  MAUI's Shell adds a back callback when an item's view is created; `ReactorShell.OnBackButtonPressed`
+  asks the handlers (on Android only: iOS calls it for the navigation-bar back), in case that callback
+  is asked first. A back asks the handlers at most once: Reactor marks the window while it passes a
+  key on to MAUI, and until the end of the UI thread's turn (cleared by a posted turn) after it
+  asked. Two back keys queued within one turn would ask once; not observed. On the emulator Reactor's
+  callback was asked before the Shell's in every order tried, so the Shell path is covered headlessly.
 - **A handler belongs to the page it renders, else the nearest page above it.** A route's component
   usually returns `Page(…)`, so the page is below the component: the walk first follows the
   component's rendered chain (components, providers and boundaries with one child) down to a host,
@@ -891,9 +910,14 @@ modals. Other platforms ignore it, and it is not applied on Mac Catalyst (§5.6)
   buttons in process on every platform: on Android the alert's window is found with
   `WindowInspector` (a window with an alert's buttons; a MAUI modal is a dialog window too) and its
   button clicked; on iOS and Mac Catalyst the alert is dismissed and the chosen `UIAlertAction`'s own
-  handler block runs (UIKit exposes no public tap), so no Appium run was needed. A recording platform
+  handler block runs (UIKit exposes no public tap), so no Appium run was needed. UIKit occasionally
+  ignores that in-process dismissal when it lands as another transition finishes (2 of about 15 iOS
+  runs), which a tap never meets, so the helper dismisses once more if the alert is still on screen,
+  not dismissing, after 2 s. A recording platform
   checks that no native dialog is on screen when the next is presented (on Android no frame could
-  show two at once even without the barrier). The Android back fixtures put a stand-in
+  show two at once even without the barrier). The back key on a modal and in a Shell is a real key
+  event: an app can't inject one into itself (`INJECT_EVENTS`), so the fixture logs
+  `REACTOR-KEY-BACK` and `run.sh` sends `adb shell input keyevent 4`. The other Android back fixtures put a stand-in
   `OnBackPressedCallback` below MAUI's and Reactor's for the platform's default, so the app stays in
   front. `Stopped` and `Resumed` are produced on Android by a second activity of the test app
   covering the main one. The fixtures that can't run on a platform (the back key and backgrounding on

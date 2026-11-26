@@ -248,7 +248,7 @@ shared navigation model (spec 069): the stack's operations and guard order, `Pop
 state restored without guards, the lifecycle hook's order and lookup, and a handle over an injected
 scheduler (including one that refuses).
 
-**Renderer, headless** (`tests/Reactor.Maui.Tests`, 209 tests). Real Controls objects and direct
+**Renderer, headless** (`tests/Reactor.Maui.Tests`, 212 tests). Real Controls objects and direct
 views, no platform handlers: modifiers, every control's props and echo-free events, the hybrid
 fallback and mixed trees, `CollectionView` cells as child roots, pages, toolbar items, the
 navigation stack's reconcile, the user-pop rule (below), tabs and flyout (including swapping the
@@ -289,7 +289,8 @@ dialog at a time per window, the dismissal barrier (and Android's posted turn) a
 navigation until the navigator is idle (in the page and in a modal), a failed presentation completing
 with the cancel answer (reported to the caller's boundary when it has one) while the queue moves on,
 a destroyed window completing its dialogs and settling later requests until it is created again, a
-refused dispatch settling the request, the presenter resolved at dequeue (the top modal), a late
+refused dispatch (of a request or of an answer) settling everything and making the queue terminal, a
+failure report the render thread refuses still completing the task, the presenter resolved at dequeue (the top modal), a late
 window and a hosted page leaving its window; declarative dialogs queued once per open, their stale
 answers dropped (unmounted, closed, re-opened, closed in the render that brings the window), a stale
 dialog never shown, the answer going to the `OnClosed` of the content shown, and `OnClosed` or
@@ -297,13 +298,14 @@ presentation errors reaching the element's boundary; back handlers asked only on
 (not a page below the top, a deselected tab, a deselected Shell tab, a `NavigationHost` in a
 deselected tab, a covered `ReactorPage` or a list cell in a deselected tab), deepest first, then the
 most recent, each once, across two trees, with the root's handlers asked over a modal, falling
-through to MAUI and the host's guarded back, the handle overload consuming a refused back, a throwing
+through to MAUI and the host's guarded back, once per back whether Reactor's callback or the Shell's
+back path asks first, the handle overload consuming a refused back, a throwing
 handler, and a page's own `SendBackButtonPressed` asking none; the window's lifecycle subscribed,
 refreshed and unsubscribed, found late, left when a hosted page leaves its window, and `onDestroying`
 running before the teardown, with its errors held until after it; `ModalPresentationStyle` written
 before the modal is presented; and the README snippets.
 
-**Device tier** (`tests/Reactor.Maui.DeviceTests`, 86 fixtures; platform no-ops report TAP's `# SKIP`). All pass on Mac Catalyst (macOS 26,
+**Device tier** (`tests/Reactor.Maui.DeviceTests`, 88 fixtures; platform no-ops report TAP's `# SKIP`). All pass on Mac Catalyst (macOS 26,
 Apple silicon), an iPhone 18 Pro simulator (iOS 27) and the Android API 37 emulator; the 25 earlier
 ones also ran on a Pixel 10 (Android 16). They check what the
 native views show, not the virtual tree:
@@ -357,8 +359,9 @@ native views show, not the virtual tree:
   when the next is presented); a dialog requested during a push shown only once it has finished; a
   dialog on a modal opened after an earlier dialog shown on it at once; a dialog requested from a
   background thread. On Android: the back key reaching a `UseSystemBackButton` handler before a
-  `NavigationHost`, at the root (handled, and unhandled reaching the platform's default), the handle
-  overload consuming a back the guard refuses, and Reactor's callback enabled only with a handler on
+  `NavigationHost`, at the root (handled, and unhandled reaching the platform's default), a real back
+  key on a modal (the modal's handler, then the root's, then MAUI popping it) and in a Shell (the
+  handler once, before the Shell's guarded back), the handle overload consuming a back the guard refuses, and Reactor's callback enabled only with a handler on
   a `Page` and a `Tabs` root (MAUI's off, so the predictive preview stays); the window's `Stopped` and
   `Resumed` while another activity covers the app's. A `PageSheet` modal on iOS (full
   screen on Mac Catalyst), dismissed by the app and at unmount.
