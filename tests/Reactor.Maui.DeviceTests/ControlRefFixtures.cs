@@ -510,10 +510,26 @@ public static partial class Fixtures
 
     private sealed class WebLog
     {
+        private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
         public List<string> Attempts { get; } = [];
         public List<string> Completions { get; } = [];
+        /// <summary>Every event with its time and raw URL, for the failure message and the notes.</summary>
+        public List<string> Timeline { get; } = [];
         public Func<string, bool> Refuse { get; set; } = _ => false;
+        public long Now => _clock.ElapsedMilliseconds;
+        public void Mark(string what) => Timeline.Add($"+{Now} ms {what}");
     }
+
+    // The process-wide count of web view pages shown, so the notes tell the first load from later ones.
+    private static int s_pagesShown;
+
+    // The first web view page in a process waits for WebKit to launch its WebContent and GPU processes:
+    // WebKit logged 6.4 s for each on a freshly erased iOS simulator (page 1 loaded after 8.4 s), against
+    // 0.2-2.5 s for later pages (spec 070 §2.15); a hosted CI simulator is slower still. Later loads
+    // keep the ordinary wait.
+    private static bool s_firstPageLoaded;
+    private const int FirstPageLoadMs = 60000;
+    private const int PageLoadMs = 10000;
 
     private static string PageOf(string url) => url.Contains("page2", StringComparison.Ordinal) ? "page2" : url.Contains("page1", StringComparison.Ordinal) ? "page1" : url;
 
@@ -524,8 +540,13 @@ public static partial class Fixtures
             {
                 log.Attempts.Add($"{e.NavigationEvent} {PageOf(e.Url)}");
                 if (log.Refuse(e.Url)) e.Cancel = true;
+                log.Mark($"asked {e.NavigationEvent} {e.Url}{(e.Cancel ? " (refused)" : "")}");
             },
-            OnNavigated = e => log.Completions.Add($"{PageOf(e.Url)} {e.Result}"),
+            OnNavigated = e =>
+            {
+                log.Completions.Add($"{PageOf(e.Url)} {e.Result}");
+                log.Mark($"completed {e.Result} {e.Url}");
+            },
         }).Ref(web).AutomationId("web").Height(300);
 
     // Polls a script's value without blocking the UI thread, which the web view needs to answer.
@@ -547,9 +568,26 @@ public static partial class Fixtures
     {
         // Only a completion after this show counts: the log may already hold an earlier page 1's.
         var before = log.Completions.Count;
+        var shown = ++s_pagesShown;
+        log.Mark($"show page 1 (web view page {shown} in this process)");
+        var start = log.Now;
         c.Show(Web("page1.html", log, web));
         await Loaded<IWebView>(c, "web");
-        await c.WaitFor(() => log.Completions.Skip(before).Contains("page1 Success"), "page 1 to load", 10000);
+        log.Mark("web view loaded");
+        var first = !s_firstPageLoaded;
+        try
+        {
+            await c.WaitFor(() => log.Completions.Skip(before).Contains("page1 Success"),
+                first ? "page 1 to load, the process's first web view page (WebKit launches its processes for it)" : "page 1 to load",
+                first ? FirstPageLoadMs : PageLoadMs);
+        }
+        catch (CheckFailedException ex)
+        {
+            // Tells a slow load (asked late, or not yet) from a missed or failed completion.
+            throw new CheckFailedException($"{ex.Message}; events: [{string.Join("; ", log.Timeline)}]");
+        }
+        s_firstPageLoaded = true;
+        Note($"web view page {shown}: page 1 loaded in {log.Now - start} ms [{string.Join("; ", log.Timeline.TakeLast(4).Select(e => System.Text.RegularExpressions.Regex.Replace(e, "file:///\\S*/", "")))}]");
         await WaitForJs(c, web, "document.title", "page1", "page 1's title", 5000);
         return web.Current!;
     }

@@ -742,6 +742,7 @@ pr-review fixes after it):
 | Cancelled `Reload`, `GoBack` | asked before load, no completion, page kept | same | asked in `OnPageStarted`; completion `Cancel`; page state lost (back landed on page 1) |
 | Cancelled declared `Url` | no load | no load | no load (preflight in `LoadUrl`) |
 | A script navigation after a refused `GoBack` | asked as `NewPage` | same | asked as `Back`: MAUI keeps the last command's kind |
+| A new web view's first page load (shown to `Success`) | about 0.46 s for the process's first, 0.16 s later | first in the process on a freshly erased simulator: 8.4 s and 3.6 s in two runs (WebKit logged its WebContent and GPU processes taking 6.4 s and 1.4 s to launch); later 0.5–2.5 s, almost all of it before `OnNavigating` is asked | 0.8 s first, about 0.1 s later; asked twice (the `LoadUrl` preflight, then the page start) |
 
 **Tests.** Headless `Reactor.Maui.Tests`: 328 (213 before 4c-1), in `ElementRefTests.cs`,
 `ControlRefTests.cs`, `ScrollBridgeTests.cs`, including the README's snippets. Engine
@@ -788,6 +789,13 @@ allocations +0.0–0.2%.
 - A real user drag on iOS and Mac Catalyst can't be driven in process; the interruption fixture uses
   the offset write a touch makes, which UIKit ends with a finish. If a real drag ends an animation
   without one, the settle bound completes the task.
+- On a hosted CI iOS simulator the process's first web view page timed out at 10 s
+  (`WebView_Navigations_AreAttemptedAndCompleted`, the first WebView fixture; later ones passed, one
+  taking 5.9 s). Locally, on a freshly erased simulator, the first load took 8.4 s and 3.6 s, with
+  `OnNavigating` and `OnNavigated` both raised, just late: the time is WebKit launching its WebContent
+  and GPU processes (its own log: 6.4 s and 1.4 s), not a missed event, a rejected completion or an
+  unresolved asset URL. The fixtures now give the process's first web view page 60 s and later ones
+  the ordinary 10 s, note each load's time, and on a timeout list every event with its time and URL.
 - The WebView fixture once waited for a page 1 completion its shared log already held from an
   earlier show, so on a slow CI simulator it read the title before the new web view had loaded;
   `ShowPage1` now counts only completions after its own show, and the refused cases wait for the
