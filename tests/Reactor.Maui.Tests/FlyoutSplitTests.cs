@@ -129,6 +129,8 @@ public class FlyoutSplitTests
         var reports = new List<bool>();
         var host = Host(registry).Render(Tree(false, reports.Add, FlyoutLayoutBehavior.Split));
         var flyout = host.View<ReactorFlyoutPage>();
+        var errors = new List<Exception>();
+        host.Root.UnhandledException += errors.Add;
         var handler = new StubFlyoutHandler();
         flyout.Handler = handler;
         host.Scheduler.Drain();
@@ -143,6 +145,12 @@ public class FlyoutSplitTests
         Assert.Equal(0, writes());
         Assert.DoesNotContain(nameof(IFlyoutView.IsPresented), handler.Updates);
         Assert.Empty(reports);
+        Assert.Empty(errors);
+
+        // Not stuck: a refused write would leave MAUI's setter stuck, and leaving split couldn't close it.
+        host.Render(Tree(false, reports.Add, FlyoutLayoutBehavior.Popover));
+        host.Scheduler.Drain();
+        Assert.False(flyout.IsPresented);
     }
 
     [Theory]
