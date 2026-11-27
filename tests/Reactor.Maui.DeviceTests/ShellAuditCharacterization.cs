@@ -16,7 +16,249 @@ public static partial class Fixtures
         new("Characterize_ShellFlyout_Behaviors", ShellFlyoutBehaviors),
         new("Characterize_ShellFlyout_ReactorDeclared", ShellFlyoutReactorDeclared),
         new("Characterize_ShellFlyout_Visibility", ShellFlyoutVisibility),
+        new("Characterize_ShellFlyout_TransitionsFromFlyout", c => ShellFlyoutTransitions(c, FlyoutBehavior.Flyout)),
+        new("Characterize_ShellFlyout_TransitionsFromLocked", c => ShellFlyoutTransitions(c, FlyoutBehavior.Locked)),
+        new("Characterize_ShellFlyout_TransitionsFromDisabled", c => ShellFlyoutTransitions(c, FlyoutBehavior.Disabled)),
+        new("Characterize_ShellFlyout_Animation", ShellFlyoutAnimation),
+        new("Characterize_ShellFlyout_ItemSwitch", ShellFlyoutItemSwitch),
+        new("Characterize_ShellFlyout_DisabledFresh", ShellFlyoutDisabledFresh),
+        new("Characterize_ShellFlyout_DisabledAfterFlyout", ShellFlyoutDisabledAfterFlyout),
+        new("Characterize_ShellFlyout_LeaveDisabledTiming", ShellFlyoutLeaveDisabledTiming),
+        new("Characterize_ShellFlyout_PageChange", ShellFlyoutPageChange),
     ];
+
+    /// <summary>A shell with a flyout item and a tab bar, a header to probe, and a change log.</summary>
+    private sealed class ShellProbe
+    {
+        public readonly MauiShell Shell;
+        public readonly Label Header = new() { Text = "flyout header", BackgroundColor = Colors.Orange, HeightRequest = 60 };
+        public readonly List<string> Events = [];
+        public string Stage = "create";
+        public bool Writing;
+
+        public ShellProbe(FlyoutBehavior? behavior)
+        {
+            Shell = new MauiShell { FlyoutHeader = Header };
+            if (behavior is { } b) Shell.FlyoutBehavior = b;
+            Shell.Items.Add(new FlyoutItem { Title = "One", Items = { new ShellContent { Title = "One", Content = new ContentPage { Content = new Label { Text = "one" } } } } });
+            Shell.Items.Add(new TabBar { Title = "Tabs", Items = { new ShellContent { Title = "Tab", Content = new ContentPage { Content = new Label { Text = "tab" } } } } });
+            Shell.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == MauiShell.FlyoutIsPresentedProperty.PropertyName)
+                    Events.Add($"{Stage}:{(Writing ? "in-write" : "outside")}:{Shell.FlyoutIsPresented}");
+            };
+        }
+
+        public void Write(Action write)
+        {
+            Writing = true;
+            try { write(); }
+            finally { Writing = false; }
+        }
+
+        public string State => $"presented {Shell.FlyoutIsPresented}, shown {ShellFlyoutShown(Shell, Header)}";
+    }
+
+    private static async Task<ShellProbe> ShowProbe(FixtureContext c, FlyoutBehavior? behavior)
+    {
+        var probe = new ShellProbe(behavior);
+        c.Pages.Set(probe.Shell);
+        await c.WaitFor(() => probe.Shell.IsLoaded, "the shell to load");
+        await c.Settle(800);
+        return probe;
+    }
+
+    /// <summary>Every directed behavior change, with the flyout declared open and closed first.</summary>
+    private static async Task ShellFlyoutTransitions(FixtureContext c, FlyoutBehavior from)
+    {
+        var behaviors = new[] { FlyoutBehavior.Flyout, FlyoutBehavior.Locked, FlyoutBehavior.Disabled };
+        foreach (var to in behaviors)
+        {
+            if (from == to) continue;
+            foreach (var declared in new[] { false, true })
+            {
+                var p = await ShowProbe(c, from);
+                p.Stage = "declare";
+                p.Write(() => p.Shell.FlyoutIsPresented = declared);
+                await c.Settle(900);
+                var before = p.State;
+                p.Events.Clear();
+                p.Stage = "behavior";
+                p.Write(() => p.Shell.FlyoutBehavior = to);
+                p.Stage = "after";
+                await c.Settle(900);
+                Console.WriteLine($"# shell transition {from}->{to} declared {declared}: before [{before}]; after [{p.State}]; events [{string.Join(" ", p.Events)}]");
+                c.Pages.Set(new ContentPage());
+                await c.Settle(300);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A shell that starts Disabled (its flyout never created on Android) and leaves it with the flyout
+    /// declared open, then a re-projection (false, then true) of the presentation.
+    /// </summary>
+    private static async Task ShellFlyoutDisabledFresh(FixtureContext c)
+    {
+        foreach (var to in new[] { FlyoutBehavior.Flyout, FlyoutBehavior.Locked })
+        {
+            var p = await ShowProbe(c, FlyoutBehavior.Disabled);
+            p.Write(() => p.Shell.FlyoutIsPresented = true);
+            await c.Settle(900);
+            var fresh = p.State;
+            p.Events.Clear();
+            p.Stage = "behavior";
+            p.Write(() => p.Shell.FlyoutBehavior = to);
+            p.Stage = "after";
+            await c.Settle(2500);
+            var left = p.State;
+            p.Stage = "reproject";
+            p.Write(() => { p.Shell.FlyoutIsPresented = false; p.Shell.FlyoutIsPresented = true; });
+            p.Stage = "after-reproject";
+            await c.Settle(1500);
+            var reprojected = p.State;
+            p.Stage = "split-reproject";
+            p.Write(() => p.Shell.FlyoutIsPresented = false);
+            await c.Settle(900);
+            p.Write(() => p.Shell.FlyoutIsPresented = true);
+            p.Stage = "after-split";
+            await c.Settle(1500);
+            Console.WriteLine($"# shell disabled fresh true then {to}: fresh [{fresh}]; left [{left}]; reprojected in one turn [{reprojected}]; reprojected across turns [{p.State}]; events [{string.Join(" ", p.Events)}]");
+            c.Pages.Set(new ContentPage());
+            await c.Settle(300);
+        }
+    }
+
+    /// <summary>
+    /// A presentation the behavior doesn't force (Locked closed, Disabled open after a realized flyout),
+    /// then a page pushed and popped in the shown section: does MAUI's behavior observer force it again?
+    /// </summary>
+    private static async Task ShellFlyoutPageChange(FixtureContext c)
+    {
+        foreach (var (behavior, presented) in new[] { (FlyoutBehavior.Locked, false), (FlyoutBehavior.Disabled, true) })
+        {
+            var p = await ShowProbe(c, behavior == FlyoutBehavior.Disabled ? FlyoutBehavior.Flyout : behavior);
+            if (behavior == FlyoutBehavior.Disabled)
+            {
+                p.Write(() => p.Shell.FlyoutBehavior = FlyoutBehavior.Disabled);
+                await c.Settle(600);
+            }
+            p.Write(() => p.Shell.FlyoutIsPresented = presented);
+            await c.Settle(900);
+            var before = p.State;
+            p.Events.Clear();
+            p.Stage = "push";
+            await p.Shell.Navigation.PushAsync(new ContentPage { Content = new Label { Text = "pushed" } }, false);
+            await c.Settle(900);
+            var pushed = p.State;
+            p.Stage = "pop";
+            await p.Shell.Navigation.PopAsync(false);
+            await c.Settle(900);
+            Console.WriteLine($"# shell page change under {behavior} with {presented}: before [{before}]; pushed [{pushed}]; popped [{p.State}]; events [{string.Join(" ", p.Events)}]");
+            c.Pages.Set(new ContentPage());
+            await c.Settle(300);
+        }
+    }
+
+    /// <summary>When a re-projection after leaving a fresh Disabled takes effect.</summary>
+    private static async Task ShellFlyoutLeaveDisabledTiming(FixtureContext c)
+    {
+        foreach (var delay in new[] { -1, 0, 50, 200 })
+        {
+            var p = await ShowProbe(c, FlyoutBehavior.Disabled);
+            p.Write(() => p.Shell.FlyoutIsPresented = true);
+            await c.Settle(600);
+            void Reproject() => p.Write(() => { p.Shell.FlyoutIsPresented = false; p.Shell.FlyoutIsPresented = true; });
+            p.Write(() => p.Shell.FlyoutBehavior = FlyoutBehavior.Flyout);
+            if (delay < 0) Reproject();
+            else if (delay == 0) p.Shell.Dispatcher.Dispatch(Reproject);
+            else p.Shell.Dispatcher.DispatchDelayed(TimeSpan.FromMilliseconds(delay), Reproject);
+            await c.Settle(1800);
+            Console.WriteLine($"# shell leave disabled, reproject {(delay < 0 ? "in the same turn" : delay == 0 ? "on the next dispatch" : $"after {delay} ms")}: [{p.State}]");
+            c.Pages.Set(new ContentPage());
+            await c.Settle(300);
+        }
+    }
+
+    /// <summary>A realized flyout, then Disabled, then the flyout declared open under Disabled.</summary>
+    private static async Task ShellFlyoutDisabledAfterFlyout(FixtureContext c)
+    {
+        foreach (var from in new[] { FlyoutBehavior.Flyout, FlyoutBehavior.Locked })
+        {
+            var p = await ShowProbe(c, from);
+            p.Write(() => p.Shell.FlyoutIsPresented = false);
+            await c.Settle(900);
+            p.Events.Clear();
+            p.Stage = "disable";
+            p.Write(() => p.Shell.FlyoutBehavior = FlyoutBehavior.Disabled);
+            await c.Settle(900);
+            var disabled = p.State;
+            p.Stage = "declare-true";
+            p.Write(() => p.Shell.FlyoutIsPresented = true);
+            p.Stage = "after";
+            await c.Settle(1500);
+            Console.WriteLine($"# shell disabled after {from}: disabled [{disabled}]; true declared [{p.State}]; events [{string.Join(" ", p.Events)}]");
+            c.Pages.Set(new ContentPage());
+            await c.Settle(300);
+        }
+    }
+
+    /// <summary>A behavior change while an open or close animates (written right after the presentation).</summary>
+    private static async Task ShellFlyoutAnimation(FixtureContext c)
+    {
+        foreach (var (open, to) in new[] { (true, FlyoutBehavior.Locked), (true, FlyoutBehavior.Disabled), (false, FlyoutBehavior.Locked) })
+        {
+            var p = await ShowProbe(c, FlyoutBehavior.Flyout);
+            if (!open)
+            {
+                p.Write(() => p.Shell.FlyoutIsPresented = true);
+                await c.Settle(900);
+            }
+            p.Events.Clear();
+            p.Stage = open ? "open" : "close";
+            p.Write(() => p.Shell.FlyoutIsPresented = open);
+            await Task.Delay(60);
+            p.Stage = "behavior";
+            p.Write(() => p.Shell.FlyoutBehavior = to);
+            p.Stage = "after";
+            await c.Settle(1200);
+            Console.WriteLine($"# shell animation {(open ? "opening" : "closing")} then {to}: after [{p.State}]; events [{string.Join(" ", p.Events)}]");
+            c.Pages.Set(new ContentPage());
+            await c.Settle(300);
+        }
+    }
+
+    /// <summary>
+    /// The root behavior unset, the flyout open, and the current item switched between a flyout item
+    /// (effective behavior Flyout) and a tab bar (effective Disabled), and back.
+    /// </summary>
+    private static async Task ShellFlyoutItemSwitch(FixtureContext c)
+    {
+        foreach (var behavior in new FlyoutBehavior?[] { null, FlyoutBehavior.Locked })
+        {
+            var p = await ShowProbe(c, behavior);
+            p.Write(() => p.Shell.FlyoutIsPresented = true);
+            await c.Settle(900);
+            var before = p.State;
+            p.Events.Clear();
+            p.Stage = "to-tabbar";
+            p.Write(() => p.Shell.CurrentItem = p.Shell.Items[1]);
+            p.Stage = "after-tabbar";
+            await c.Settle(1200);
+            var atTabs = p.State;
+            p.Stage = "declare-true";
+            p.Write(() => p.Shell.FlyoutIsPresented = true);
+            await c.Settle(900);
+            var declaredAtTabs = p.State;
+            p.Stage = "to-flyoutitem";
+            p.Write(() => p.Shell.CurrentItem = p.Shell.Items[0]);
+            p.Stage = "after-flyoutitem";
+            await c.Settle(1200);
+            Console.WriteLine($"# shell item switch root {behavior?.ToString() ?? "unset"}: before [{before}]; at the tab bar [{atTabs}]; true declared there [{declaredAtTabs}]; back [{p.State}]; events [{string.Join(" ", p.Events)}]");
+            c.Pages.Set(new ContentPage());
+            await c.Settle(300);
+        }
+    }
 
     /// <summary>
     /// Whether the Shell's flyout pane is on screen: its header label is realized and, on iOS and Mac
