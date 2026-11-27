@@ -15,7 +15,89 @@ public static partial class Fixtures
     [
         new("Characterize_ShellFlyout_Behaviors", ShellFlyoutBehaviors),
         new("Characterize_ShellFlyout_ReactorDeclared", ShellFlyoutReactorDeclared),
+        new("Characterize_ShellFlyout_Visibility", ShellFlyoutVisibility),
     ];
+
+    /// <summary>
+    /// Whether the Shell's flyout pane is on screen: its header label is realized and, on iOS and Mac
+    /// Catalyst, the window's hit test at the label's center lands in it; on Android, it is shown and
+    /// inside the window.
+    /// </summary>
+    private static string ShellFlyoutShown(MauiShell shell, Label header)
+    {
+        if (header.Handler?.PlatformView is null) return "no (unrealized)";
+        try
+        {
+#if IOS || MACCATALYST
+            var view = (UIKit.UIView)header.Handler.PlatformView;
+            if (view.Window is not { } window) return "no (detached)";
+            var center = view.ConvertPointToView(new CoreGraphics.CGPoint(view.Bounds.Width / 2, view.Bounds.Height / 2), null);
+            var hit = window.HitTest(center, null);
+            var inside = window.Bounds.Contains(center);
+            var frame = Platform.WindowFrame(header);
+            return hit is not null && inside && (hit == view || hit.IsDescendantOfView(view) || view.IsDescendantOfView(hit) && hit.Superview is not null && IsAncestorShell(hit, view))
+                ? $"yes at x {frame.X:0}" : $"no (x {frame.X:0}, hit {hit?.GetType().Name ?? "nothing"})";
+#elif ANDROID
+            var view = (Android.Views.View)header.Handler.PlatformView;
+            var frame = Platform.WindowFrame(header);
+            var width = shell.Window?.Width ?? double.NaN;
+            var visible = view.IsShown && frame.Width > 0 && frame.Right > 1 && frame.X < width;
+            return visible ? $"yes at x {frame.X:0}" : $"no (x {frame.X:0}, shown {view.IsShown})";
+#else
+            return "unknown platform";
+#endif
+        }
+        catch (Exception ex)
+        {
+            return "unknown: " + ex.GetType().Name;
+        }
+    }
+
+#if IOS || MACCATALYST
+    // A hit on a container of the label (a label passes touches to its parent) counts when that
+    // container is the label's own header host, not a view covering it.
+    private static bool IsAncestorShell(UIKit.UIView hit, UIKit.UIView label)
+    {
+        for (var v = label.Superview; v is not null; v = v.Superview)
+            if (v == hit) return v.Subviews.Length <= 2;
+        return false;
+    }
+#endif
+
+    private static async Task ShellFlyoutVisibility(FixtureContext c)
+    {
+        Console.WriteLine($"# shell flyout visibility: idiom {DeviceInfo.Idiom}");
+        foreach (var behavior in new[] { FlyoutBehavior.Flyout, FlyoutBehavior.Locked, FlyoutBehavior.Disabled })
+        {
+            var shell = PlainShell(behavior);
+            var header = new Label { Text = "flyout header", AutomationId = "shell-flyout-header", BackgroundColor = Colors.Orange, HeightRequest = 60 };
+            shell.FlyoutHeader = header;
+            var events = new List<string>();
+            var stage = "appear";
+            var writing = false;
+            shell.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == MauiShell.FlyoutIsPresentedProperty.PropertyName)
+                    events.Add($"{stage}:{(writing ? "in-write" : "outside")}:{shell.FlyoutIsPresented}");
+            };
+            c.Pages.Set(shell);
+            await c.WaitFor(() => shell.IsLoaded, $"the {behavior} shell to load");
+            await c.Settle(800);
+            var steps = new List<string> { $"appear [presented {shell.FlyoutIsPresented}, shown {ShellFlyoutShown(shell, header)}]" };
+            foreach (var (name, value) in new[] { ("false", false), ("true", true), ("false-again", false) })
+            {
+                stage = name;
+                writing = true;
+                try { shell.FlyoutIsPresented = value; }
+                finally { writing = false; }
+                await c.Settle(900);
+                steps.Add($"{name} [presented {shell.FlyoutIsPresented}, shown {ShellFlyoutShown(shell, header)}]");
+            }
+            Console.WriteLine($"# shell flyout visibility {behavior}: {string.Join("; ", steps)}; events [{string.Join(" ", events)}]");
+            c.Pages.Set(new ContentPage());
+            await c.Settle();
+        }
+    }
 
     private static MauiShell PlainShell(FlyoutBehavior behavior)
     {
