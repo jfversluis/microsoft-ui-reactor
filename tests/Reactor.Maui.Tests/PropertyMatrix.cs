@@ -221,10 +221,14 @@ public class PropertyMatrixTests
         Assert.Equal([c.Payload], log);
         Assert.Equal(c.C, c.Read(native));
 
-        // Nothing after unmount (the earlier reports are the positive control).
+        // Nothing after unmount. The native shows C, so input goes to B and back to C: both directions
+        // of a bool, each a real change (the reads are the positive control that an event was raised).
         log.Clear();
         host.Root.Unmount();
-        c.Input(native, c.A);
+        c.Input(native, c.B);
+        Assert.Equal(c.B, c.Read(native));
+        c.Input(native, c.C);
+        Assert.Equal(c.C, c.Read(native));
         host.Scheduler.Drain();
         Assert.Empty(log);
     }
