@@ -101,17 +101,28 @@ public class RowExtrasTests
         var reports = new List<DateTime>();
         var host = new TestHost(MauiHandlers.CreateRegistry()).Render(Dated(new(2024, 6, 1), new(2024, 1, 1), new(2024, 12, 31), reports));
         var picker = host.View<MauiDatePicker>();
-
-        host.Render(Dated(new(2025, 3, 1), new(2024, 1, 1), new(2024, 12, 31), reports));
-        Assert.Equal(new DateTime(2024, 12, 31), picker.Date); // MAUI clamps to the maximum
-
         var writes = 0;
-        picker.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(MauiDatePicker.Date)) writes++; };
-        host.Render(Dated(new(2025, 3, 1), new(2024, 1, 1), new(2024, 12, 31), reports));
-        host.Scheduler.Drain();
+        DatePickerHandler.DateWritten = view => { if (ReferenceEquals(view, picker)) writes++; };
+        try
+        {
+            host.Render(Dated(new(2025, 3, 1), new(2024, 1, 1), new(2024, 12, 31), reports));
+            Assert.Equal(new DateTime(2024, 12, 31), picker.Date); // MAUI clamps to the maximum
+            Assert.Equal(1, writes); // positive control: the change was written
 
-        Assert.Equal(0, writes);
-        Assert.Empty(reports);
+            writes = 0;
+            host.Render(Dated(new(2025, 3, 1), new(2024, 1, 1), new(2024, 12, 31), reports));
+            Assert.Equal(0, writes);
+
+            // Input that moves the date is still restored to the clamped declaration.
+            picker.Date = new DateTime(2024, 3, 3);
+            host.Scheduler.Drain();
+            Assert.Equal([new DateTime(2024, 3, 3)], reports);
+            Assert.Equal(new DateTime(2024, 12, 31), picker.Date);
+        }
+        finally
+        {
+            DatePickerHandler.DateWritten = null;
+        }
     }
 
     [Fact]

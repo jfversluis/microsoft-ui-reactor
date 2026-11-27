@@ -502,6 +502,7 @@ public static partial class Fixtures
     private static async Task FlyoutSplitRotated(FixtureContext c, ElementHandlerRegistry registry)
     {
         RequireTablet();
+        var modeChanges = new List<string>();
         try
         {
             foreach (var behavior in new[] { FlyoutLayoutBehavior.Split, FlyoutLayoutBehavior.SplitOnLandscape })
@@ -514,12 +515,15 @@ public static partial class Fixtures
                 await context.Settle();
                 var split = ((IFlyoutPageController)page).ShouldShowSplitMode;
                 await Rotate(c, landscape: true);
+                var splitInLandscape = ((IFlyoutPageController)page).ShouldShowSplitMode;
+                if (splitInLandscape != split) modeChanges.Add($"{behavior}: {split} -> {splitInLandscape}");
+                Equal(splitInLandscape, Shown(page), $"{behavior}: shown in landscape exactly when split");
                 FlyoutPageApp.Set!(true);
                 await context.Settle();
                 FlyoutPageApp.Set!(false);
                 await context.Settle();
                 await Rotate(c, landscape: false);
-                Console.WriteLine($"# flyout rotated {behavior}: split {split}, then {((IFlyoutPageController)page).ShouldShowSplitMode}, shown {FlyoutShown(page)}, reports [{string.Join(",", reports)}]");
+                Console.WriteLine($"# flyout rotated {behavior}: split {split}, in landscape {splitInLandscape}, back {((IFlyoutPageController)page).ShouldShowSplitMode}, shown {FlyoutShown(page)}, reports [{string.Join(",", reports)}]");
                 Check(context.UnhandledErrors.Count == 0, $"{behavior}: no error ({string.Join(" | ", context.UnhandledErrors.Select(e => e.Message))})");
                 Check(reports.Count == 0, $"{behavior}: nothing reported");
                 Equal(split, Shown(page), $"{behavior}: shown exactly when split");
@@ -532,6 +536,10 @@ public static partial class Fixtures
         {
             await Rotate(c, landscape: false);
         }
+        // The checks above hold either way; without a mode change they don't exercise leaving split.
+        if (modeChanges.Count == 0)
+            throw new SkipException("rotation doesn't change split mode here (MAUI 11 reads a portrait orientation on iOS); declarations while rotated reported nothing and threw nothing");
+        Console.WriteLine($"# flyout rotation changed the mode: {string.Join("; ", modeChanges)}");
     }
 
     // ── Toolbar items ───────────────────────────────────────────────────────

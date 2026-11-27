@@ -317,8 +317,12 @@ internal sealed class DatePickerHandler : ViewHandler<DatePickerElement, MauiDat
     {
         Props.ApplyText(view, previous, next);
         Props.SetRef(view, MauiDatePicker.FormatProperty, previous?.Format, next.Format);
-        if (previous?.MinimumDate != next.MinimumDate || previous?.MaximumDate != next.MaximumDate || view.Date != next.Date)
+        // The view shows the declared date clamped to its range (MAUI coerces it), so a declaration
+        // outside the range isn't rewritten on every render; input that moved the date is still restored.
+        var rangeChanged = previous?.MinimumDate != next.MinimumDate || previous?.MaximumDate != next.MaximumDate;
+        if (rangeChanged || view.Date != Clamped(view, next.Date))
         {
+            DateWritten?.Invoke(view);
             context.WriteSuppressed(view, () =>
             {
                 // MAUI refuses a minimum after the current maximum, so a range moving later writes its
@@ -337,6 +341,14 @@ internal sealed class DatePickerHandler : ViewHandler<DatePickerElement, MauiDat
             });
         }
     }
+
+    private static DateTime Clamped(MauiDatePicker view, DateTime date) =>
+        view.MinimumDate is { } min && date < min ? min
+        : view.MaximumDate is { } max && date > max ? max
+        : date;
+
+    /// <summary>Raised before each write of the range and date (a test seam: an equal write raises nothing).</summary>
+    internal static Action<MauiDatePicker>? DateWritten;
 }
 
 internal sealed class TimePickerHandler : ViewHandler<TimePickerElement, MauiTimePicker>
