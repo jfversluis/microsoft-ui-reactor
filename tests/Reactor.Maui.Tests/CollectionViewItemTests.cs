@@ -275,6 +275,57 @@ public class CollectionSelectionTests
         Assert.Empty(reports);
     }
 
+    /// <summary>
+    /// Spec 070 §4.16.2 group K: with both keys declared, the mode decides which counts; the callback is
+    /// the current one; a mode change with a selection; nothing after unmount. Both registries.
+    /// </summary>
+    [Theory]
+    [InlineData("controls")]
+    [InlineData("direct")]
+    public void TheSelection_FollowsTheMode_ReachesTheCurrentCallback_AndNothingAfterUnmount(string registry)
+    {
+        var log = new List<string>();
+        CollectionViewElement List(SelectionMode mode, string generation) =>
+            CollectionView(new[] { "a", "b", "c" }, k => k, k => Label(k)) with
+            {
+                SelectionMode = mode,
+                SelectedKey = "a",
+                SelectedKeys = ["b", "c"],
+                OnSelectionChanged = keys => log.Add($"{generation} {string.Join("+", keys)}"),
+            };
+        string Native(CollectionView v) => v.SelectionMode == SelectionMode.Multiple
+            ? string.Join("+", v.SelectedItems.OfType<ItemBox>().Select(b => b.Key))
+            : (v.SelectedItem as ItemBox)?.Key ?? "none";
+        var host = new TestHost(PropertyMatrixTests.Registries.Single(r => r.Name == registry).Create()).Render(List(SelectionMode.Single, "first"));
+        var view = host.View<CollectionView>();
+        host.Scheduler.Drain();
+        Assert.Equal("a", Native(view));
+
+        // A mode change with a selection writes the other key set, unreported.
+        host.Render(List(SelectionMode.Multiple, "first"));
+        host.Scheduler.Drain();
+        Assert.Equal("b+c", Native(view));
+        Assert.Empty(log);
+
+        view.SelectedItems = [Cells.Box(view, "a")];
+        host.Scheduler.Drain();
+        Assert.Equal(["first a"], log);
+        Assert.Equal("b+c", Native(view)); // refused: restored
+
+        host.Render(List(SelectionMode.Single, "second"));
+        host.Scheduler.Drain();
+        Assert.Equal("a", Native(view));
+        view.SelectedItem = Cells.Box(view, "c");
+        host.Scheduler.Drain();
+        Assert.Equal(["first a", "second c"], log);
+
+        host.Root.Unmount();
+        view.SelectedItem = Cells.Box(view, "b");
+        host.Scheduler.Drain();
+        Assert.Equal("b", Native(view)); // positive control: the native selection changed
+        Assert.Equal(2, log.Count);
+    }
+
     [Fact]
     public void MultipleSelection_DeclaredInAnotherOrder_WritesNothing()
     {
