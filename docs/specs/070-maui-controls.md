@@ -2693,9 +2693,10 @@ No pending claim of a T-to-R type may remain at 4c-3b's gate, so a find can't be
 | B1. `DirectCheckBox` remapped its color on every render (a new paint per render, compared by reference) | the matrix's equal-render step (`CheckBoxElement.Color`, direct) | compared by color | K8 |
 | B2. A date picker's range moving later kept its old minimum (MAUI refuses a minimum after the current maximum) | `RowExtrasTests.DatePicker_TheRangeAndTheDate_ChangedInOneRender_InEitherDirection` | the maximum written first when the new minimum is past it | B2 |
 | B3. The same for a stepper's range (`Range.Write`, shared with the slider) | `RowExtrasTests.Stepper_MovesToADisjointRange_InEitherDirection` | the same order in `Range.Write` | B3 |
-| B4. Android: a cleared progress bar color stayed drawn (MAUI 11 sets a tint list and clears a color filter) | `ProgressBar_Platform`, rendered pixels | `ProgressColorClear` (Android): when a color MAUI applied is cleared, the bar's own tint list, or the theme's activated color, comes back; it only undoes MAUI's own tint, so it applies to every progress bar | DM1 |
+| B4. Android: a cleared progress bar color stayed drawn (MAUI 11 sets a tint list and clears a color filter) | `ProgressBar_Platform`, rendered pixels | `ProgressColorClear` (Android): when a color MAUI applied is cleared, the bar's own tint list, or the theme's activated color, comes back. Only on Reactor's bars (review of `bebd280a`): the Controls registry renders a `ReactorProgressBar` subclass, and it and `DirectProgressBar` register the mapping wrapper from their static constructors; any other bar keeps MAUI's behavior (`ProgressBar_APlainMauiBarKeepsMausBehavior`) | DM1, DM7, DM8 |
 | B5. A split flyout never loaded (§4.14.1) | the characterization | §4.14.3 | F1 to F8, DM2, DM6 |
 | B6. A retired toolbar item ran the action now at its index | the characterization | §4.14.4 | T1, DM3 |
+| B7. A declared date outside the picker's range was rewritten on every render (compared with the unclamped declaration) | review of `bebd280a` (the test couldn't see it: MAUI clamps to the same value); a write seam on the handler | compared with the declaration clamped to the view's range; input is still restored | B7, B7b |
 
 **Deviations from §4.14, and why:**
 
@@ -2718,16 +2719,26 @@ No pending claim of a T-to-R type may remain at 4c-3b's gate, so a find can't be
    emulator could be booted here).
 6. **Direct children of a Controls layout aren't its visual children**, so `FlexLayout_Geometry` reads
    them from the layout's list (spec 065 §4 notes the boundary).
+7. **No device fixture for the date picker's range and date in one render** (§4.14.5 promised one): the
+   bugs it would catch are Reactor's write order on the Controls view (B2, B7), which the headless
+   tests see directly, and MAUI's platform handlers map the final range and date whatever order
+   Controls received them in. The existing echo fixtures cover the picker on the platform.
+8. **`FlyoutPage_SplitRotated` skips where rotation changes no mode** (every iOS and Mac Catalyst
+   device with MAUI 11): it still runs its checks (no error, nothing reported, shown exactly when
+   split), then reports a skip, so the leaving-split path isn't counted as run on device.
+9. **`IsPresented` has one writer**, `ReactorFlyoutPage.WritePresented` (review of `bebd280a`):
+   `Update`, `SyncSlots` and the reprojection call it, so the split guard and the page checks can't
+   drift between them.
 
 **Census numbers.** Pending before 4c-3b: 348 (one phase). After: 145, all frozen later-phase keys
 (4c-3c 137, 4c-4 8); none of groups T to R. Types: 58 (unchanged).
 
-**Tests.** Headless `Reactor.Maui.Tests`: 1079 (686 before). Engine: 80. Device, full suites: Mac
-Catalyst 198 passed, 17 skipped; iOS (iPhone simulator) 195 passed, 20 skipped; Android (emulator)
-197 passed, 18 skipped (before: 174/7, 174/7, 176/5; the new skips are the iPad- or Catalyst-only
-fixtures). iPad simulator (`222A93E8-ACFB-4F63-BB9F-9553F0E6A3EB`), the flyout, toolbar and audit
-fixtures and the characterizations: 35 passed, 1 skipped. `Reactor.Maui.slnx` builds in Release with
-no warnings.
+**Tests.** Headless `Reactor.Maui.Tests`: 1083 (686 before). Engine: 80. Device, full suites: Mac
+Catalyst 198 passed, 18 skipped; iOS (iPhone simulator) 195 passed, 21 skipped; Android (emulator)
+198 passed, 18 skipped (before: 174/7, 174/7, 176/5; the new skips are the iPad-, Catalyst- or
+Android-only fixtures). iPad simulator (`222A93E8-ACFB-4F63-BB9F-9553F0E6A3EB`), the flyout, toolbar
+and audit fixtures and the characterizations: 33 passed, 4 skipped (`FlyoutPage_SplitRotated` on both
+registries, deviation 8). `Reactor.Maui.slnx` builds in Release with no warnings.
 
 **Mutation checks** (headless unless named; each broke the code, ran the class's tests, restored and
 touched the file; all red but where said):
@@ -2750,7 +2761,14 @@ touched the file; all red but where said):
   (K4), the font family dropped (K5), a direct stack invalidating on every render (K6), the direct font
   remapped every render (K7), the check box color by paint again (K8), the date (B2) and range (B3)
   write orders, flex values not cleared (F-flex) and absolute bounds not updated (F-absolute).
-- Device: the progress clear not completed (DM1, Android), a write while split (DM2, Mac Catalyst: the
+- Review of `bebd280a`: input after unmount reported, on a refresh view (U1) and a flyout (U2), which
+  the earlier runner's input couldn't see for bools (it equalled the shown value); the toolbar icon
+  never assigned (C26); the reprojection writing while split, with the throw swallowed (F10) or not
+  (F10b), and the one writer without its split guard (F11); the date picker compared with the
+  unclamped declaration (B7) or never restoring input (B7b); the check box always remapping its stored
+  color (K8, on the new code).
+- Device: the progress clear not completed (DM1, Android), the scoping gate removed (DM7, Android: the
+  plain MAUI bar was "fixed" too) and the Controls bar not registering (DM8, Android), a write while split (DM2, Mac Catalyst: the
   page never loads), the toolbar identity removed (DM3, iPhone), the direct switch's track not
   remapped (DM4, Android), the graphics view not invalidated (DM5, iPad), report while split (DM6,
   iPad: MAUI's own `true` at appearing reported).
@@ -2770,6 +2788,9 @@ check box) aren't in it.
 - **Android tablets**: the flyout's rotation path is headless-only here; run the flyout fixtures on a
   tablet emulator where one can be booted.
 - **Windows (4g)**: `ProgressColorClear` is Android-only; check MAUI's Windows progress bar clear.
+- **Split state is hidden** (design review): a possible follow-up is a callback when the flyout enters
+  or leaves split mode, after WinUI's `SplitView`/`NavigationView` `DisplayModeChanged`; the README
+  suggests the idiom or the window's size meanwhile.
 - **4c-3c**: the 137 page, navigation, Shell, dialog, collection and swipe properties.
 
 ## 5. 4c-4: CarouselView and IndicatorView
