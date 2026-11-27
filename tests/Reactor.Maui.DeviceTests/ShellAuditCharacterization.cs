@@ -265,7 +265,7 @@ public static partial class Fixtures
     /// Catalyst, the window's hit test at the label's center lands in it; on Android, it is shown and
     /// inside the window.
     /// </summary>
-    private static string ShellFlyoutShown(MauiShell shell, Label header)
+    private static string ShellFlyoutShown(MauiShell shell, View header)
     {
         if (header.Handler?.PlatformView is null) return "no (unrealized)";
         try
