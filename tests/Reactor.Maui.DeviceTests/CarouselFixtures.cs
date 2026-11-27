@@ -390,6 +390,7 @@ public static partial class Fixtures
         var rv = (AndroidX.RecyclerView.Widget.RecyclerView)view.Handler!.PlatformView!;
         var handled = rv.PerformAccessibilityAction(global::Android.Views.Accessibility.Action.ScrollForward, null);
 #else
+        await CarouselPlatform.EnableAccessibilityRuntime();
         var handled = CarouselPlatform.Accessibility(view, "next cell _accessibilityScrollToVisible");
 #endif
         await CarouselSettled(c, view);

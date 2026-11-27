@@ -528,6 +528,20 @@ public static partial class CarouselPlatform
     [DllImport("/usr/lib/libobjc.dylib", EntryPoint = "objc_msgSend")]
     private static extern bool SendBool(IntPtr receiver, IntPtr selector);
 
+    [DllImport("/usr/lib/libAccessibility.dylib", EntryPoint = "_AXSSetAutomationEnabled")]
+    private static extern void SetAutomationEnabled(int enabled);
+
+    /// <summary>
+    /// UIKit loads its accessibility runtime only while an assistive client (VoiceOver, an XCUITest
+    /// session) is attached; without it labels aren't accessibility elements and VoiceOver-style
+    /// actions are declined. Enables it the way UI test frameworks do (EarlGrey, KIF).
+    /// </summary>
+    public static async Task EnableAccessibilityRuntime()
+    {
+        SetAutomationEnabled(1);
+        await Task.Delay(500);
+    }
+
     private static IEnumerable<UIKit.UIView> Walk(UIKit.UIView root)
     {
         var pending = new Stack<UIKit.UIView>();
@@ -609,7 +623,8 @@ public static partial class CarouselPlatform
         var selector = new ObjCRuntime.Selector("_accessibilityScrollToVisible");
         if (!label.RespondsToSelector(selector)) return "unsupported";
         var text = (label as UIKit.UILabel)?.Text;
-        return $"{SendBool(label.Handle, selector.Handle)} ({text})";
+        var before = $"label {label.ConvertRectToView(label.Bounds, s)} in scroller {s.Bounds} (a11y {label.IsAccessibilityElement}, window {label.Window is not null})";
+        return $"{SendBool(label.Handle, selector.Handle)} ({text}; {before})";
     }
 
     public static string IndicatorState(IndicatorView indicator) =>
