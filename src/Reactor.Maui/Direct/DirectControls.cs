@@ -240,7 +240,7 @@ public sealed class DirectEntry : DirectControl, IEntry
 public sealed class DirectCheckBox : DirectControl, ICheckBox
 {
     private bool _isChecked;
-    private Paint _foreground = null!;
+    private Color? _color;
 
     public Action<bool>? OnCheckedChanged { get; internal set; }
 
@@ -256,7 +256,7 @@ public sealed class DirectCheckBox : DirectControl, ICheckBox
         }
     }
 
-    public Paint Foreground => _foreground;
+    public Paint Foreground => _color?.AsPaint()!;
 
     internal void SetChecked(bool value)
     {
@@ -265,13 +265,9 @@ public sealed class DirectCheckBox : DirectControl, ICheckBox
         Remap(nameof(ICheckBox.IsChecked));
     }
 
-    internal void Apply(CheckBoxElement element)
-    {
-        // Compared by color: a new paint per render would remap the foreground every time.
-        if (Equals(_foreground is SolidPaint solid ? solid.Color : null, element.Color)) return;
-        _foreground = element.Color?.AsPaint()!;
-        Remap(nameof(ICheckBox.Foreground));
-    }
+    // Kept as a color, compared by value: a new paint per render would remap the foreground every time.
+    internal void Apply(CheckBoxElement element) =>
+        Update(ref _color, element.Color, nameof(ICheckBox.Foreground));
 }
 
 public sealed class DirectSwitch : DirectControl, ISwitch
