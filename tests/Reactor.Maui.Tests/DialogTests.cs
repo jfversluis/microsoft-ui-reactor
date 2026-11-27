@@ -818,6 +818,121 @@ public class DialogTests
         Assert.Equal(["Delete A?:True"], closed);
     }
 
+    // ── The dialog theory (spec 070 §4.16.2, group D) ───────────────────────
+
+    public enum DialogKind { Alert, ActionSheet, Prompt }
+
+    /// <summary>A declarative dialog of each kind with every content field set from <paramref name="v"/>.</summary>
+    private static DialogElement Declare(DialogKind kind, string v, bool open, List<string> closed) => kind switch
+    {
+        DialogKind.Alert => Alert($"t{v}", $"m{v}", $"a{v}", $"c{v}") with { IsOpen = open, OnClosed = ok => closed.Add($"t{v}:{ok}") },
+        DialogKind.ActionSheet => ActionSheet($"t{v}", $"c{v}", $"d{v}", $"b{v}", $"x{v}") with { IsOpen = open, OnClosed = s => closed.Add($"t{v}:{s}") },
+        _ => Prompt($"t{v}", $"m{v}") with
+        {
+            Accept = $"a{v}", Cancel = $"c{v}", Placeholder = $"p{v}", InitialValue = $"i{v}", MaxLength = 10 + v.Length,
+            Keyboard = v == "1" ? Keyboard.Numeric : Keyboard.Email, IsOpen = open, OnClosed = s => closed.Add($"t{v}:{s}"),
+        },
+    };
+
+    private static string Expected(DialogKind kind, string v) => kind switch
+    {
+        DialogKind.Alert => $"alert t{v}|m{v}|a{v}|c{v}",
+        DialogKind.ActionSheet => $"sheet t{v}|c{v}|d{v}|b{v}+x{v}",
+        _ => $"prompt t{v}|m{v}|a{v}|c{v}|p{v}|{10 + v.Length}|{(v == "1" ? "numeric" : "email")}|i{v}",
+    };
+
+    private static string Signature(DialogContent content) => content switch
+    {
+        AlertContent a => $"alert {a.Title}|{a.Message}|{a.Accept}|{a.Cancel}",
+        ActionSheetContent s => $"sheet {s.Title}|{s.Cancel}|{s.Destruction}|{string.Join("+", s.Buttons)}",
+        PromptContent p => $"prompt {p.Title}|{p.Message}|{p.Accept}|{p.Cancel}|{p.Placeholder}|{p.MaxLength}|"
+            + $"{(ReferenceEquals(p.Keyboard, Keyboard.Numeric) ? "numeric" : ReferenceEquals(p.Keyboard, Keyboard.Email) ? "email" : p.Keyboard?.ToString())}|{p.InitialValue}",
+        _ => content.ToString()!,
+    };
+
+    private static (object Answer, string Payload) AnswerOf(DialogKind kind, string v) => kind switch
+    {
+        DialogKind.Alert => (true, "True"),
+        DialogKind.ActionSheet => ($"x{v}", $"x{v}"),
+        _ => ($"Ada {v}", $"Ada {v}"),
+    };
+
+    public static TheoryData<DialogKind> Kinds() => [DialogKind.Alert, DialogKind.ActionSheet, DialogKind.Prompt];
+
+    [Theory]
+    [MemberData(nameof(Kinds))]
+    public void ADeclarativeDialog_RequestsItsContent_OncePerOpen_AndReportsTheAnswerToTheContentShown(DialogKind kind)
+    {
+        var h = new Harness();
+        var closed = new List<string>();
+        h.Show(Declare(kind, "1", false, closed));
+        Assert.Empty(h.Platform.Presented); // closed at mount
+
+        h.Show(Declare(kind, "1", true, closed));
+        h.Show(Declare(kind, "1", true, closed)); // an equal render: no second request
+        var shown = Assert.Single(h.Platform.Presented);
+        Assert.Equal(Expected(kind, "1"), Signature(shown.Content));
+
+        // Changed while shown: not presented again (MAUI can't update a shown dialog); the answer goes
+        // to the content shown, once.
+        h.Show(Declare(kind, "2", true, closed));
+        Assert.Single(h.Platform.Presented);
+        var (answer, payload) = AnswerOf(kind, "1");
+        h.Platform.Answer(answer);
+        h.Platform.Dismiss();
+        Assert.Equal([$"t1:{payload}"], closed);
+
+        // Closed and opened again: shown again, with its new content.
+        h.Show(Declare(kind, "2", false, closed));
+        h.Show(Declare(kind, "2", true, closed));
+        Assert.Equal(2, h.Platform.Presented.Count);
+        Assert.Equal(Expected(kind, "2"), Signature(h.Platform.Presented[1].Content));
+        (answer, payload) = AnswerOf(kind, "2");
+        h.Platform.Answer(answer);
+        Assert.Equal([$"t1:{AnswerOf(kind, "1").Payload}", $"t2:{payload}"], closed);
+    }
+
+    [Theory]
+    [MemberData(nameof(Kinds))]
+    public void ADeclarativeDialog_ChangedWhileQueued_ShowsItsLatestContent_ClosedWhileQueuedIsRemoved_AndUnmountedWhileShownDropsTheAnswer(DialogKind kind)
+    {
+        // Changed while queued: the queue reads the content when it dequeues it.
+        var h = new Harness();
+        var closed = new List<string>();
+        _ = h.Dialogs().Alert("blocker", null, "OK");
+        h.Show(Declare(kind, "1", true, closed));
+        Assert.Equal(1, h.Queue.WaitingCount);
+        h.Show(Declare(kind, "2", true, closed));
+        h.Platform.Answer(true);
+        h.Platform.Dismiss();
+        Assert.Equal(Expected(kind, "2"), Signature(h.Platform.Presented[1].Content));
+        var (answer, payload) = AnswerOf(kind, "2");
+        h.Platform.Answer(answer);
+        Assert.Equal([$"t2:{payload}"], closed);
+
+        // Closed before it is shown: removed from the queue, nothing reported.
+        var queued = new Harness();
+        var queuedClosed = new List<string>();
+        _ = queued.Dialogs().Alert("blocker", null, "OK");
+        queued.Show(Declare(kind, "1", true, queuedClosed));
+        queued.Show(Declare(kind, "1", false, queuedClosed));
+        queued.Platform.Answer(true);
+        queued.Platform.Dismiss();
+        Assert.Single(queued.Platform.Presented);
+        Assert.Equal(0, queued.Queue.WaitingCount);
+        Assert.Empty(queuedClosed);
+
+        // Unmounted while shown: it stays until the user answers, and the answer is dropped.
+        var gone = new Harness();
+        var goneClosed = new List<string>();
+        gone.Show(Declare(kind, "1", true, goneClosed));
+        Assert.Single(gone.Platform.Presented);
+        gone.Show(Label("gone"));
+        gone.Platform.Answer(AnswerOf(kind, "1").Answer);
+        gone.Host.Scheduler.Drain();
+        Assert.Empty(goneClosed);
+    }
+
     // ── The README's snippets ───────────────────────────────────────────────
 
     [Fact]
