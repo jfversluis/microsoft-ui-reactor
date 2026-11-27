@@ -644,13 +644,13 @@ internal sealed class ReactorFlyoutPage : FlyoutPage
     }
 
     /// <summary>
-    /// Ends a transition: unless split, writes the declared value if it differs, or else projects the
-    /// equal value to the platform again, whose own presentation can disagree (an iOS pan finishing after
-    /// split began).
+    /// The one writer of <c>IsPresented</c>: never while split (MAUI refuses <c>false</c> by throwing,
+    /// which leaves the property stuck for good) or before both pages are set; inside the sync scope, so
+    /// its notification isn't reported. With <paramref name="reproject"/>, an equal value is projected to
+    /// the platform again, whose own presentation can disagree (an iOS pan finishing after split began).
     /// </summary>
-    internal void Reproject(bool declared)
+    internal void WritePresented(bool declared, bool reproject = false)
     {
-        TransitionPending = false;
         if (Flyout is null || Detail is null || IsSplit) return;
         if (IsPresented != declared)
         {
@@ -658,10 +658,17 @@ internal sealed class ReactorFlyoutPage : FlyoutPage
             try { IsPresented = declared; }
             finally { Syncing = false; }
         }
-        else
+        else if (reproject)
         {
             Handler?.UpdateValue(nameof(IFlyoutView.IsPresented));
         }
+    }
+
+    /// <summary>Ends a mode transition, applying the declaration again.</summary>
+    internal void Reproject(bool declared)
+    {
+        TransitionPending = false;
+        WritePresented(declared, reproject: true);
     }
 }
 
@@ -688,22 +695,13 @@ internal sealed class FlyoutHandler : Reactor.Hosting.IElementHandler<FlyoutElem
     public void Update(HandlerContext<FlyoutElement> context, FlyoutElement oldElement, FlyoutElement newElement, ReactorFlyoutPage control)
     {
         WriteBehavior(control, oldElement.LayoutBehavior, newElement.LayoutBehavior);
-        WritePresented(control, newElement.IsPresented);
+        control.WritePresented(newElement.IsPresented);
     }
 
     // Written before IsPresented is decided. What MAUI sets inside this write is raised while split
     // (entering) or inside the native mode change (leaving), so it is never reported.
     private static void WriteBehavior(ReactorFlyoutPage flyout, FlyoutLayoutBehavior? previous, FlyoutLayoutBehavior? next) =>
         Props.Set(flyout, FlyoutPage.FlyoutLayoutBehaviorProperty, previous, next);
-
-    // Never while split: MAUI refuses false by throwing, which leaves the property stuck for good.
-    private static void WritePresented(ReactorFlyoutPage flyout, bool declared)
-    {
-        if (flyout.Flyout is null || flyout.IsSplit || flyout.IsPresented == declared) return;
-        flyout.Syncing = true;
-        try { flyout.IsPresented = declared; }
-        finally { flyout.Syncing = false; }
-    }
 
     public IChildrenStrategy<FlyoutElement, ReactorFlyoutPage> Children { get; } = new FlyoutChildren();
 
@@ -733,7 +731,7 @@ internal sealed class FlyoutHandler : Reactor.Hosting.IElementHandler<FlyoutElem
             {
                 control.Syncing = false;
             }
-            WritePresented(control, element.IsPresented);
+            control.WritePresented(element.IsPresented);
         }
     }
 }

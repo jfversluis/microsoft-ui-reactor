@@ -108,10 +108,40 @@ public class FlyoutSplitTests
         Assert.True(flyout.IsPresented);
         Assert.Empty(reports);
 
-        // The page stays usable: a later declaration still writes (not stuck by a throw).
+        // While split, an equal render writes nothing.
         var writes = CountWrites(flyout);
         host.Render(Tree(false, reports.Add, FlyoutLayoutBehavior.Split));
         Assert.Equal(0, writes());
+
+        // The page stays usable (not stuck by a throw): leaving split writes the declared false.
+        host.Render(Tree(false, reports.Add, FlyoutLayoutBehavior.Popover));
+        Assert.Equal(1, writes());
+        Assert.False(flyout.IsPresented);
+        Assert.Empty(reports);
+    }
+
+    [Theory]
+    [MemberData(nameof(Registries))]
+    public void AModeTransitionWhileSplit_ReprojectsNothing(string registry)
+    {
+        // The handler connecting maps the mode (MAUI's FlyoutBehavior mapping) while the flyout is split
+        // and false is declared: the reprojection that follows must not write it.
+        var reports = new List<bool>();
+        var host = Host(registry).Render(Tree(false, reports.Add, FlyoutLayoutBehavior.Split));
+        var flyout = host.View<ReactorFlyoutPage>();
+        var handler = new StubFlyoutHandler();
+        flyout.Handler = handler;
+        host.Scheduler.Drain();
+        var writes = CountWrites(flyout);
+
+        handler.UpdateValue(nameof(IFlyoutView.FlyoutBehavior));
+        Assert.True(flyout.TransitionPending); // positive control: a transition, with its reprojection posted
+        host.Scheduler.Drain();
+
+        Assert.False(flyout.TransitionPending);
+        Assert.True(flyout.IsPresented);
+        Assert.Equal(0, writes());
+        Assert.DoesNotContain(nameof(IFlyoutView.IsPresented), handler.Updates);
         Assert.Empty(reports);
     }
 
