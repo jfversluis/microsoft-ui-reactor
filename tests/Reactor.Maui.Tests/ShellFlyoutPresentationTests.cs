@@ -435,7 +435,7 @@ public class ShellFlyoutPresentationTests
     private static readonly Element FlyoutF = FlyoutItem("F", ShellTab("a", "A", Page("A", null)));
     private static readonly Element BarT = TabBar(ShellTab("t", "T", Page("T", null)));
 
-    private sealed record StagingProps(List<bool> Reports, Action<Action<int>> Expose);
+    private sealed record StagingProps(List<bool> Reports, Action<Action<int>> Expose, string First = "t");
 
     /// <summary>
     /// Step 0 shows a tab bar (no flyout, the root unset); step 1 adds a flyout item and selects it. The
@@ -447,7 +447,7 @@ public class ShellFlyoutPresentationTests
         {
             var (step, setStep) = UseState(0);
             Props.Expose(setStep);
-            return Shell(step == 0 ? "t" : "x", null,
+            return Shell(step == 0 ? Props.First : "x", null,
                     FlyoutF, BarT, step == 0 ? null : FlyoutItem("X", ShellTab("x", "X", Page("X", null))))
                 .FlyoutIsPresented(true, Props.Reports.Add);
         }
@@ -476,6 +476,38 @@ public class ShellFlyoutPresentationTests
         Assert.Equal(FlyoutBehavior.Flyout, shell.EffectiveBehavior);
         Assert.True(shell.FlyoutIsPresented);
         Assert.Empty(reports);
+    }
+
+    /// <summary>
+    /// The Shell's own staging selects a flyout item it adds, from another flyout item (the behavior stays
+    /// Flyout): a platform that closes the flyout whenever told, inside SyncSlots, is not reported.
+    /// </summary>
+    [Theory]
+    [InlineData("controls")]
+    [InlineData("direct")]
+    public void TheShellsOwnStaging_IsAnEcho_AndTheDeclarationHolds(string registry)
+    {
+        var reports = new List<bool>();
+        Action<int>? setStep = null;
+        var host = new TestHost(PropertyMatrixTests.Registries.Single(r => r.Name == registry).Create());
+        host.Render(Component<RootStagingApp, StagingProps>(new(reports, s => setStep = s, First: "a")));
+        host.Scheduler.Drain();
+        var shell = host.View<ReactorShell>();
+        var platform = new ForcingFlyoutObserver(shell, android: true);
+        platform.Attach();
+        host.Scheduler.Drain();
+        Assert.True(shell.FlyoutIsPresented);
+        platform.ClosesWheneverTold = true;
+        platform.Told.Clear();
+
+        setStep!(1);
+        host.Scheduler.Drain();
+
+        Assert.Equal("x", shell.ShownKey());
+        Assert.NotEmpty(platform.Told);
+        Assert.All(platform.Told, b => Assert.Equal(FlyoutBehavior.Flyout, b));
+        Assert.Empty(reports);
+        Assert.True(shell.FlyoutIsPresented);
     }
 
     private sealed class NestedStagingApp : Component<StagingProps>
