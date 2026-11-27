@@ -21,10 +21,16 @@ internal static class ControlDescriptors
             .OneWay(static e => e.IsRunning, static (v, running) => v.IsRunning = running)
             .Property(MauiActivityIndicator.ColorProperty, static e => e.Color);
 
-    public static ControlDescriptor<ProgressBarElement, MauiProgressBar> ProgressBar() =>
-        ControlDescriptor.Create<ProgressBarElement, MauiProgressBar>()
+    public static ControlDescriptor<ProgressBarElement, MauiProgressBar> ProgressBar()
+    {
+        return ControlDescriptor.Create<ProgressBarElement, MauiProgressBar>()
+#if ANDROID
+            // MAUI's own type, so implicit ProgressBar styles apply; the color clear knows it as Reactor's.
+            .Event(static (_, view) => ProgressColorClear.Own(view))
+#endif
             .OneWay(static e => e.Progress, static (v, progress) => v.Progress = progress)
             .Property(MauiProgressBar.ProgressColorProperty, static e => e.ProgressColor);
+    }
 
     public static ControlDescriptor<CheckBoxElement, MauiCheckBox> CheckBox() =>
         ControlDescriptor.Create<CheckBoxElement, MauiCheckBox>()

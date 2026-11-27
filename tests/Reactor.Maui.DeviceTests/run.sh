@@ -19,12 +19,15 @@ project="$here/Reactor.Maui.DeviceTests.csproj"
 app_id="com.microsoft.reactor.maui.devicetests"
 out="$root/artifacts/device-tests"
 tap="$out/$platform.tap"
-timeout_seconds="${REACTOR_DEVICE_TEST_TIMEOUT:-600}"
+# The whole run, from launch to the done marker. The suite is over 200 fixtures, so this leaves room
+# for a slow CI simulator.
+timeout_seconds="${REACTOR_DEVICE_TEST_TIMEOUT:-1500}"
+launched=$SECONDS
 done_marker="# REACTOR-DEVICE-TESTS-DONE"
 mkdir -p "$out"
 
 # Runs a command with a time limit (macOS has no timeout(1)).
-with_timeout() { perl -e 'alarm shift; exec @ARGV' "$timeout_seconds" "$@"; }
+with_timeout() { launched=$SECONDS; perl -e 'alarm shift; exec @ARGV' "$timeout_seconds" "$@"; }
 
 # Keeps the TAP lines, dropping the NSLog ("date time App[pid:tid] ") or logcat ("... DOTNET : ")
 # prefix in front of them.
@@ -39,7 +42,7 @@ case "$platform" in
     log="$out/maccatalyst.log"
     rm -f "$log" # open --stderr appends; a stale report must not count.
     # NSLog writes Console output to stderr. open -W waits for the app to exit.
-    with_timeout open -W -n "$app" --stderr "$log" --env "REACTOR_DEVICE_TEST_FILTER=${REACTOR_DEVICE_TEST_FILTER:-}"
+    with_timeout open -W -n "$app" --stderr "$log" --env "REACTOR_DEVICE_TEST_FILTER=${REACTOR_DEVICE_TEST_FILTER:-}" || true
     extract_tap < "$log" > "$tap"
     ;;
   ios)
@@ -74,6 +77,7 @@ case "$platform" in
     # contain | or [ ]); fixture names never contain one, so a filter with ' is rejected.
     if [[ "${REACTOR_DEVICE_TEST_FILTER:-}" == *"'"* ]]; then echo "REACTOR_DEVICE_TEST_FILTER must not contain '" >&2; exit 2; fi
     "${adb_cmd[@]}" shell am start -n "$activity" ${REACTOR_DEVICE_TEST_FILTER:+-e REACTOR_DEVICE_TEST_FILTER "'$REACTOR_DEVICE_TEST_FILTER'"} > /dev/null
+    launched=$SECONDS
     deadline=$((SECONDS + timeout_seconds))
     # Fixtures that need a real back key (an app can't inject one into itself) log REACTOR-KEY-BACK;
     # each one gets one key event to the focused window.
@@ -98,4 +102,7 @@ esac
 
 cat "$tap"
 # Exactly one run's report, and it passed.
+if ! grep -q "^$done_marker" "$tap" && (( SECONDS - launched >= timeout_seconds )); then
+  echo "Device tests on $platform were stopped after the ${timeout_seconds} s limit (REACTOR_DEVICE_TEST_TIMEOUT), before they finished." >&2
+fi
 [[ "$(grep -c "^$done_marker" "$tap")" == 1 ]] && grep -q "^$done_marker exit=0" "$tap" || { echo "Device tests failed or did not finish on $platform." >&2; exit 1; }

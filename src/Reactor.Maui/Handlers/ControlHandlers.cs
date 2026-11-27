@@ -252,8 +252,18 @@ internal static class Range
     public static void Write(BindableObject view, BindableProperty minimum, BindableProperty maximum, BindableProperty value, double min, double max, double current)
     {
         if (min > max) throw new ArgumentException($"Minimum ({min}) is greater than maximum ({max}).");
-        view.SetValue(minimum, min);
-        view.SetValue(maximum, max);
+        // A control may refuse a minimum above its current maximum (Stepper does), so a range moving up
+        // writes its maximum first.
+        if (min > (double)view.GetValue(maximum))
+        {
+            view.SetValue(maximum, max);
+            view.SetValue(minimum, min);
+        }
+        else
+        {
+            view.SetValue(minimum, min);
+            view.SetValue(maximum, max);
+        }
         view.SetValue(value, Math.Clamp(current, min, max));
     }
 }
@@ -307,16 +317,45 @@ internal sealed class DatePickerHandler : ViewHandler<DatePickerElement, MauiDat
     {
         Props.ApplyText(view, previous, next);
         Props.SetRef(view, MauiDatePicker.FormatProperty, previous?.Format, next.Format);
-        if (previous?.MinimumDate != next.MinimumDate || previous?.MaximumDate != next.MaximumDate || view.Date != next.Date)
+        // The view shows the declared date clamped to its range (MAUI coerces it), so a declaration
+        // outside the range isn't rewritten on every render; input that moved the date is still restored.
+        var rangeChanged = previous?.MinimumDate != next.MinimumDate || previous?.MaximumDate != next.MaximumDate;
+        if (rangeChanged || view.Date != Clamped(view, next.Date))
         {
+            DateWritten?.Invoke(view);
             context.WriteSuppressed(view, () =>
             {
-                Props.Set(view, MauiDatePicker.MinimumDateProperty, previous?.MinimumDate, next.MinimumDate);
-                Props.Set(view, MauiDatePicker.MaximumDateProperty, previous?.MaximumDate, next.MaximumDate);
+                // MAUI refuses a minimum after the current maximum, so a range moving later writes its
+                // maximum first.
+                if (next.MinimumDate > view.MaximumDate)
+                {
+                    Props.Set(view, MauiDatePicker.MaximumDateProperty, previous?.MaximumDate, next.MaximumDate);
+                    Props.Set(view, MauiDatePicker.MinimumDateProperty, previous?.MinimumDate, next.MinimumDate);
+                }
+                else
+                {
+                    Props.Set(view, MauiDatePicker.MinimumDateProperty, previous?.MinimumDate, next.MinimumDate);
+                    Props.Set(view, MauiDatePicker.MaximumDateProperty, previous?.MaximumDate, next.MaximumDate);
+                }
                 view.Date = next.Date;
             });
         }
     }
+
+    // As MAUI coerces it: the day (midnight), then clamped to the range.
+    private static DateTime Clamped(MauiDatePicker view, DateTime date)
+    {
+        date = date.Date;
+        return view.MinimumDate is { } min && date < min ? min
+            : view.MaximumDate is { } max && date > max ? max
+            : date;
+    }
+
+    /// <summary>
+    /// Raised before each write of the range and date (a test seam: an equal write raises nothing).
+    /// Process-wide, so the tests that set it run in a non-parallel collection.
+    /// </summary>
+    internal static Action<MauiDatePicker>? DateWritten;
 }
 
 internal sealed class TimePickerHandler : ViewHandler<TimePickerElement, MauiTimePicker>

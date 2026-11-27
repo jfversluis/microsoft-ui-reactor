@@ -51,6 +51,25 @@ public sealed class Snapshot
             : new Rgba(_rgba[i] / 255.0 / a, _rgba[i + 1] / 255.0 / a, _rgba[i + 2] / 255.0 / a, a);
     }
 
+    /// <summary>
+    /// The average color of the visible pixels (alpha above a tenth), or null when none is: the color of
+    /// something drawn thin, such as a spinner's arc.
+    /// </summary>
+    public Rgba? Average()
+    {
+        double r = 0, g = 0, b = 0;
+        var count = 0;
+        for (var y = 0; y < Height; y++)
+            for (var x = 0; x < Width; x++)
+            {
+                var sample = At((double)x / Math.Max(1, Width - 1), (double)y / Math.Max(1, Height - 1));
+                if (sample.A < 0.1) continue;
+                (r, g, b) = (r + sample.R, g + sample.G, b + sample.B);
+                count++;
+            }
+        return count == 0 ? null : new Rgba(r / count, g / count, b / count, 1);
+    }
+
     public const double Tolerance = 0.06;
 
     /// <summary>Fails unless the sample at (x, y) is within <see cref="Tolerance"/> of <paramref name="expected"/>.</summary>

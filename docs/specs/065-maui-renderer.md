@@ -86,14 +86,17 @@ scroll view content), where a direct view is hosted in a reused `DirectViewHost`
 view inside a direct tree gets that host as its logical parent, so resources reach it. The sample
 and the device fixtures run unchanged on either renderer, with identical geometry.
 
-Three bugs found while building it show the cost of skipping Controls: every default Controls
-supplies has to be re-derived.
+Bugs found while building it show the cost of skipping Controls: every default Controls supplies,
+and every comparison it makes, has to be re-derived.
 - Text was larger until the direct views used the font manager's default size, as Controls does.
 - On iOS every direct stack was pushed down by the safe-area inset until it stopped opting in to
   safe areas, which nested Controls layouts do through an internal interface (`ISafeAreaView2`).
 - Direct labels didn't wrap on iOS and Mac Catalyst. Core's `ILabel` has no line-break mode;
   Controls maps `Label.LineBreakMode` (word wrap by default) itself, so a Core label keeps
   `UILabel`'s single truncated line. `DirectLabelHandler` adds the mapping.
+- A direct check box remapped its color on every render: it compared a new paint per render by
+  reference. The property census of spec 070 §4.14 found it (an equal render must write nothing);
+  it compares the color now.
 
 Direct views implement `IVisualTreeElement`, so MAUI's visual-tree tools, inspectors and
 test drivers see them. Controls layouts list only Controls elements as visual children, so

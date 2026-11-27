@@ -274,6 +274,17 @@ Conventions for contributors:
 
 ### Fixed
 
+- **MAUI renderer (spec 070 §4.14, §4.15).** A split flyout (iPad and Mac Catalyst with `Split` or
+  `SplitOnPortrait`, Android tablets per orientation) no longer fails to load: while split, and while
+  the platform changes mode, its `IsPresented` is the platform's (never written, never reported), and
+  the declaration applies again when it stops being split (§4.14.3). A toolbar item a rebuild retired
+  invokes nothing; it ran the action now at its index (§4.14.4). The audit of every control and layout
+  property (§4.15) fixed: a date picker's or stepper's range moving past its current maximum (the old
+  minimum stayed); a date picker rewriting a declared date outside its range on every render; a
+  direct check box rewriting its color on every render; and, on Android, a cleared progress bar color
+  staying drawn on Reactor's progress bars (MAUI sets a tint and clears a filter; a MAUI `ProgressBar`
+  created outside Reactor keeps MAUI's behavior).
+
 - An effect cleanup that throws while effects are flushed now runs only once: it is cleared before
   it runs, so unmounting the component no longer runs it again. An effect scheduled a second time
   before the flush (a render that failed and was retried) now keeps the cleanup it staged instead

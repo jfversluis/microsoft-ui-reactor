@@ -18,13 +18,16 @@ using Shapes = Microsoft.Maui.Controls.Shapes;
 namespace Microsoft.UI.Reactor.Maui.Tests;
 
 /// <summary>The census's claims (spec 070 §4.8): matrix cases first, then the few other kinds.</summary>
-public static class MatrixCases
+public static partial class MatrixCases
 {
     // Before the cases: static fields initialize in order.
     private static readonly Point[] Triangle = [new(0, 0), new(10, 0), new(0, 10)];
     private static readonly Point[] BigTriangle = [new(0, 0), new(20, 0), new(0, 20)];
 
-    public static readonly IReadOnlyList<PropertyCase> Properties = [.. ShapeCases(), .. ContainerCases(), .. ImageCases()];
+    public static readonly IReadOnlyList<PropertyCase> Properties =
+        [.. ShapeCases(), .. ContainerCases(), .. ImageCases(), .. TextCases(), .. ControlCases(), .. LayoutCases(), .. RichTextCases()];
+
+    public static readonly IReadOnlyList<ControlledCase> Controlled = ControlledCases();
 
     public static readonly IReadOnlyList<EventCase> Events =
     [
@@ -36,6 +39,7 @@ public static class MatrixCases
             Trigger = native => ((IButtonController)native).SendClicked(),
             Payload = "clicked",
         },
+        .. ControlEvents(),
     ];
 
     public static readonly IReadOnlyList<CoveredClaim> Covered =
@@ -46,6 +50,7 @@ public static class MatrixCases
         new(typeof(ContentViewElement), nameof(ContentViewElement.Content), typeof(VisualsTests), nameof(VisualsTests.ContentView_Content_IsSetReplacedAndCleared),
             "set, update in place (state kept), replace, clear (unmounted), direct child hosted",
             "content not cleared on null (M23) and a remount on every update (M24): red (spec 070 §4.13)"),
+        .. ControlCovered(),
     ];
 
     public static readonly IReadOnlyList<ExcludedClaim> Excluded = [];
@@ -68,7 +73,7 @@ public static class MatrixCases
     /// each set with <paramref name="set"/> on a fresh element from a fresh value, so reference values
     /// (brushes, lists) are new instances every time and the expectations are their own instances too.
     /// </summary>
-    private static PropertyCase Case<TElement, TValue>(
+    internal static PropertyCase Case<TElement, TValue>(
         Func<TElement> make, string property, Func<TElement, TValue, TElement> set, Func<TValue> a, Func<TValue> b,
         Func<object, object?> read, BindableProperty native, Func<object?, object?, bool>? same = null,
         Func<TValue, object?>? expect = null, string? direct = null, bool clears = true)
