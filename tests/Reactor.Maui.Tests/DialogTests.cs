@@ -822,17 +822,30 @@ public class DialogTests
 
     public enum DialogKind { Alert, ActionSheet, Prompt }
 
-    /// <summary>A declarative dialog of each kind with every content field set from <paramref name="v"/>.</summary>
-    private static DialogElement Declare(DialogKind kind, string v, bool open, List<string> closed) => kind switch
+    /// <summary>
+    /// A declarative dialog of each kind with every content field set from <paramref name="v"/>: variant
+    /// "1" through the factory's arguments, others through each property (<c>with</c>).
+    /// </summary>
+    private static DialogElement Declare(DialogKind kind, string v, bool open, List<string> closed)
     {
-        DialogKind.Alert => Alert($"t{v}", $"m{v}", $"a{v}", $"c{v}") with { IsOpen = open, OnClosed = ok => closed.Add($"t{v}:{ok}") },
-        DialogKind.ActionSheet => ActionSheet($"t{v}", $"c{v}", $"d{v}", $"b{v}", $"x{v}") with { IsOpen = open, OnClosed = s => closed.Add($"t{v}:{s}") },
-        _ => Prompt($"t{v}", $"m{v}") with
+        var byFactory = v == "1";
+        return kind switch
         {
-            Accept = $"a{v}", Cancel = $"c{v}", Placeholder = $"p{v}", InitialValue = $"i{v}", MaxLength = 10 + v.Length,
-            Keyboard = v == "1" ? Keyboard.Numeric : Keyboard.Email, IsOpen = open, OnClosed = s => closed.Add($"t{v}:{s}"),
-        },
-    };
+            DialogKind.Alert => (byFactory
+                ? Alert($"t{v}", $"m{v}", $"a{v}", $"c{v}")
+                : Alert("-", null, "-", "-") with { Title = $"t{v}", Message = $"m{v}", Accept = $"a{v}", Cancel = $"c{v}" })
+                with { IsOpen = open, OnClosed = ok => closed.Add($"t{v}:{ok}") },
+            DialogKind.ActionSheet => (byFactory
+                ? ActionSheet($"t{v}", $"c{v}", $"d{v}", $"b{v}", $"x{v}")
+                : ActionSheet(null, null, null) with { Title = $"t{v}", Cancel = $"c{v}", Destruction = $"d{v}", Buttons = [$"b{v}", $"x{v}"] })
+                with { IsOpen = open, OnClosed = s => closed.Add($"t{v}:{s}") },
+            _ => (byFactory ? Prompt($"t{v}", $"m{v}") : Prompt("-", null) with { Title = $"t{v}", Message = $"m{v}" }) with
+            {
+                Accept = $"a{v}", Cancel = $"c{v}", Placeholder = $"p{v}", InitialValue = $"i{v}", MaxLength = 10 + v.Length,
+                Keyboard = byFactory ? Keyboard.Numeric : Keyboard.Email, IsOpen = open, OnClosed = s => closed.Add($"t{v}:{s}"),
+            },
+        };
+    }
 
     private static string Expected(DialogKind kind, string v) => kind switch
     {
