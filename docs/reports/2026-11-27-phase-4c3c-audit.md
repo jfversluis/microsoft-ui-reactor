@@ -42,6 +42,9 @@ device tests stable on every platform. PR #20, stacked on #19.
     fixtures. Rotations are now waited for, and portrait is restored at teardown.
   - **iPad `TwoStacks`:** a full-screen modal takes UIKit's tab bar out of the window, so a tab selected after
     that never loaded. The modal is now presented over full screen.
+  - **CI iOS `WebView_CommandsThroughARef`:** every new `WKWebView` waits for WebKit to start a page process,
+    which can take more than 10 s on a loaded runner. This was reproduced by killing the spare process
+    under load. Every new web view's first page now gets 60 s, and the fixture runs under a 150 s limit.
 - **Docs:** spec 070 §4.16 and §4.17 (characterization, rules, the mutant table, deviations), spec 068 rows
   (only CarouselView pending), spec 065, the README (per-platform flyout behaviour, `AutomationId`, template
   errors) and the CHANGELOG (Fixed).

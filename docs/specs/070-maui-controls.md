@@ -801,8 +801,16 @@ allocations +0.0–0.2%.
   taking 5.9 s). Locally, on a freshly erased simulator, the first load took 8.4 s and 3.6 s, with
   `OnNavigating` and `OnNavigated` both raised, just late: the time is WebKit launching its WebContent
   and GPU processes (its own log: 6.4 s and 1.4 s), not a missed event, a rejected completion or an
-  unresolved asset URL. The fixtures now give the process's first web view page 60 s and later ones
-  the ordinary 10 s, note each load's time, and on a timeout list every event with its time and URL.
+  unresolved asset URL. The fixtures note each load's time, and on a timeout they list every event
+  with its time and URL.
+- **Correction (4c-3c, `ff96f9ee`):** the earlier rule (60 s for the process's first web view only)
+  was wrong. Every `WKWebView` gets its own WebContent process, and WebKit keeps only one spare
+  started. A later new web view can also wait for a process to start, and on CI's
+  `WebView_CommandsThroughARef` it stalled past 10 s with no event at all.
+  - **Reproduced:** killing the spare process under load showed the same stall.
+  - **Ruled out:** a crash (WebKit restarts the process) and a lost source write.
+  - **Fix:** every new web view's first page now gets 60 s, and later navigations in the same web
+    view keep 10 s. The WebView fixtures run under a 150 s limit.
 - `WebView_Navigations_AreAttemptedAndCompleted` failed intermittently in full Android runs (2 of 3
   on the 4c-2 branch, never alone). Two fixture races, both reproduced on purpose:
   - **The recovery after a late cancel.** Where Android's late-cancelled reload landed early, it left
