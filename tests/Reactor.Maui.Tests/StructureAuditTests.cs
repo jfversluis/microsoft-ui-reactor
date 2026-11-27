@@ -232,13 +232,14 @@ public class StructureAuditTests
         var host = Host(registry).Render(Tree(["a", "b", "c"], reuse: false));
         var view = host.View<CollectionView>();
         var source = (System.Collections.IList)view.ItemsSource;
-        var b = Cells.Box(view, "b");
+        var (b, c) = (Cells.Box(view, "b"), Cells.Box(view, "c"));
         var cell = Cells.Bind(view.ItemTemplate, b);
         SetState(host, Name("b"), 5);
 
         // Reordered with one added and one removed: the kept item keeps its box, and its cell its tree.
         host.Render(Tree(["c", "b", "d"], reuse: false));
         Assert.Equal(["c", "b", "d"], source.Cast<ItemBox>().Select(x => x.Key));
+        Assert.Same(c, source[0]); // moved
         Assert.Same(b, source[1]);
         Assert.Equal($"{Name("b")} 5", Cells.Text(cell));
 
