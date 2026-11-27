@@ -113,14 +113,6 @@ Conventions for contributors:
   `Render` isn't reloaded; `StreamImage(key, open)` gives a stream image a key. A path whose
   `RenderTransform` goes away, however it's cleared (the element, a style, a parent's resources, a ref),
   is redrawn untransformed (MAUI's path handlers keep the old transform otherwise).
-  A split flyout (iPad and Mac Catalyst with `Split` or `SplitOnPortrait`, Android tablets per
-  orientation) no longer fails to load: while split, and while the platform changes mode, its
-  `IsPresented` is the platform's (never written, never reported), and the declaration applies again
-  when it stops being split. A toolbar item a rebuild retired invokes nothing (it ran the action now
-  at its index). An audit of every control and layout property (spec 070 §4.14) fixed a date picker's
-  or stepper's range moving past its current maximum (the old minimum stayed), a direct check box
-  rewriting its color on every render, and, on Android, a cleared progress bar color staying drawn
-  (MAUI sets a tint and clears a filter).
   Built with `Reactor.Maui.slnx` and tested in `.github/workflows/maui.yml`, including a
   device tier that runs on the real platform controls. It doesn't change the WinUI packages.
 
@@ -281,6 +273,17 @@ Conventions for contributors:
   package targets now follows the restored package instead of a hardcoded version.
 
 ### Fixed
+
+- **MAUI renderer (spec 070 §4.14, §4.15).** A split flyout (iPad and Mac Catalyst with `Split` or
+  `SplitOnPortrait`, Android tablets per orientation) no longer fails to load: while split, and while
+  the platform changes mode, its `IsPresented` is the platform's (never written, never reported), and
+  the declaration applies again when it stops being split (§4.14.3). A toolbar item a rebuild retired
+  invokes nothing; it ran the action now at its index (§4.14.4). The audit of every control and layout
+  property (§4.15) fixed: a date picker's or stepper's range moving past its current maximum (the old
+  minimum stayed); a date picker rewriting a declared date outside its range on every render; a
+  direct check box rewriting its color on every render; and, on Android, a cleared progress bar color
+  staying drawn on Reactor's progress bars (MAUI sets a tint and clears a filter; a MAUI `ProgressBar`
+  created outside Reactor keeps MAUI's behavior).
 
 - An effect cleanup that throws while effects are flushed now runs only once: it is cleared before
   it runs, so unmounting the component no longer runs it again. An effect scheduled a second time

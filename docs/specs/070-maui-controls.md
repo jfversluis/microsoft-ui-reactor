@@ -2549,8 +2549,10 @@ and on Android and Windows when the display changes (`FlyoutPage.OnMainDisplayIn
    nothing. Reprojecting reaches `FlyoutContainerManager.UpdateIsPresented`, which compares with its
    own state.
 5. **Never trigger MAUI's throw**: it leaves the setter stuck and the property and the platform
-   disagreeing for the page's lifetime (§4.14.1). A `false` written through a ref while split still
-   throws; the README says so.
+   disagreeing for the page's lifetime (§4.14.1). A `Flyout` element takes no ref; code outside
+   Reactor that writes `false` to the page while split (through `Window.Page`) still makes MAUI throw;
+   the README says so. Split state stays hidden (no new API, design review); the README suggests basing
+   split-dependent UI on the idiom or the window's size.
 
 Documented in the README: in split mode the flyout is always shown, `IsPresented` and
 `OnIsPresentedChanged` do nothing, a mode change applies the declaration again, and which behaviors

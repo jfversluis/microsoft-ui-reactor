@@ -373,8 +373,13 @@ While the flyout is split, `IsPresented` is the platform's: Reactor doesn't writ
 `onIsPresentedChanged` doesn't report what MAUI sets itself. When a render or the device leaves split
 mode, the declared value applies again. With MAUI 11, an iPad or a Mac splits a flyout whose
 behavior is `Split` or `SplitOnPortrait`, in any orientation, and never the others (MAUI reads a
-portrait orientation there); an Android tablet splits per orientation; a phone never does. Don't
-write `IsPresented` through a ref while the flyout is split.
+portrait orientation there); an Android tablet splits per orientation; a phone never does. Code
+outside Reactor that sets `IsPresented = false` on the page while it is split (through
+`Window.Page`, say) still makes MAUI throw.
+
+Whether a flyout is split isn't exposed, deliberately: base split-dependent UI on the device instead
+(`DeviceInfo.Idiom`, or the window's size from `UseWindowSize`), and keep the menu reachable either
+way.
 
 ### Toolbar items
 
@@ -393,6 +398,13 @@ Items appear in their declared order: primary ones in the navigation bar, second
 overflow menu. A render that only changes the callbacks keeps the platform's items (each runs the
 current callback); a changed text, icon, order or priority rebuilds them. An item a rebuild retired
 invokes nothing, even if the platform or your code still holds it.
+
+### Progress bars
+
+`ProgressBar(progress)` renders a `ProgressBar` subclass on the Controls registry, so an implicit
+style for it needs `ApplyToDerivedTypes`. On Android, MAUI 11 leaves a cleared `ProgressColor` drawn
+(it sets a tint and clears a filter); Reactor completes the clear on its own progress bars, so they
+return to the theme's color. A MAUI `ProgressBar` you create yourself keeps MAUI's behavior.
 
 ### Shell
 

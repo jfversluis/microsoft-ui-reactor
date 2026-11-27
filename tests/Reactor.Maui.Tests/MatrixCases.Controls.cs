@@ -482,7 +482,7 @@ public static partial class MatrixCases
 
 public static partial class MatrixCases
 {
-    // Each claim's mutation was run against its test (spec 070 §4.15, C1 to C25).
+    // Each claim's mutation was run against its test (spec 070 §4.15, C1 to C26).
     private static IEnumerable<CoveredClaim> ControlCovered()
     {
         const string layoutFacets = "set, reorder by key keeping the views, add, remove, clear; both registries";
@@ -531,7 +531,8 @@ public static partial class MatrixCases
         yield return new(typeof(ToolbarAction), nameof(ToolbarAction.Priority), typeof(ToolbarTests), nameof(ToolbarTests.AStructureChange_Rebuilds_InDeclaredOrder_AndTheOldItemsInvokeNothing),
             "a priority-only change rebuilds, each item's priority on the native", "the priority ignored (C23): red");
         yield return new(typeof(ToolbarAction), nameof(ToolbarAction.Icon), typeof(ToolbarTests), nameof(ToolbarTests.AStructureChange_Rebuilds_InDeclaredOrder_AndTheOldItemsInvokeNothing),
-            "an icon change rebuilds (an equal icon doesn't: VisualsTests' image consumers)", "the icon ignored (C24): red");
+            "an icon added or swapped for another rebuilds, and the native item shows it (an equal icon doesn't rebuild: VisualsTests' image consumers)",
+            "the icon ignored by the comparison (C24) and never assigned to the native item (C26): red");
         yield return new(typeof(ToolbarAction), nameof(ToolbarAction.OnClick), typeof(ToolbarTests), nameof(ToolbarTests.ACallbackOnlyRender_KeepsTheItems_WhichInvokeTheCurrentCallback_AndNothingAfterUnmount),
             "the current render's callback, nothing after unmount, a retired item nothing (the class's other tests); both registries", "the first callback captured (C25): red");
     }
