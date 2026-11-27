@@ -461,8 +461,20 @@ public sealed class App : Component
 - **Shell properties.** `.FlyoutBehavior(…)`, `.FlyoutIsPresented(isPresented, onChanged)`,
   `.FlyoutHeader(…)`, `.FlyoutFooter(…)`, `.FlyoutContent(…)` (elements, updated in place) and the
   appearance colors (`with { TabBarBackgroundColor = … }`).
+- **The flyout's presentation follows the behavior.** `FlyoutIsPresented` is yours only while the
+  Shell's effective behavior is `Flyout` (the root's, else the current item's: a `FlyoutItem` has a
+  flyout, a `TabBar` has none). Under `Locked` the pane is shown and under `Disabled` it is hidden, on
+  iOS, Mac Catalyst and Android alike: MAUI forces the presentation again at every page change, so
+  Reactor writes nothing then and reports nothing. Changing the behavior or the selection never
+  reports MAUI's resulting open or close as the user's; once the flyout is a flyout again, your
+  declaration is applied. (MAUI itself differs per platform here: iOS and Mac Catalyst show a locked
+  pane whatever the property says, Android follows the property, and Android's drawer opens only if
+  it was created before; Reactor evens these out.)
 - **Page properties in a Shell.** `.NavBarIsVisible(…)`, `.TabBarIsVisible(…)`, `.TitleView(element)`,
   and `with { SearchHandler = …, PresentationMode = …, BackButtonBehavior = new ShellBackButton(…) }`.
+- **A page's `AutomationId`** is set once, when the page mounts (MAUI doesn't allow changing it). A
+  later change is ignored and logged once per page as a Reactor warning; to use a new id, give the
+  page a new key so it mounts again.
 - With `using static Microsoft.UI.Reactor.Maui.Factories;`, `Shell` names the factory; write
   `Microsoft.Maui.Controls.Shell` for MAUI's type.
 
@@ -661,6 +673,10 @@ CollectionView(teams, t => t.Name, t => t.Members, m => m.Id,
     groupHeader: t => Label(t.Name).Bold(),
     groupFooter: t => Label($"{t.Members.Count} members"))
 ```
+
+**Errors in templates.** The item, group header and group footer templates run when the platform
+shows a cell. An exception they throw goes to the `ErrorBoundary` above the list, like an exception
+in the cell's own components, rather than into the platform.
 
 **Scrolling from code.** Through a ref, MAUI's `ScrollTo(index, …)` works as is. To scroll to an
 item by key, in any group, use `ScrollToKey` (MAUI's `ScrollTo(item, …)` can't take your item,

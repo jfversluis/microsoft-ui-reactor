@@ -222,7 +222,11 @@ Design choices that differ from today's WinUI Reactor, and why:
   and top tabs by the app's keys; `ReactorShell` holds the declared selection, applies it at the level
   it names, and reports a user's switch from `Navigated`, comparing what Shell shows with what Reactor
   last selected. Collections sync in stages (add, select, remove, reorder around the current item), so
-  the selection never rests on MAUI's fallback for a removed current item. The host binding talks to an
+  the selection never rests on MAUI's fallback for a removed current item. The flyout's presentation
+  is the app's only under the effective `Flyout` behavior: Reactor's whole projection onto the Shell
+  (the behavior write, the item and selection staging, the flyout slots) is one echo scope, the
+  declaration is applied once the staging has finished, and MAUI's forcing writes under `Locked` and
+  `Disabled` are the platform's (spec 070 §4.16.4). The host binding talks to an
   internal `INativeStack`: a `NavigationPage`'s `StackNavigator`, or a Shell section's
   `ShellSectionNavigator`, which pushes and pops through the section one awaited operation at a time,
   tags them as its own, preflights the user's back in `Shell.Navigating` and stays busy until the
