@@ -419,7 +419,9 @@ public class ShellTests
     {
         var log = new List<string>();
         var generation = "first";
-        var h = new Harness(lab => lab.Build = l => Shell(l.Tab, key => log.Add($"{generation} {key}"),
+        // Each render's callback is its own closure over the generation it was rendered in.
+        Action<string> Callback(string g) => key => log.Add($"{g} {key}");
+        var h = new Harness(lab => lab.Build = l => Shell(l.Tab, Callback(generation),
             TabBar(ShellTab("a", "A", Page("A", null)), ShellTab("b", "B", Page("B", null)), ShellTab("c", "C", Page("C", null)))), registry);
 
         h.TapTab("b");
