@@ -17,6 +17,13 @@ internal sealed class ForcingFlyoutObserver : IFlyoutBehaviorObserver
     private readonly bool _android;
     private FlyoutBehavior? _last;
 
+    /// <summary>
+    /// Closes the flyout whenever told, whatever the behavior: not what MAUI does, but the one write
+    /// the outside-change filter can't attribute to the platform (a steady <c>Flyout</c>), so it proves
+    /// Reactor's echo scope on its own.
+    /// </summary>
+    public bool ClosesWheneverTold { get; set; }
+
     public ForcingFlyoutObserver(MauiShell shell, bool android)
     {
         _shell = shell;
@@ -36,7 +43,8 @@ internal sealed class ForcingFlyoutObserver : IFlyoutBehaviorObserver
         Told.Add(behavior);
         var leftLocked = _last == FlyoutBehavior.Locked && behavior == FlyoutBehavior.Flyout;
         _last = behavior;
-        if (behavior == FlyoutBehavior.Locked) Force(true);
+        if (ClosesWheneverTold) Force(false);
+        else if (behavior == FlyoutBehavior.Locked) Force(true);
         else if (behavior == FlyoutBehavior.Disabled) Force(false);
         else if (_android && leftLocked) Force(false);
     }
@@ -65,18 +73,22 @@ public class ShellFlyoutPresentationTests
     {
         public Action<FlyoutBehavior?> SetBehavior = null!;
         public Action<string> SetSelected = null!;
+        public Action<bool> SetExtra = null!;
 
         public override Element Render()
         {
             var (behavior, setBehavior) = UseState(Props.Behavior);
             var (selected, setSelected) = UseState(Props.Selected);
             var (presented, setPresented) = UseState(Props.Presented);
+            var (extra, setExtra) = UseState(false);
             SetBehavior = setBehavior;
             SetSelected = setSelected;
+            SetExtra = setExtra;
             Props.Expose(this);
             var shell = Shell(selected, setSelected,
                 FlyoutItem("Flyout item", ShellTab("a", "A", Page("A", Label("a")))),
-                TabBar(ShellTab("t", "T", Page("T", Label("t")))));
+                TabBar(ShellTab("t", "T", Page("T", Label("t")))),
+                extra ? FlyoutItem("Extra", ShellTab("x", "X", Page("X", Label("x")))) : null);
             // The callback accepts whatever it is given: a report would change the declaration.
             if (presented is { } p) shell = shell.FlyoutIsPresented(p, v => { Props.Reports.Add(v); setPresented(v); });
             return behavior is { } b ? shell.FlyoutBehavior(b) : shell;
@@ -202,6 +214,29 @@ public class ShellFlyoutPresentationTests
         Assert.True(lab.Shell.FlyoutIsPresented);
         Assert.Equal(1, writes());
         Assert.Empty(lab.Reports);
+    }
+
+    [Theory]
+    [InlineData("controls")]
+    [InlineData("direct")]
+    public void APresentationChangeMauiRaisesInsideReactorsProjection_IsAnEcho_AndTheDeclarationIsReapplied(string registry)
+    {
+        var lab = Mount(registry, null, presented: true);
+        var platform = lab.Appear(android: true);
+        Assert.True(lab.Shell.FlyoutIsPresented);
+        platform.ClosesWheneverTold = true;
+
+        // A new flyout item staged, then selected: MAUI is told inside Reactor's SyncSlots, the effective
+        // behavior staying Flyout throughout.
+        lab.App.SetExtra(true);
+        lab.Host.Scheduler.Drain();
+        platform.Told.Clear();
+        lab.Select("x");
+        Assert.Equal("x", lab.Shell.ShownKey());
+        Assert.NotEmpty(platform.Told);
+        Assert.All(platform.Told, b => Assert.Equal(FlyoutBehavior.Flyout, b));
+        Assert.Empty(lab.Reports);
+        Assert.True(lab.Shell.FlyoutIsPresented);
     }
 
     [Theory]
