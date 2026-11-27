@@ -205,6 +205,21 @@ internal sealed class ItemsHost
             if (cell.BindingContext is { } bound && !replaced.Contains(bound)) cell.Render();
     }
 
+    /// <summary>The cells the platform created, for reading which one it shows (spec 070 §5.4).</summary>
+    internal IEnumerable<ReactorCell> Cells => _cells;
+
+    /// <summary>Re-renders every realized cell with its current item (no change is published).</summary>
+    public void RenderRealized() => RenderKept(new HashSet<object>(ReferenceEqualityComparer.Instance));
+
+    /// <summary>Whether syncing <paramref name="items"/> would change the native list: a key added, removed or moved, or an item replaced.</summary>
+    public bool Differs(IReadOnlyList<object?> items, Func<object?, string> keyOf)
+    {
+        if (items.Count != Items.Count) return true;
+        for (var i = 0; i < items.Count; i++)
+            if (Items[i].Key != keyOf(items[i]) || !Equals(Items[i].Item, items[i])) return true;
+        return false;
+    }
+
     public ItemBox? Find(string? key) => key is not null && _byKey.TryGetValue(key, out var found) ? found.Box : null;
 
     public (ItemBox Box, GroupBox? Group)? FindWithGroup(string? key) =>
@@ -528,8 +543,17 @@ internal sealed class CollectionViewHandler : ViewHandler<CollectionViewElement,
 internal sealed class ReactorCarouselView : MauiCarouselView
 {
     public ItemsHost Host = null!;
+    public CarouselPositionController Controller = null!;
+
+    /// <summary>The element whose items and layout MAUI has (spec 070 §5.4 rule 3: published only at rest).</summary>
+    public CarouselViewElement? Published;
 }
 
+/// <summary>
+/// The carousel (spec 070 §5). Its position is controlled by <see cref="CarouselPositionController"/>:
+/// MAUI's <c>Position</c> is written once, before the handler exists; later declarations scroll there
+/// at rest, and the item the platform rests on is reported when it differs.
+/// </summary>
 internal sealed class CarouselViewHandler : ViewHandler<CarouselViewElement, ReactorCarouselView>
 {
     protected override ReactorCarouselView Create(HandlerContext<CarouselViewElement> context, CarouselViewElement element)
@@ -539,38 +563,111 @@ internal sealed class CarouselViewHandler : ViewHandler<CarouselViewElement, Rea
         view.Host = host;
         view.ItemsSource = host.Items;
         view.ItemTemplate = host.CreateDataTemplate();
-        view.PositionChanged += (_, e) =>
-        {
-            if (context.IsEchoing(view)) return;
-            context.Live?.OnPositionChanged?.Invoke(e.CurrentPosition);
-            context.RestoreAfterEvent();
-        };
+        var live = context;
+        view.Controller = new CarouselPositionController(
+            declared: () => Clamp(live.Live?.Position, host.Items.Count),
+            animated: () => live.Live?.IsScrollAnimated ?? true,
+            writeSuppressed: write => live.WriteSuppressed(view, write),
+            report: shown =>
+            {
+                // The shown index is in the published items; the app's are the element's (they differ only
+                // while a transaction waits): mapped by key. An item that's gone isn't reported.
+                var key = shown < host.Items.Count ? host.Items[shown].Key : null;
+                live.PostReport(() =>
+                {
+                    if (live.Live is not { } current || key is null) return;
+                    var index = IndexOfKey(current, key);
+                    if (index >= 0) current.OnPositionChanged?.Invoke(index);
+                }, restore: true);
+            },
+            publish: () =>
+            {
+                if (live.Live is { } current) Publish(live, view, current);
+            },
+            mounted: Clamp(element.Position, element.Items.Count) ?? 0);
+        // MAUI's events are signals to look at the platform, never the reported value (rule 4).
+        view.PositionChanged += (_, _) => view.Controller.OnTrigger();
+        view.CurrentItemChanged += (_, _) => view.Controller.OnTrigger();
+        view.Scrolled += (_, _) => view.Controller.OnTrigger();
+        view.ScrollToRequested += (_, _) => view.Controller.OnScrollToRequested();
+        view.HandlerChanged += (_, _) => view.Controller.Port = view.Handler is null ? null : CarouselPorts.Create(view);
         return view;
     }
 
-    protected override void Apply(HandlerContext<CarouselViewElement> context, ReactorCarouselView view, CarouselViewElement? previous, CarouselViewElement next)
+    private static int IndexOfKey(CarouselViewElement element, string key)
     {
-        var template = next.ItemTemplate;
-        view.Host.Template = (item, _) => template(item);
-        if (view.Loop != next.Loop) view.Loop = next.Loop;
-        Props.Set(view, MauiCarouselView.PeekAreaInsetsProperty, previous?.PeekAreaInsets, next.PeekAreaInsets);
-        // The default carousel layout is a shared static instance, so spacing gets a layout of its own.
-        if (previous is null || previous.ItemSpacing != next.ItemSpacing)
-        {
-            view.ItemsLayout = new LinearItemsLayout(ItemsLayoutOrientation.Horizontal)
-            {
-                SnapPointsType = SnapPointsType.MandatorySingle,
-                SnapPointsAlignment = SnapPointsAlignment.Center,
-                ItemSpacing = next.ItemSpacing,
-            };
-        }
-
-        context.WriteSuppressed(view, () =>
-        {
-            if (!ReferenceEquals(previous, next)) view.Host.Sync(next.Items, next.ItemKey);
-            if (view.Position != next.Position) view.Position = next.Position;
-        });
+        for (var i = 0; i < element.Items.Count; i++)
+            if (element.ItemKey(element.Items[i]) == key) return i;
+        return -1;
     }
 
-    public override void Unmount(ReactorCarouselView control) => control.Host.UnmountAll();
+    /// <summary>The declaration clamped to the items: <see langword="null"/> for none.</summary>
+    internal static int? Clamp(int? position, int count) =>
+        position is not { } p || count == 0 ? null : Math.Clamp(p, 0, count - 1);
+
+    protected override void Apply(HandlerContext<CarouselViewElement> context, ReactorCarouselView view, CarouselViewElement? previous, CarouselViewElement next)
+    {
+        var host = view.Host;
+        host.Template = next.ItemTemplate;
+        var currentKey = Clamp(next.Position, next.Items.Count) is { } at ? next.ItemKey(next.Items[at]) : null;
+        host.StateOf = key => new ItemState(false) { IsCurrent = key == currentKey };
+
+        if (previous is null)
+        {
+            // Mount, before the handler: the platform starts at the declared position (§5.1).
+            Publish(context, view, next);
+            context.WriteSuppressed(view, () => view.Position = Clamp(next.Position, next.Items.Count) ?? 0);
+            return;
+        }
+        if (ReferenceEquals(previous, next))
+        {
+            // A restore after a report: project the declaration.
+            view.Controller.Commit(transaction: false);
+            return;
+        }
+        var transaction = Differs(view, next);
+        // Without a transaction, syncing only re-renders cells; with one, cells re-render now and the
+        // items are published at rest (rule 3).
+        if (!transaction) context.WriteSuppressed(view, () => host.Sync(next.Items, next.ItemKey));
+        else host.RenderRealized();
+        view.Controller.Commit(transaction);
+    }
+
+    private static bool Differs(ReactorCarouselView view, CarouselViewElement next)
+    {
+        var published = view.Published!;
+        return published.Loop != next.Loop
+            || !Equals(published.PeekAreaInsets, next.PeekAreaInsets)
+            || published.ItemSpacing != next.ItemSpacing
+            || view.Host.Differs(next.Items, next.ItemKey);
+    }
+
+    /// <summary>Gives MAUI the element's items and layout, in the echo scope.</summary>
+    private static void Publish(HandlerContext<CarouselViewElement> context, ReactorCarouselView view, CarouselViewElement element)
+    {
+        var previous = view.Published;
+        context.WriteSuppressed(view, () =>
+        {
+            if (view.Loop != element.Loop) view.Loop = element.Loop;
+            Props.Set(view, MauiCarouselView.PeekAreaInsetsProperty, previous?.PeekAreaInsets, element.PeekAreaInsets);
+            // The default carousel layout is a shared static instance, so spacing gets a layout of its own.
+            if (previous is null || previous.ItemSpacing != element.ItemSpacing)
+            {
+                view.ItemsLayout = new LinearItemsLayout(ItemsLayoutOrientation.Horizontal)
+                {
+                    SnapPointsType = SnapPointsType.MandatorySingle,
+                    SnapPointsAlignment = SnapPointsAlignment.Center,
+                    ItemSpacing = element.ItemSpacing,
+                };
+            }
+            view.Host.Sync(element.Items, element.ItemKey);
+        });
+        view.Published = element;
+    }
+
+    public override void Unmount(ReactorCarouselView control)
+    {
+        control.Controller.Retire();
+        control.Host.UnmountAll();
+    }
 }

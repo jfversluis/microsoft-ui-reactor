@@ -404,9 +404,19 @@ public static class Factories
         };
     }
 
+    /// <summary>A carousel whose position is controlled (spec 070 §5): reported at rest, written at rest.</summary>
     public static CarouselViewElement CarouselView<T>(
         IReadOnlyList<T> items, Func<T, string> key, Func<T, Element?> itemTemplate, int position, Action<int>? onPositionChanged = null) =>
-        new(new ItemsAdapter<T>(items), item => key((T)item!), item => itemTemplate((T)item!), position, onPositionChanged);
+        new(new ItemsAdapter<T>(items), item => key((T)item!), (item, _) => itemTemplate((T)item!), position, onPositionChanged);
+
+    /// <summary>A carousel whose template also gets the item's <see cref="ItemState"/> (<c>IsCurrent</c>: the declared position).</summary>
+    public static CarouselViewElement CarouselView<T>(
+        IReadOnlyList<T> items, Func<T, string> key, Func<T, ItemState, Element?> itemTemplate, int position, Action<int>? onPositionChanged = null) =>
+        new(new ItemsAdapter<T>(items), item => key((T)item!), (item, state) => itemTemplate((T)item!, state), position, onPositionChanged);
+
+    /// <summary>Page indicators whose position is controlled; link them to a carousel through app state.</summary>
+    public static IndicatorViewElement IndicatorView(int count, int position, Action<int>? onPositionChanged = null) =>
+        new(count, position, onPositionChanged);
 
     private static ImageSource ToImageSource(string source) =>
         Uri.TryCreate(source, UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
