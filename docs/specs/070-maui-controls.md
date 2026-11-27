@@ -2693,10 +2693,10 @@ No pending claim of a T-to-R type may remain at 4c-3b's gate, so a find can't be
 | B1. `DirectCheckBox` remapped its color on every render (a new paint per render, compared by reference) | the matrix's equal-render step (`CheckBoxElement.Color`, direct) | compared by color | K8 |
 | B2. A date picker's range moving later kept its old minimum (MAUI refuses a minimum after the current maximum) | `RowExtrasTests.DatePicker_TheRangeAndTheDate_ChangedInOneRender_InEitherDirection` | the maximum written first when the new minimum is past it | B2 |
 | B3. The same for a stepper's range (`Range.Write`, shared with the slider) | `RowExtrasTests.Stepper_MovesToADisjointRange_InEitherDirection` | the same order in `Range.Write` | B3 |
-| B4. Android: a cleared progress bar color stayed drawn (MAUI 11 sets a tint list and clears a color filter) | `ProgressBar_Platform`, rendered pixels | `ProgressColorClear` (Android): when a color MAUI applied is cleared, the bar's own tint list, or the theme's activated color, comes back. Only on Reactor's bars (review of `bebd280a`): the Controls registry renders a `ReactorProgressBar` subclass, and it and `DirectProgressBar` register the mapping wrapper from their static constructors; any other bar keeps MAUI's behavior (`ProgressBar_APlainMauiBarKeepsMausBehavior`) | DM1, DM7, DM8 |
+| B4. Android: a cleared progress bar color stayed drawn (MAUI 11 sets a tint list and clears a color filter) | `ProgressBar_Platform`, rendered pixels | `ProgressColorClear` (Android): when a color MAUI applied is cleared, the bar's own tint list, or the theme's activated color, comes back. Only on Reactor's bars (reviews of `bebd280a` and `4d607606`): the Controls registry renders MAUI's own `ProgressBar`, marked as Reactor's in a weak table when it is created (a subclass broke implicit `ProgressBar` styles, `AnImplicitProgressBarStyle_AppliesToReactorsProgressBar`), and `DirectProgressBar` registers the wrapper from its static constructor; any other bar keeps MAUI's behavior (`ProgressBar_APlainMauiBarKeepsMausBehavior`) | DM1, DM7, DM8, DM9 |
 | B5. A split flyout never loaded (§4.14.1) | the characterization | §4.14.3 | F1 to F8, DM2, DM6 |
 | B6. A retired toolbar item ran the action now at its index | the characterization | §4.14.4 | T1, DM3 |
-| B7. A declared date outside the picker's range was rewritten on every render (compared with the unclamped declaration) | review of `bebd280a` (the test couldn't see it: MAUI clamps to the same value); a write seam on the handler | compared with the declaration clamped to the view's range; input is still restored | B7, B7b |
+| B7. A declared date outside the picker's range, or with a time of day, was rewritten on every render (compared with the declaration as declared) | reviews of `bebd280a` and `4d607606` (the test couldn't see it: MAUI coerces to the same value); a write seam on the handler, whose tests run in a non-parallel collection | compared with the declaration as MAUI coerces it, the day clamped to the view's range; input is still restored | B7, B7b, B8 |
 
 **Deviations from §4.14, and why:**
 
@@ -2733,7 +2733,7 @@ No pending claim of a T-to-R type may remain at 4c-3b's gate, so a find can't be
 **Census numbers.** Pending before 4c-3b: 348 (one phase). After: 145, all frozen later-phase keys
 (4c-3c 137, 4c-4 8); none of groups T to R. Types: 58 (unchanged).
 
-**Tests.** Headless `Reactor.Maui.Tests`: 1083 (686 before). Engine: 80. Device, full suites: Mac
+**Tests.** Headless `Reactor.Maui.Tests`: 1085 (686 before). Engine: 80. Device, full suites: Mac
 Catalyst 198 passed, 18 skipped; iOS (iPhone simulator) 195 passed, 21 skipped; Android (emulator)
 198 passed, 18 skipped (before: 174/7, 174/7, 176/5; the new skips are the iPad-, Catalyst- or
 Android-only fixtures). iPad simulator (`222A93E8-ACFB-4F63-BB9F-9553F0E6A3EB`), the flyout, toolbar
@@ -2767,8 +2767,11 @@ touched the file; all red but where said):
   (F10b), and the one writer without its split guard (F11); the date picker compared with the
   unclamped declaration (B7) or never restoring input (B7b); the check box always remapping its stored
   color (K8, on the new code).
+- Review of `4d607606`: the date's time of day kept (B8); the subclass restored (the implicit style
+  test: height −1 instead of 27).
 - Device: the progress clear not completed (DM1, Android), the scoping gate removed (DM7, Android: the
-  plain MAUI bar was "fixed" too) and the Controls bar not registering (DM8, Android), a write while split (DM2, Mac Catalyst: the
+  plain MAUI bar was "fixed" too), the Controls bar not registering (DM8, Android; with the subclass)
+  and the ownership marker dropped (DM9, Android), a write while split (DM2, Mac Catalyst: the
   page never loads), the toolbar identity removed (DM3, iPhone), the direct switch's track not
   remapped (DM4, Android), the graphics view not invalidated (DM5, iPad), report while split (DM6,
   iPad: MAUI's own `true` at appearing reported).
