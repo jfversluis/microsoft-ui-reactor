@@ -138,6 +138,7 @@ internal static class ViewApplier
         if (!ReferenceEquals(p, n))
         {
             if (previous is null && n.AutomationId is { } automationId) view.AutomationId = automationId;
+            else if (previous is not null) AutomationIds.WarnIfChanged(view, p.AutomationId, n.AutomationId, "View.AutomationId");
 
             Props.Set(view, View.MarginProperty, p.Margin, n.Margin);
             Props.Set(view, VisualElement.WidthRequestProperty, p.Width, n.Width);

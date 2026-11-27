@@ -299,7 +299,9 @@ internal sealed class ReactorCell : ContentView
         catch (Exception error)
         {
             // Called while the platform binds the cell: thrown, it would escape into the platform's cell
-            // realization rather than reach the boundaries above the list.
+            // realization rather than reach the boundaries above the list. A recycled cell lets go of the
+            // tree of the item it showed before, which it no longer shows.
+            Unmount();
             _host.ReportError(error);
             return;
         }

@@ -155,6 +155,7 @@ public abstract class DirectView : IView, IVisualTreeElement
         var n = next ?? ViewModifiers.Empty;
         if (ReferenceEquals(p, n)) return;
         if (previous is null && n.AutomationId is { } automationId) AutomationId = automationId;
+        else if (previous is not null) Handlers.AutomationIds.WarnIfChanged(this, p.AutomationId, n.AutomationId, "View.AutomationId");
 
         var measure = false;
         measure |= Set(Margin, n.Margin ?? default, v => Margin = v, nameof(IView.Margin));

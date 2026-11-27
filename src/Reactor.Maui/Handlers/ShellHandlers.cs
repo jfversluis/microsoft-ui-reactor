@@ -75,7 +75,6 @@ internal sealed class ReactorShell : Shell, IFlyoutBehaviorObserver
         var platform = new PlatformShellTransitions(Dispatcher);
         Turns = platform;
         Transitions = platform;
-        Defer = work => Dispatcher.Dispatch(work);
         // Registered before the platform's observers, so it is told of every effective behavior first.
         ((IShellController)this).AddFlyoutBehaviorObserver(this);
     }
@@ -86,8 +85,11 @@ internal sealed class ReactorShell : Shell, IFlyoutBehaviorObserver
     /// <summary>Runs a write with the Shell's change events suppressed as echoes (the handler's echo guard).</summary>
     internal Action<Action> Suppress { get; set; } = static work => work();
 
-    /// <summary>Posts to the next dispatcher turn; tests replace it.</summary>
-    internal Action<Action> Defer { get; set; }
+    /// <summary>
+    /// Posts work to the root's scheduler (the next dispatcher turn) as the handler's
+    /// <c>PostReport</c>: skipped once unmounted, its exceptions routed to the error boundaries.
+    /// </summary>
+    internal Action<Action> Defer { get; set; } = static _ => { };
 
     /// <summary>
     /// Whether leaving a <c>Disabled</c> behavior re-projects a pane that should show (locked, or a flyout
@@ -100,10 +102,12 @@ internal sealed class ReactorShell : Shell, IFlyoutBehaviorObserver
     internal Func<bool> DrawerShows { get; set; } = static () => false;
 
     private int _projecting;
-    private bool _committing;
     private FlyoutBehavior? _presentedUnder;
 
-    /// <summary>The behavior MAUI applies: the root's, else the current item's (a tab bar has none).</summary>
+    /// <summary>
+    /// The behavior MAUI applies: the nearest set on the current page, its content, section or item,
+    /// else the root's, else the item's default (a flyout item has a flyout, a tab bar none).
+    /// </summary>
     internal FlyoutBehavior EffectiveBehavior => ((IFlyoutView)this).FlyoutBehavior;
 
     /// <summary>
@@ -114,15 +118,16 @@ internal sealed class ReactorShell : Shell, IFlyoutBehaviorObserver
     internal bool PresentationIsPlatforms =>
         EffectiveBehavior != FlyoutBehavior.Flyout || (_presentedUnder is { } seen && seen != FlyoutBehavior.Flyout);
 
-    /// <summary>Starts the Shell's commit: the presentation is applied once its staging has finished.</summary>
-    internal void BeginCommit() => _committing = true;
+    /// <summary>Whether a projection is running.</summary>
+    internal bool Projecting => _projecting > 0;
 
     /// <summary>
     /// Runs Reactor's projection onto the Shell (its properties, items, selection or flyout slots) as one
-    /// echo scope: MAUI's presentation writes it triggers are not the user's. When the outermost scope
-    /// closes outside a commit, or the commit's last one closes, the presentation policy runs.
+    /// echo scope: MAUI's presentation writes it triggers are not the user's. The callers apply the
+    /// presentation policy (<see cref="Present"/>) once the staging has finished: at the end of
+    /// <c>SyncSlots</c>, after a restore, and after a tab bar's or tab's own staging.
     /// </summary>
-    internal void Project(Action work, bool endsCommit = false)
+    internal void Project(Action work)
     {
         _projecting++;
         try
@@ -132,9 +137,7 @@ internal sealed class ReactorShell : Shell, IFlyoutBehaviorObserver
         finally
         {
             _projecting--;
-            if (endsCommit) _committing = false;
         }
-        if (_projecting == 0 && !_committing) Present();
     }
 
     /// <summary>
@@ -387,9 +390,10 @@ internal sealed class ReactorShell : Shell, IFlyoutBehaviorObserver
     internal static void Stage<T>(IList<T> actual, IReadOnlyList<T> desired, ReactorShell? shell, Func<T?> current) where T : BaseShellItem
     {
         // A tab bar's or tab's own sync stages through the Shell outside its commit: the same projection.
-        if (shell is { _projecting: 0 })
+        if (shell is { Projecting: false })
         {
             shell.Project(() => Stage(actual, desired, shell, current));
+            shell.Present();
             return;
         }
         var added = false;
@@ -452,6 +456,7 @@ internal sealed class ShellHandler : Reactor.Hosting.IElementHandler<ShellElemen
         shell.Post = node.Root.Post;
         shell.RequestRestore = context.RestoreAfterEvent;
         shell.Suppress = work => context.WriteSuppressed(shell, work);
+        shell.Defer = work => context.PostReport(work);
         shell.DrawerShows = () => ShellNatives.DrawerShows(shell);
         shell.PropertyChanged += (_, e) =>
         {
@@ -461,17 +466,16 @@ internal sealed class ShellHandler : Reactor.Hosting.IElementHandler<ShellElemen
             live.OnFlyoutIsPresentedChanged?.Invoke(shell.FlyoutIsPresented);
             context.RestoreAfterEvent();
         };
-        shell.BeginCommit();
+        // The presentation is applied at the end of SyncSlots, once the items are staged.
         shell.Project(() => Apply(shell, null, element));
         return shell;
     }
 
     public void Update(HandlerContext<ShellElement> context, ShellElement oldElement, ShellElement newElement, ReactorShell control)
     {
-        // A render's commit ends in SyncSlots, after the items and selection are staged; a restore (the
-        // same element) syncs nothing, so its own projection ends it.
+        // A render's presentation is applied at the end of SyncSlots, after the items and selection are
+        // staged; a restore (the same element) syncs nothing, so it is applied here.
         var restore = ReferenceEquals(oldElement, newElement);
-        if (!restore) control.BeginCommit();
         control.Project(() =>
         {
             Apply(control, oldElement, newElement);
@@ -480,6 +484,7 @@ internal sealed class ShellHandler : Reactor.Hosting.IElementHandler<ShellElemen
             // once its items are synced.
             if (restore) control.ApplySelection();
         });
+        if (restore) control.Present();
     }
 
     public void Unmount(ReactorShell control)
@@ -515,8 +520,11 @@ internal sealed class ShellHandler : Reactor.Hosting.IElementHandler<ShellElemen
         public IReadOnlyList<Element?> GetChildren(ShellElement element) =>
             [.. element.Items, element.FlyoutHeader, element.FlyoutFooter, element.FlyoutContent];
 
-        public void SyncSlots(ShellElement element, ReactorShell shell, IReadOnlyList<IReadOnlyList<object>> slots) =>
-            shell.Project(() => Sync(element, shell, slots), endsCommit: true);
+        public void SyncSlots(ShellElement element, ReactorShell shell, IReadOnlyList<IReadOnlyList<object>> slots)
+        {
+            shell.Project(() => Sync(element, shell, slots));
+            shell.Present();
+        }
 
         private static void Sync(ShellElement element, ReactorShell shell, IReadOnlyList<IReadOnlyList<object>> slots)
         {

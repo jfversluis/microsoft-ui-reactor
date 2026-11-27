@@ -462,8 +462,9 @@ public sealed class App : Component
   `.FlyoutHeader(…)`, `.FlyoutFooter(…)`, `.FlyoutContent(…)` (elements, updated in place) and the
   appearance colors (`with { TabBarBackgroundColor = … }`).
 - **The flyout's presentation follows the behavior.** `FlyoutIsPresented` is yours only while the
-  Shell's effective behavior is `Flyout` (the root's, else the current item's: a `FlyoutItem` has a
-  flyout, a `TabBar` has none). Under `Locked` the pane is shown and under `Disabled` it is hidden, on
+  Shell's effective behavior is `Flyout`. MAUI takes the nearest behavior set on the current page,
+  its content, its section or its item, then the root's (`.FlyoutBehavior(…)`), then the item's
+  default (a `FlyoutItem` has a flyout, a `TabBar` has none). Under `Locked` the pane is shown and under `Disabled` it is hidden, on
   iOS, Mac Catalyst and Android alike: MAUI forces the presentation again at every page change, so
   Reactor writes nothing then and reports nothing. Changing the behavior or the selection never
   reports MAUI's resulting open or close as the user's; once the flyout is a flyout again, your
@@ -472,9 +473,10 @@ public sealed class App : Component
   it was created before; Reactor evens these out.)
 - **Page properties in a Shell.** `.NavBarIsVisible(…)`, `.TabBarIsVisible(…)`, `.TitleView(element)`,
   and `with { SearchHandler = …, PresentationMode = …, BackButtonBehavior = new ShellBackButton(…) }`.
-- **A page's `AutomationId`** is set once, when the page mounts (MAUI doesn't allow changing it). A
-  later change is ignored and logged once per page as a Reactor warning; to use a new id, give the
-  page a new key so it mounts again.
+- **A page's or view's `AutomationId`** (`with { AutomationId = … }` on a page, `.AutomationId(…)` on
+  a view) is set once, when it mounts: MAUI doesn't allow changing it. A later change is ignored and
+  logged once per page or view as a Reactor warning; to use a new id, give it a new key so it mounts
+  again.
 - With `using static Microsoft.UI.Reactor.Maui.Factories;`, `Shell` names the factory; write
   `Microsoft.Maui.Controls.Shell` for MAUI's type.
 

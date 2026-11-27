@@ -1,4 +1,3 @@
-using Microsoft.UI.Reactor.Core.Diagnostics;
 using Microsoft.UI.Reactor.Hosting;
 
 namespace Microsoft.UI.Reactor.Maui.Handlers;
@@ -26,23 +25,8 @@ internal sealed class PageHandler : Reactor.Hosting.IElementHandler<PageElement,
 
     public void Update(HandlerContext<PageElement> context, PageElement oldElement, PageElement newElement, ContentPage control)
     {
-        if (oldElement.AutomationId != newElement.AutomationId) WarnAutomationIdChanged(control);
+        AutomationIds.WarnIfChanged(control, oldElement.AutomationId, newElement.AutomationId, "Page.AutomationId");
         Apply(context, control, oldElement, newElement);
-    }
-
-    private static readonly BindableProperty AutomationIdWarnedProperty =
-        BindableProperty.CreateAttached("ReactorAutomationIdWarned", typeof(bool), typeof(PageHandler), false);
-
-    /// <summary>
-    /// MAUI lets an automation id be set once, so a page keeps its first; a changed declaration is
-    /// reported once per page (spec 070 §4.16.4 item 4).
-    /// </summary>
-    private static void WarnAutomationIdChanged(ContentPage page)
-    {
-        if ((bool)page.GetValue(AutomationIdWarnedProperty)) return;
-        page.SetValue(AutomationIdWarnedProperty, true);
-        DiagnosticLog.Warning(LogCategory.Reactor, "Page.AutomationId",
-            "A page's AutomationId changed after mount; MAUI sets an automation id once, so the page keeps the one it was mounted with. Give the page a new key to mount it with the new id.");
     }
 
     private static void Apply(HandlerContext<PageElement> context, ContentPage page, PageElement? previous, PageElement next)

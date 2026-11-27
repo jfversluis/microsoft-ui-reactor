@@ -38,6 +38,34 @@ public class PageAuditTests
         Assert.Equal(2, listener.Warnings.Count);
     }
 
+    [Theory]
+    [MemberData(nameof(Registries))]
+    public void AViewsAutomationId_IsSetAtMount_AndAChange_WritesNothing_AndWarnsOncePerView(string registry)
+    {
+        using var listener = new WarningListener("View.AutomationId");
+        static string? IdOf(object view) => view switch
+        {
+            IView v => v.AutomationId,
+            _ => null,
+        };
+        var host = Host(registry).Render(Label("x").AutomationId("first"));
+        var view = host.RootView!;
+        Assert.Equal("first", IdOf(view));
+
+        host.Render(Label("x").AutomationId("first"));
+        Assert.Empty(listener.Warnings); // an equal render doesn't warn
+        host.Render(Label("y").AutomationId("second"));
+        Assert.Same(view, host.RootView);
+        Assert.Equal("first", IdOf(view));
+        Assert.Single(listener.Warnings);
+        host.Render(Label("y").AutomationId("third"));
+        Assert.Single(listener.Warnings);
+
+        var other = Host(registry).Render(Label("x").AutomationId("a"));
+        other.Render(Label("x").AutomationId("b"));
+        Assert.Equal(2, listener.Warnings.Count);
+    }
+
     /// <summary>
     /// MAUI raises Appearing only for a page in an app's window and not twice in a row, and Disappearing
     /// only for an appeared page, so each trigger is re-armed, and the page's own events witness that

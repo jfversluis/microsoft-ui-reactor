@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using Microsoft.UI.Reactor.Core;
 using Microsoft.UI.Reactor.Maui.Direct;
@@ -10,15 +9,16 @@ using MauiSwipeView = Microsoft.Maui.Controls.SwipeView;
 
 namespace Microsoft.UI.Reactor.Maui.Tests;
 
-/// <summary>A stateful probe: its count survives an update in place, and its cleanup is logged.</summary>
-public sealed class StructureProbe : Component<(string Name, List<string> Log)>
-{
-    public static readonly ConcurrentDictionary<string, Action<int>> Set = [];
+/// <summary>A probe's name, its cleanup log, and the test's own table of its state setters.</summary>
+public sealed record StructureProbeProps(string Name, List<string> Log, Dictionary<string, Action<int>> Setters);
 
+/// <summary>A stateful probe: its count survives an update in place, and its cleanup is logged.</summary>
+public sealed class StructureProbe : Component<StructureProbeProps>
+{
     public override Element Render()
     {
         var (count, setCount) = UseState(0);
-        Set[Props.Name] = setCount;
+        Props.Setters[Props.Name] = setCount;
         UseEffect(() => () => Props.Log.Add($"cleanup {Props.Name}"), Array.Empty<object>());
         return Label($"{Props.Name} {count}");
     }
@@ -28,18 +28,21 @@ public sealed class StructureProbe : Component<(string Name, List<string> Log)>
 /// Spec 070 §4.16.2 group S: the structure keys' set, update in place, replace and clear, on both
 /// registries, for the facets the earlier tests didn't prove (each claim names its tests).
 /// </summary>
+[Collection("MauiShell")]
 public class StructureAuditTests
 {
+    private readonly Dictionary<string, Action<int>> _setters = [];
+
     public static TheoryData<string> Registries() => ["controls", "direct"];
 
     private static TestHost Host(string registry) =>
         new(PropertyMatrixTests.Registries.Single(r => r.Name == registry).Create());
 
-    private static Element Probe(string name, List<string> log) => Component<StructureProbe, (string, List<string>)>((name, log));
+    private Element Probe(string name, List<string> log) => Component<StructureProbe, StructureProbeProps>(new(name, log, _setters));
 
-    private static void SetState(TestHost host, string name, int value)
+    private void SetState(TestHost host, string name, int value)
     {
-        StructureProbe.Set[name](value);
+        _setters[name](value);
         host.Scheduler.Drain();
     }
 
@@ -330,8 +333,13 @@ public class StructureAuditTests
         Assert.Null(view.Content);
         Assert.Equal([$"cleanup {c}"], log);
 
+        // An item kept live up to the unmount: it invokes while mounted (the positive control), then nothing.
+        host.Render(Tree(false, [Item("fourth")]));
+        var live = (Microsoft.Maui.ISwipeItem)view.RightItems[0];
+        live.OnInvoked();
+        Assert.Equal(["second", "fourth"], calls);
         host.Root.Unmount();
-        ((Microsoft.Maui.ISwipeItem)rebuilt).OnInvoked();
-        Assert.Equal(["second"], calls);
+        live.OnInvoked();
+        Assert.Equal(["second", "fourth"], calls);
     }
 }

@@ -841,7 +841,7 @@ public class DialogTests
                 with { IsOpen = open, OnClosed = s => closed.Add($"t{v}:{s}") },
             _ => (byFactory ? Prompt($"t{v}", $"m{v}") : Prompt("-", null) with { Title = $"t{v}", Message = $"m{v}" }) with
             {
-                Accept = $"a{v}", Cancel = $"c{v}", Placeholder = $"p{v}", InitialValue = $"i{v}", MaxLength = 10 + v.Length,
+                Accept = $"a{v}", Cancel = $"c{v}", Placeholder = $"p{v}", InitialValue = $"i{v}", MaxLength = 10 + int.Parse(v),
                 Keyboard = byFactory ? Keyboard.Numeric : Keyboard.Email, IsOpen = open, OnClosed = s => closed.Add($"t{v}:{s}"),
             },
         };
@@ -851,7 +851,7 @@ public class DialogTests
     {
         DialogKind.Alert => $"alert t{v}|m{v}|a{v}|c{v}",
         DialogKind.ActionSheet => $"sheet t{v}|c{v}|d{v}|b{v}+x{v}",
-        _ => $"prompt t{v}|m{v}|a{v}|c{v}|p{v}|{10 + v.Length}|{(v == "1" ? "numeric" : "email")}|i{v}",
+        _ => $"prompt t{v}|m{v}|a{v}|c{v}|p{v}|{10 + int.Parse(v)}|{(v == "1" ? "numeric" : "email")}|i{v}",
     };
 
     private static string Signature(DialogContent content) => content switch

@@ -952,4 +952,36 @@ public class TemplateErrorTests
             var other => other?.GetType().Name,
         });
     }
+
+    /// <summary>A cell already rendering an item, rebound to one whose template throws, keeps nothing of the old item.</summary>
+    [Theory]
+    [MemberData(nameof(Cases))]
+    public void ARecycledCellRebound_ToAnItemWhoseTemplateThrows_UnmountsTheOldTree(string registry, Role role)
+    {
+        var errors = new List<Exception>();
+        var log = new List<string>();
+        var host = new TestHost(PropertyMatrixTests.Registries.Single(r => r.Name == registry).Create());
+        host.Root.UnhandledException += errors.Add;
+        Element Row(string k) => Component<StructureProbe, StructureProbeProps>(new($"{registry}-{role}-{k}", log, []));
+        var list = role == Role.Item
+            ? CollectionView(new[] { "a", "boom" }, k => k, k => k == "boom" ? Throw(k) : Row(k))
+            : CollectionView(new[] { "x", "boom" }, g => g, g => new[] { g + "1" }, i => i, i => Label(i),
+                g => role == Role.GroupHeader && g == "boom" ? Throw(g) : Row(g),
+                g => role == Role.GroupFooter && g == "boom" ? Throw(g) : Row(g));
+        host.Render(ErrorBoundary(list, e => Label("fallback: " + e.Message)));
+        var view = host.View<CollectionView>();
+        var source = (System.Collections.IList)view.ItemsSource;
+        var template = role switch { Role.GroupHeader => view.GroupHeaderTemplate, Role.GroupFooter => view.GroupFooterTemplate, _ => view.ItemTemplate };
+        var cell = Cells.Bind(template, source[0]);
+        Assert.NotEqual("<none>", Cells.Text(cell)); // positive control: the old item's tree
+        Assert.Empty(log);
+
+        cell.BindingContext = source[1];
+
+        Assert.Null(cell.Content);
+        Assert.Single(log); // the old tree's cleanup ran
+        host.Scheduler.Drain();
+        Assert.Empty(errors);
+        Assert.IsNotType<CollectionView>(host.RootView, exactMatch: false);
+    }
 }

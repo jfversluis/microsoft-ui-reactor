@@ -13,10 +13,18 @@ public sealed record ShellElement(string? Selected, Action<string>? OnSelectedCh
     public string? Title { get; init; }
     public FlyoutBehavior? FlyoutBehavior { get; init; }
 
-    /// <summary>Whether the flyout is open; <see langword="null"/> leaves it to the user.</summary>
+    /// <summary>
+    /// Whether the flyout is open; <see langword="null"/> leaves it to the user. Applies only while the
+    /// Shell's effective flyout behavior is <c>Flyout</c>: under <c>Locked</c> the pane is shown and
+    /// under <c>Disabled</c> it is hidden, as the platform decides, and the value isn't written.
+    /// </summary>
     public bool? FlyoutIsPresented { get; init; }
 
-    /// <summary>Called when the user opens or closes the flyout.</summary>
+    /// <summary>
+    /// Called when the user opens or closes the flyout, which they can only under the effective
+    /// <c>Flyout</c> behavior; the opens and closes the platform makes under <c>Locked</c> and
+    /// <c>Disabled</c>, or when the behavior changes, aren't reported.
+    /// </summary>
     public Action<bool>? OnFlyoutIsPresentedChanged { get; init; }
 
     /// <summary>Shown above the flyout's items; reconciled in place, so it updates live.</summary>
@@ -99,7 +107,11 @@ public static class ShellElementExtensions
     /// <summary>The item's icon in the flyout.</summary>
     public static FlyoutItemElement Icon(this FlyoutItemElement item, ImageSource? icon) => item with { Icon = icon };
 
-    /// <summary>Controls whether the flyout is open; <paramref name="onChanged"/> receives the user's changes.</summary>
+    /// <summary>
+    /// Controls whether the flyout is open; <paramref name="onChanged"/> receives the user's changes. Both
+    /// apply only while the effective flyout behavior is <c>Flyout</c>; under <c>Locked</c> and
+    /// <c>Disabled</c> the platform owns the presentation.
+    /// </summary>
     public static ShellElement FlyoutIsPresented(this ShellElement shell, bool isPresented, Action<bool>? onChanged) =>
         shell with { FlyoutIsPresented = isPresented, OnFlyoutIsPresentedChanged = onChanged };
 

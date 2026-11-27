@@ -65,9 +65,10 @@ internal sealed class ForcingFlyoutObserver : IFlyoutBehaviorObserver
 }
 
 /// <summary>Spec 070 §4.16.4 item 1: the Shell's flyout presentation under each behavior.</summary>
+[Collection("MauiShell")]
 public class ShellFlyoutPresentationTests
 {
-    private sealed record AppProps(FlyoutBehavior? Behavior, string Selected, bool? Presented, List<bool> Reports, Action<App> Expose);
+    private sealed record AppProps(FlyoutBehavior? Behavior, string Selected, bool? Presented, List<bool> Reports, Action<App> Expose, bool Uncontrolled = false);
 
     private sealed class App : Component<AppProps>
     {
@@ -91,6 +92,7 @@ public class ShellFlyoutPresentationTests
                 extra ? FlyoutItem("Extra", ShellTab("x", "X", Page("X", Label("x")))) : null);
             // The callback accepts whatever it is given: a report would change the declaration.
             if (presented is { } p) shell = shell.FlyoutIsPresented(p, v => { Props.Reports.Add(v); setPresented(v); });
+            else if (Props.Uncontrolled) shell = shell with { OnFlyoutIsPresentedChanged = Props.Reports.Add };
             return behavior is { } b ? shell.FlyoutBehavior(b) : shell;
         }
     }
@@ -136,12 +138,12 @@ public class ShellFlyoutPresentationTests
         }
     }
 
-    private static Lab Mount(string registry, FlyoutBehavior? behavior, bool? presented, string selected = "a")
+    private static Lab Mount(string registry, FlyoutBehavior? behavior, bool? presented, string selected = "a", bool uncontrolled = false)
     {
         var reports = new List<bool>();
         App? app = null;
         var host = new TestHost(PropertyMatrixTests.Registries.Single(r => r.Name == registry).Create());
-        host.Render(Component<App, AppProps>(new(behavior, selected, presented, reports, a => app = a)));
+        host.Render(Component<App, AppProps>(new(behavior, selected, presented, reports, a => app = a, uncontrolled)));
         host.Scheduler.Drain();
         return new Lab { Host = host, App = app!, Reports = reports };
     }
@@ -248,17 +250,43 @@ public class ShellFlyoutPresentationTests
     {
         var lab = Mount(registry, behavior, declared);
         var writes = lab.CountReactorWrites();
+        var changes = 0;
+        lab.Shell.PropertyChanged += (_, e) => { if (e.PropertyName == MauiShell.FlyoutIsPresentedProperty.PropertyName) changes++; };
         var platform = lab.Appear(android: true);
         Assert.Equal(!declared, lab.Shell.FlyoutIsPresented); // the appear-time forcing write
 
+        // The platform's own change to the declared value first (a realized drawer opened, a locked pane
+        // closed), so that the forcing write at the page change changes the value.
+        platform.Force(declared);
+        lab.Host.Scheduler.Drain();
+        Assert.Equal(declared, lab.Shell.FlyoutIsPresented);
+        var before = changes;
+
         // A page change tells the observers again; MAUI forces the presentation again.
         ((IShellController)lab.Shell).AppearanceChanged(lab.Shell.CurrentPage, false);
-        platform.Force(!declared);
         lab.Host.Scheduler.Drain();
 
-        Assert.Equal(2, platform.Told.Count); // positive control: told at appear and at the page change
-        Assert.Empty(lab.Reports);
+        Assert.Equal(2, platform.Told.Count); // told at appear and at the page change
+        Assert.Equal(before + 1, changes); // positive control: the forcing write changed the value
         Assert.Equal(!declared, lab.Shell.FlyoutIsPresented);
+        Assert.Empty(lab.Reports);
+        Assert.Equal(0, writes());
+    }
+
+    [Theory]
+    [InlineData("controls")]
+    [InlineData("direct")]
+    public void AnUncontrolledFlyout_UnderFlyout_ReportsTheUsersChangeOnce_AndKeepsIt_WritingNothing(string registry)
+    {
+        var lab = Mount(registry, FlyoutBehavior.Flyout, presented: null, uncontrolled: true);
+        var platform = lab.Appear(android: true);
+        var writes = lab.CountReactorWrites();
+
+        platform.Force(true);
+        lab.Host.Scheduler.Drain();
+
+        Assert.Equal([true], lab.Reports);
+        Assert.True(lab.Shell.FlyoutIsPresented);
         Assert.Equal(0, writes());
     }
 
@@ -305,6 +333,19 @@ public class ShellFlyoutPresentationTests
         Assert.Empty(lab.Reports);
     }
 
+    /// <summary>Counts the re-projections the Shell posts, keeping its posting (the handler's PostReport).</summary>
+    private static Func<int> CountPosts(ReactorShell shell)
+    {
+        var posts = 0;
+        var post = shell.Defer;
+        shell.Defer = work =>
+        {
+            posts++;
+            post(work);
+        };
+        return () => posts;
+    }
+
     [Theory]
     [InlineData("controls", FlyoutBehavior.Flyout, false, 2)]
     [InlineData("controls", FlyoutBehavior.Flyout, true, 0)]
@@ -318,26 +359,28 @@ public class ShellFlyoutPresentationTests
     {
         var lab = Mount(registry, FlyoutBehavior.Disabled, true);
         lab.Appear(android: true);
-        var deferred = new List<Action>();
         lab.Shell.ReprojectsLeavingDisabled = true;
-        lab.Shell.Defer = deferred.Add;
         lab.Shell.DrawerShows = () => drawerShows;
-
-        lab.Behavior(to);
-        Assert.True(lab.Shell.FlyoutIsPresented);
-        var work = Assert.Single(deferred);
-
+        var posts = CountPosts(lab.Shell);
         var writes = lab.CountReactorWrites();
-        work();
-        Assert.Equal(expectedWrites, writes());
+
+        // The render: the policy's own write (a flyout declared open), nothing re-projected in its turn.
+        lab.App.SetBehavior(to);
+        lab.Host.Scheduler.RunOne();
+        var policy = to == FlyoutBehavior.Flyout ? 1 : 0;
+        Assert.Equal(1, posts());
+        Assert.Equal(policy, writes());
+
+        // The next turn: false then true, unless the drawer already shows.
+        lab.Host.Scheduler.Drain();
+        Assert.Equal(policy + expectedWrites, writes());
         Assert.True(lab.Shell.FlyoutIsPresented);
         Assert.Empty(lab.Reports);
 
-        // No other change re-projects: Locked and back, or a closed declaration leaving Disabled.
-        deferred.Clear();
-        lab.Behavior(FlyoutBehavior.Locked);
-        lab.Behavior(FlyoutBehavior.Flyout);
-        Assert.Empty(deferred);
+        // No other change re-projects: Locked and back.
+        lab.Behavior(to == FlyoutBehavior.Locked ? FlyoutBehavior.Flyout : FlyoutBehavior.Locked);
+        lab.Behavior(to);
+        Assert.Equal(1, posts());
     }
 
     [Theory]
@@ -347,16 +390,137 @@ public class ShellFlyoutPresentationTests
     {
         var lab = Mount(registry, FlyoutBehavior.Disabled, false);
         lab.Appear(android: true);
-        var deferred = new List<Action>();
         lab.Shell.ReprojectsLeavingDisabled = true;
-        lab.Shell.Defer = deferred.Add;
+        var posts = CountPosts(lab.Shell);
         lab.Behavior(FlyoutBehavior.Flyout);
-        Assert.Empty(deferred);
+        Assert.Equal(0, posts());
         Assert.False(lab.Shell.FlyoutIsPresented);
 
         // A locked pane shows whatever is declared.
         lab.Behavior(FlyoutBehavior.Disabled);
         lab.Behavior(FlyoutBehavior.Locked);
-        Assert.Single(deferred);
+        Assert.Equal(1, posts());
+    }
+
+    [Theory]
+    [InlineData("controls")]
+    [InlineData("direct")]
+    public void TheReprojection_IsDroppedAfterUnmount_AndItsExceptionReachesTheRoot(string registry)
+    {
+        var lab = Mount(registry, FlyoutBehavior.Disabled, true);
+        lab.Appear(android: true);
+        lab.Shell.ReprojectsLeavingDisabled = true;
+        var asked = 0;
+        lab.Shell.DrawerShows = () => { asked++; return false; };
+        lab.App.SetBehavior(FlyoutBehavior.Flyout);
+        lab.Host.Scheduler.RunOne();
+        lab.Host.Root.Unmount();
+        lab.Host.Scheduler.Drain();
+        Assert.Equal(0, asked);
+
+        // Mounted, a failing check goes to the root's error route, not out of the dispatcher.
+        var failing = Mount(registry, FlyoutBehavior.Disabled, true);
+        var errors = new List<Exception>();
+        failing.Host.Root.UnhandledException += errors.Add;
+        failing.Appear(android: true);
+        failing.Shell.ReprojectsLeavingDisabled = true;
+        failing.Shell.DrawerShows = () => throw new InvalidOperationException("drawer probe failed");
+        failing.App.SetBehavior(FlyoutBehavior.Flyout);
+        failing.Host.Scheduler.Drain();
+        Assert.Equal("drawer probe failed", Assert.Single(errors).Message);
+    }
+
+    // ── Staging the Shell's own commit (spec 070 §4.16.4 item 1) ────────────
+
+    private static readonly Element FlyoutF = FlyoutItem("F", ShellTab("a", "A", Page("A", null)));
+    private static readonly Element BarT = TabBar(ShellTab("t", "T", Page("T", null)));
+
+    private sealed record StagingProps(List<bool> Reports, Action<Action<int>> Expose);
+
+    /// <summary>
+    /// Step 0 shows a tab bar (no flyout, the root unset); step 1 adds a flyout item and selects it. The
+    /// first two items are the same element instances, so only the Shell's own SyncSlots stages.
+    /// </summary>
+    private sealed class RootStagingApp : Component<StagingProps>
+    {
+        public override Element Render()
+        {
+            var (step, setStep) = UseState(0);
+            Props.Expose(setStep);
+            return Shell(step == 0 ? "t" : "x", null,
+                    FlyoutF, BarT, step == 0 ? null : FlyoutItem("X", ShellTab("x", "X", Page("X", null))))
+                .FlyoutIsPresented(true, Props.Reports.Add);
+        }
+    }
+
+    [Theory]
+    [InlineData("controls")]
+    [InlineData("direct")]
+    public void ASelectionTheShellsOwnStagingMakes_IsFollowedByThePolicy(string registry)
+    {
+        var reports = new List<bool>();
+        Action<int>? setStep = null;
+        var host = new TestHost(PropertyMatrixTests.Registries.Single(r => r.Name == registry).Create());
+        host.Render(Component<RootStagingApp, StagingProps>(new(reports, s => setStep = s)));
+        host.Scheduler.Drain();
+        var shell = host.View<ReactorShell>();
+        new ForcingFlyoutObserver(shell, android: true).Attach();
+        host.Scheduler.Drain();
+        Assert.Equal(FlyoutBehavior.Disabled, shell.EffectiveBehavior);
+        Assert.False(shell.FlyoutIsPresented);
+
+        setStep!(1);
+        host.Scheduler.Drain();
+
+        Assert.Equal("x", shell.ShownKey());
+        Assert.Equal(FlyoutBehavior.Flyout, shell.EffectiveBehavior);
+        Assert.True(shell.FlyoutIsPresented);
+        Assert.Empty(reports);
+    }
+
+    private sealed class NestedStagingApp : Component<StagingProps>
+    {
+        public override Element Render()
+        {
+            var (step, setStep) = UseState(0);
+            Props.Expose(setStep);
+            string[] tabs = step == 0 ? ["a", "b"] : ["b"];
+            string[] tops = step == 0 ? ["x", "y"] : ["y", "x"];
+            return Shell(step == 0 ? "a" : "b", null,
+                    FlyoutItem("F", [.. tabs.Select(k => ShellTab(k, k, Page(k, null)))]),
+                    FlyoutItem("G", ShellTab("t", "T", [.. tops.Select(k => ShellContent(k, k, Page(k, null)))])))
+                .FlyoutIsPresented(true, Props.Reports.Add);
+        }
+    }
+
+    /// <summary>
+    /// A flyout item's and a tab's own staging (the current tab removed, top tabs reordered) runs in the
+    /// same echo scope: a platform that closes the flyout whenever told is not reported.
+    /// </summary>
+    [Theory]
+    [InlineData("controls")]
+    [InlineData("direct")]
+    public void AnItemsOrTabsOwnStaging_IsAnEcho_AndTheDeclarationHolds(string registry)
+    {
+        var reports = new List<bool>();
+        Action<int>? setStep = null;
+        var host = new TestHost(PropertyMatrixTests.Registries.Single(r => r.Name == registry).Create());
+        host.Render(Component<NestedStagingApp, StagingProps>(new(reports, s => setStep = s)));
+        host.Scheduler.Drain();
+        var shell = host.View<ReactorShell>();
+        var platform = new ForcingFlyoutObserver(shell, android: true);
+        platform.Attach();
+        host.Scheduler.Drain();
+        Assert.True(shell.FlyoutIsPresented);
+        platform.ClosesWheneverTold = true;
+        platform.Told.Clear();
+
+        setStep!(1);
+        host.Scheduler.Drain();
+
+        Assert.Equal("b", shell.ShownKey());
+        Assert.NotEmpty(platform.Told);
+        Assert.Empty(reports);
+        Assert.True(shell.FlyoutIsPresented);
     }
 }
