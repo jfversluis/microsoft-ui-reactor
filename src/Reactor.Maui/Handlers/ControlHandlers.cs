@@ -342,12 +342,19 @@ internal sealed class DatePickerHandler : ViewHandler<DatePickerElement, MauiDat
         }
     }
 
-    private static DateTime Clamped(MauiDatePicker view, DateTime date) =>
-        view.MinimumDate is { } min && date < min ? min
-        : view.MaximumDate is { } max && date > max ? max
-        : date;
+    // As MAUI coerces it: the day (midnight), then clamped to the range.
+    private static DateTime Clamped(MauiDatePicker view, DateTime date)
+    {
+        date = date.Date;
+        return view.MinimumDate is { } min && date < min ? min
+            : view.MaximumDate is { } max && date > max ? max
+            : date;
+    }
 
-    /// <summary>Raised before each write of the range and date (a test seam: an equal write raises nothing).</summary>
+    /// <summary>
+    /// Raised before each write of the range and date (a test seam: an equal write raises nothing).
+    /// Process-wide, so the tests that set it run in a non-parallel collection.
+    /// </summary>
     internal static Action<MauiDatePicker>? DateWritten;
 }
 

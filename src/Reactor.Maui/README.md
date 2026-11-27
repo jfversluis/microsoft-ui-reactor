@@ -401,8 +401,8 @@ invokes nothing, even if the platform or your code still holds it.
 
 ### Progress bars
 
-`ProgressBar(progress)` renders a `ProgressBar` subclass on the Controls registry, so an implicit
-style for it needs `ApplyToDerivedTypes`. On Android, MAUI 11 leaves a cleared `ProgressColor` drawn
+`ProgressBar(progress)` renders MAUI's `ProgressBar` (implicit styles apply as usual). On Android,
+MAUI 11 leaves a cleared `ProgressColor` drawn
 (it sets a tint and clears a filter); Reactor completes the clear on its own progress bars, so they
 return to the theme's color. A MAUI `ProgressBar` you create yourself keeps MAUI's behavior.
 

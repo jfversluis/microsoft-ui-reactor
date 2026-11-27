@@ -96,6 +96,50 @@ public class RowExtrasTests
     }
 
     [Fact]
+    public void Stepper_MovesToADisjointRange_InEitherDirection()
+    {
+        var reports = new List<double>();
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(Stepper(5, reports.Add, 0, 10));
+        var stepper = host.View<Microsoft.Maui.Controls.Stepper>();
+
+        host.Render(Stepper(250, reports.Add, 200, 300));
+        Assert.Equal((200d, 300d, 250d), (stepper.Minimum, stepper.Maximum, stepper.Value));
+
+        host.Render(Stepper(5, reports.Add, 0, 10));
+        Assert.Equal((0d, 10d, 5d), (stepper.Minimum, stepper.Maximum, stepper.Value));
+        host.Scheduler.Drain();
+        Assert.Empty(reports);
+    }
+
+    [Fact]
+    public void AnImplicitProgressBarStyle_AppliesToReactorsProgressBar()
+    {
+        // Reactor renders MAUI's own ProgressBar (spec 070 §4.15), so an app's themed bars keep their style.
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(ProgressBar(0.5));
+        var bar = host.View<Microsoft.Maui.Controls.ProgressBar>();
+        var style = new Style(typeof(Microsoft.Maui.Controls.ProgressBar)) { Setters = { new Setter { Property = VisualElement.HeightRequestProperty, Value = 27d } } };
+        var parent = new ContentView { Resources = new ResourceDictionary { style } };
+
+        parent.Content = bar;
+
+        Assert.Equal(27d, bar.HeightRequest);
+    }
+}
+
+[CollectionDefinition(nameof(DatePickerWriteTests), DisableParallelization = true)]
+public sealed class DatePickerWriteCollection;
+
+/// <summary>
+/// When the date picker writes (spec 070 §4.15): counted through the handler's process-wide write seam,
+/// so these tests don't run alongside others.
+/// </summary>
+[Collection(nameof(DatePickerWriteTests))]
+public class DatePickerWriteTests
+{
+    private static DatePickerElement Dated(DateTime date, DateTime min, DateTime max, List<DateTime> reports) =>
+        DatePicker(date, reports.Add) with { MinimumDate = min, MaximumDate = max };
+
+    [Fact]
     public void DatePicker_ADeclaredDateOutsideTheRange_ShowsMausCoercedDate_ReportsNothing_AndAnEqualRenderWritesNothing()
     {
         var reports = new List<DateTime>();
@@ -126,18 +170,28 @@ public class RowExtrasTests
     }
 
     [Fact]
-    public void Stepper_MovesToADisjointRange_InEitherDirection()
+    public void ADeclaredDateWithATimeOfDay_IsWrittenOnce_NotOnEveryRender()
     {
-        var reports = new List<double>();
-        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(Stepper(5, reports.Add, 0, 10));
-        var stepper = host.View<Microsoft.Maui.Controls.Stepper>();
+        var reports = new List<DateTime>();
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(Dated(new(2024, 6, 1), new(2024, 1, 1), new(2024, 12, 31), reports));
+        var picker = host.View<MauiDatePicker>();
+        var writes = 0;
+        DatePickerHandler.DateWritten = view => { if (ReferenceEquals(view, picker)) writes++; };
+        try
+        {
+            host.Render(Dated(new(2024, 7, 1, 10, 30, 0), new(2024, 1, 1), new(2024, 12, 31), reports));
+            Assert.Equal(new DateTime(2024, 7, 1), picker.Date); // MAUI keeps the day
+            Assert.Equal(1, writes);
 
-        host.Render(Stepper(250, reports.Add, 200, 300));
-        Assert.Equal((200d, 300d, 250d), (stepper.Minimum, stepper.Maximum, stepper.Value));
-
-        host.Render(Stepper(5, reports.Add, 0, 10));
-        Assert.Equal((0d, 10d, 5d), (stepper.Minimum, stepper.Maximum, stepper.Value));
-        host.Scheduler.Drain();
-        Assert.Empty(reports);
+            writes = 0;
+            host.Render(Dated(new(2024, 7, 1, 10, 30, 0), new(2024, 1, 1), new(2024, 12, 31), reports));
+            Assert.Equal(0, writes);
+            host.Scheduler.Drain();
+            Assert.Empty(reports);
+        }
+        finally
+        {
+            DatePickerHandler.DateWritten = null;
+        }
     }
 }
