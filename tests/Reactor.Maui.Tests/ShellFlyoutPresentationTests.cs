@@ -525,6 +525,63 @@ public class ShellFlyoutPresentationTests
         }
     }
 
+    [Theory]
+    [InlineData("controls")]
+    [InlineData("direct")]
+    public void OneShellRender_WhoseItemsAndTabsRestage_RunsThePolicyOnce(string registry)
+    {
+        Action<int>? setStep = null;
+        var host = new TestHost(PropertyMatrixTests.Registries.Single(r => r.Name == registry).Create());
+        host.Render(Component<NestedStagingApp, StagingProps>(new([], s => setStep = s)));
+        host.Scheduler.Drain();
+        var shell = host.View<ReactorShell>();
+        var runs = shell.PolicyRuns;
+
+        setStep!(1);
+        host.Scheduler.Drain();
+
+        Assert.Equal("b", shell.ShownKey()); // positive control: the item's and the tab's staging ran
+        Assert.Equal(runs + 1, shell.PolicyRuns);
+    }
+
+    /// <summary>A flyout item rendered by its own component: its own render stages the Shell.</summary>
+    private sealed class OwnItem : Component<Action<Action<int>>>
+    {
+        public override Element Render()
+        {
+            var (step, setStep) = UseState(0);
+            Props(setStep);
+            string[] tabs = step == 0 ? ["a", "b"] : ["b"];
+            return FlyoutItem("F", [.. tabs.Select(k => ShellTab(k, k, Page(k, null)))]);
+        }
+    }
+
+    [Theory]
+    [InlineData("controls")]
+    [InlineData("direct")]
+    public void AnItemsOwnRender_OutsideTheShells_RunsThePolicy(string registry)
+    {
+        Action<int>? setStep = null;
+        var reports = new List<bool>();
+        var host = new TestHost(PropertyMatrixTests.Registries.Single(r => r.Name == registry).Create());
+        host.Render(Shell("b", null, Component<OwnItem, Action<Action<int>>>(s => setStep = s)).FlyoutIsPresented(true, reports.Add));
+        host.Scheduler.Drain();
+        var shell = host.View<ReactorShell>();
+        Assert.True(shell.FlyoutIsPresented);
+        var runs = shell.PolicyRuns;
+
+        setStep!(1);
+        host.Scheduler.Drain();
+
+        // The item's own staging ran (a tab removed) and applied the policy itself: the Shell didn't
+        // render, so no SyncSlots would have.
+        Assert.Single(shell.Items[0].Items);
+        Assert.Equal("b", shell.ShownKey());
+        Assert.True(shell.PolicyRuns > runs, $"the policy ran ({shell.PolicyRuns - runs} times)");
+        Assert.True(shell.FlyoutIsPresented);
+        Assert.Empty(reports);
+    }
+
     /// <summary>
     /// A flyout item's and a tab's own staging (the current tab removed, top tabs reordered) runs in the
     /// same echo scope: a platform that closes the flyout whenever told is not reported.

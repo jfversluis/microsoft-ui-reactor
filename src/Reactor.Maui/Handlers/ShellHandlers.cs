@@ -102,7 +102,20 @@ internal sealed class ReactorShell : Shell, IFlyoutBehaviorObserver
     internal Func<bool> DrawerShows { get; set; } = static () => false;
 
     private int _projecting;
+    private bool _rendering;
     private FlyoutBehavior? _presentedUnder;
+
+    /// <summary>How many times the presentation policy ran; tests read it.</summary>
+    internal int PolicyRuns { get; private set; }
+
+    /// <summary>
+    /// The Shell's own render begins (mount or update with a new element): its items' and tabs' staging
+    /// leaves the policy to the end of <c>SyncSlots</c>, so it runs once, against the final behavior.
+    /// </summary>
+    internal void BeginRender() => _rendering = true;
+
+    /// <summary>The Shell's own render ends (its <c>SyncSlots</c>, a restore, or an unmount).</summary>
+    internal void EndRender() => _rendering = false;
 
     /// <summary>
     /// The behavior MAUI applies: the nearest set on the current page, its content, section or item,
@@ -120,6 +133,9 @@ internal sealed class ReactorShell : Shell, IFlyoutBehaviorObserver
 
     /// <summary>Whether a projection is running.</summary>
     internal bool Projecting => _projecting > 0;
+
+    /// <summary>Whether the Shell's own render is in progress (from its update to its SyncSlots).</summary>
+    internal bool Rendering => _rendering;
 
     /// <summary>
     /// Runs Reactor's projection onto the Shell (its properties, items, selection or flyout slots) as one
@@ -147,6 +163,7 @@ internal sealed class ReactorShell : Shell, IFlyoutBehaviorObserver
     internal void Present()
     {
         if (!Mounted) return;
+        PolicyRuns++;
         var behavior = EffectiveBehavior;
         var leftDisabled = _presentedUnder == FlyoutBehavior.Disabled && behavior != FlyoutBehavior.Disabled;
         _presentedUnder = behavior;
@@ -393,7 +410,8 @@ internal sealed class ReactorShell : Shell, IFlyoutBehaviorObserver
         if (shell is { Projecting: false })
         {
             shell.Project(() => Stage(actual, desired, shell, current));
-            shell.Present();
+            // An item's or tab's own render applies the policy; within the Shell's render, SyncSlots does.
+            if (!shell.Rendering) shell.Present();
             return;
         }
         var added = false;
@@ -467,6 +485,7 @@ internal sealed class ShellHandler : Reactor.Hosting.IElementHandler<ShellElemen
             context.RestoreAfterEvent();
         };
         // The presentation is applied at the end of SyncSlots, once the items are staged.
+        shell.BeginRender();
         shell.Project(() => Apply(shell, null, element));
         return shell;
     }
@@ -476,6 +495,9 @@ internal sealed class ShellHandler : Reactor.Hosting.IElementHandler<ShellElemen
         // A render's presentation is applied at the end of SyncSlots, after the items and selection are
         // staged; a restore (the same element) syncs nothing, so it is applied here.
         var restore = ReferenceEquals(oldElement, newElement);
+        // A restore runs after renders have finished, so it also ends one a throw may have left open.
+        if (restore) control.EndRender();
+        else control.BeginRender();
         control.Project(() =>
         {
             Apply(control, oldElement, newElement);
@@ -489,6 +511,7 @@ internal sealed class ShellHandler : Reactor.Hosting.IElementHandler<ShellElemen
 
     public void Unmount(ReactorShell control)
     {
+        control.EndRender();
         control.Mounted = false;
         control.ReportSelected = null;
     }
@@ -522,7 +545,14 @@ internal sealed class ShellHandler : Reactor.Hosting.IElementHandler<ShellElemen
 
         public void SyncSlots(ShellElement element, ReactorShell shell, IReadOnlyList<IReadOnlyList<object>> slots)
         {
-            shell.Project(() => Sync(element, shell, slots));
+            try
+            {
+                shell.Project(() => Sync(element, shell, slots));
+            }
+            finally
+            {
+                shell.EndRender();
+            }
             shell.Present();
         }
 

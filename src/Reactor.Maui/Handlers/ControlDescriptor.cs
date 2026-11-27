@@ -142,7 +142,7 @@ public sealed class ControlDescriptor<TElement, TView> : Reactor.Hosting.IElemen
     {
         var view = _create(element);
         foreach (var entry in _entries) entry.Mount(view, element);
-        ViewApplier.Apply(context, view, null, element.Modifiers);
+        ViewApplier.Apply(context, view, null, element.Modifiers, mounting: true);
         foreach (var entry in _entries) entry.Wire(context, view);
         return view;
     }
@@ -150,7 +150,7 @@ public sealed class ControlDescriptor<TElement, TView> : Reactor.Hosting.IElemen
     void Reactor.Hosting.IElementHandler<TElement, TView>.Update(HandlerContext<TElement> context, TElement oldElement, TElement newElement, TView control)
     {
         foreach (var entry in _entries) entry.Update(context, control, oldElement, newElement);
-        ViewApplier.Apply(context, control, oldElement.Modifiers, newElement.Modifiers);
+        ViewApplier.Apply(context, control, oldElement.Modifiers, newElement.Modifiers, mounting: false);
     }
 
     void Reactor.Hosting.IElementHandler<TElement, TView>.Unmount(TView control) => _unmount?.Invoke(control);

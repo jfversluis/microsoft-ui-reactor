@@ -16,7 +16,7 @@ internal abstract class ViewHandler<TElement, TView> : Reactor.Hosting.IElementH
     {
         var view = Create(context, element);
         Apply(context, view, null, element);
-        ViewApplier.Apply(context, view, null, element.Modifiers);
+        ViewApplier.Apply(context, view, null, element.Modifiers, mounting: true);
         AfterModifiers(context, view, element);
         return view;
     }
@@ -24,7 +24,7 @@ internal abstract class ViewHandler<TElement, TView> : Reactor.Hosting.IElementH
     public void Update(HandlerContext<TElement> context, TElement oldElement, TElement newElement, TView control)
     {
         Apply(context, control, oldElement, newElement);
-        ViewApplier.Apply(context, control, oldElement.Modifiers, newElement.Modifiers);
+        ViewApplier.Apply(context, control, oldElement.Modifiers, newElement.Modifiers, mounting: false);
         AfterModifiers(context, control, newElement);
     }
 
@@ -130,15 +130,19 @@ internal static class ViewApplier
 
     private static readonly ConditionalWeakTable<View, GestureState> Gestures = new();
 
-    public static void Apply<TElement>(HandlerContext<TElement> context, View view, ViewModifiers? previous, ViewModifiers? next)
+    /// <param name="mounting">
+    /// Whether the view is being mounted: an update can pass <see langword="null"/> modifiers too (an
+    /// element without any), so <paramref name="previous"/> doesn't tell.
+    /// </param>
+    public static void Apply<TElement>(HandlerContext<TElement> context, View view, ViewModifiers? previous, ViewModifiers? next, bool mounting)
         where TElement : ViewElement
     {
         var p = previous ?? ViewModifiers.Empty;
         var n = next ?? ViewModifiers.Empty;
         if (!ReferenceEquals(p, n))
         {
-            if (previous is null && n.AutomationId is { } automationId) view.AutomationId = automationId;
-            else if (previous is not null) AutomationIds.WarnIfChanged(view, p.AutomationId, n.AutomationId, "View.AutomationId");
+            if (mounting) { if (n.AutomationId is { } automationId) view.AutomationId = automationId; }
+            else AutomationIds.WarnIfChanged(view, p.AutomationId, n.AutomationId, "View.AutomationId");
 
             Props.Set(view, View.MarginProperty, p.Margin, n.Margin);
             Props.Set(view, VisualElement.WidthRequestProperty, p.Width, n.Width);

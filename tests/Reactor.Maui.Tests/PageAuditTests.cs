@@ -67,6 +67,30 @@ public class PageAuditTests
     }
 
     /// <summary>
+    /// An element without modifiers between two with ids: the update passes null modifiers, which is
+    /// not a mount (MAUI throws when an id is set twice; a direct view would overwrite it).
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Registries))]
+    public void AViewsAutomationId_ThroughAnElementWithoutModifiers_IsNotSetAgain(string registry)
+    {
+        using var listener = new WarningListener("View.AutomationId");
+        var errors = new List<Exception>();
+        var host = Host(registry);
+        host.Root.UnhandledException += errors.Add;
+        host.Render(Label("x").AutomationId("a"));
+        var view = (IView)host.RootView!;
+
+        host.Render(Label("x"));
+        host.Render(Label("x").AutomationId("b"));
+
+        Assert.Empty(errors);
+        Assert.Same(view, host.RootView);
+        Assert.Equal("a", view.AutomationId);
+        Assert.Single(listener.Warnings);
+    }
+
+    /// <summary>
     /// MAUI raises Appearing only for a page in an app's window and not twice in a row, and Disappearing
     /// only for an appeared page, so each trigger is re-armed, and the page's own events witness that
     /// every trigger fired, after Reactor's unmount too.

@@ -67,14 +67,14 @@ public static class DirectHandlers
             var view = Create(element);
             Wire(context, view);
             Apply(context, view, null, element);
-            view.ApplyModifiers(null, element.Modifiers);
+            view.ApplyModifiers(null, element.Modifiers, mounting: true);
             return view;
         }
 
         public void Update(HandlerContext<TElement> context, TElement oldElement, TElement newElement, TView control)
         {
             Apply(context, control, oldElement, newElement);
-            control.ApplyModifiers(oldElement.Modifiers, newElement.Modifiers);
+            control.ApplyModifiers(oldElement.Modifiers, newElement.Modifiers, mounting: false);
         }
 
         public virtual IChildrenStrategy<TElement, TView>? Children => null;
