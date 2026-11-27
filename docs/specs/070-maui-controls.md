@@ -2927,12 +2927,13 @@ show):
      structure or page change; Reactor registers one, `IFlyoutBehaviorObserver`): when the effective
      behavior differs from the one the policy last saw, a restore is requested, so the policy runs
      again (under `Flyout`, the declaration comes back).
-   - **Android leaving a first `Disabled`** (C3): when the policy sees the effective behavior go from
-     `Disabled` to `Flyout` with `true` declared, it posts one re-projection to the next dispatcher
-     turn: if the Shell is still mounted, still `Flyout`, still declared and presented `true`, and the
-     native drawer (`Shell.Handler.PlatformView`, MAUI's `DrawerLayout`) shows no drawer, it writes
-     `false` then `true` inside the echo scope (MAUI's own open path). A drawer that is open or opening
-     is left alone, so the re-projection can't close one.
+   - **Android leaving a first `Disabled`** (C3): when the policy sees the effective behavior leave
+     `Disabled` for a pane that should show (`Locked`, or `Flyout` with `true` declared), it posts one
+     re-projection to the next dispatcher turn: if the Shell is still mounted, the pane still should
+     show, the property is `true`, and the native drawer (`Shell.Handler.PlatformView`, MAUI's
+     `DrawerLayout`) shows no drawer, it writes `false` then `true` inside the echo scope (MAUI's own
+     open path; under `Locked` it re-asserts MAUI's own value, measured to work in C3). A drawer that is
+     open or opening is left alone, so the re-projection can't close one.
    So: `Locked` shows the pane on iOS and Mac Catalyst and, as MAUI forces `true` at every page change,
    effectively on Android too; `Disabled` hides it on all three, which the platforms already did except
    Android after a realized drawer (now never written). This replaces the earlier per-platform
@@ -2948,7 +2949,8 @@ show):
    for `Disabled` → `Flyout` with `true` and skipped when the drawer shows. Mutants: the behavior write
    outside the scope, the staging outside the scope, the policy run before the staging (after `Apply`),
    the outside-change filter dropped, the observer's restore dropped, the re-projection's
-   drawer check dropped; each turns a test red.
+   drawer check dropped; each turns a test red. The re-projection is tested for both `Flyout` and
+   `Locked`, and not posted for a flyout declared closed.
 2. **Template exceptions escaped the error boundary (found by the design review).** A list's item,
    group header and group footer templates are app code that `ReactorCell.Render` calls when the
    platform binds a cell, before the cell's child root renders, so an exception there was thrown into

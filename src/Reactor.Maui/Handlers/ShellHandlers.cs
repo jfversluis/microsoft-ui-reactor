@@ -90,9 +90,9 @@ internal sealed class ReactorShell : Shell, IFlyoutBehaviorObserver
     internal Action<Action> Defer { get; set; }
 
     /// <summary>
-    /// Whether leaving a <c>Disabled</c> behavior re-projects an open flyout on the next turn: Android's
-    /// drawer, never realized under <c>Disabled</c>, ignores a presentation written in the same turn
-    /// (spec 070 §4.16.4 item 1). Tests set it.
+    /// Whether leaving a <c>Disabled</c> behavior re-projects a pane that should show (locked, or a flyout
+    /// declared open) on the next turn: Android's drawer, never realized under a first <c>Disabled</c>,
+    /// stays closed otherwise (spec 070 §4.16.4 item 1). Tests set it.
     /// </summary>
     internal bool ReprojectsLeavingDisabled { get; set; } = OperatingSystem.IsAndroid();
 
@@ -145,16 +145,24 @@ internal sealed class ReactorShell : Shell, IFlyoutBehaviorObserver
     {
         if (!Mounted) return;
         var behavior = EffectiveBehavior;
-        var leftDisabled = _presentedUnder == FlyoutBehavior.Disabled && behavior == FlyoutBehavior.Flyout;
+        var leftDisabled = _presentedUnder == FlyoutBehavior.Disabled && behavior != FlyoutBehavior.Disabled;
         _presentedUnder = behavior;
-        if (behavior != FlyoutBehavior.Flyout || DeclaredPresented is not { } declared) return;
-        if (FlyoutIsPresented != declared) Suppress(() => FlyoutIsPresented = declared);
-        if (declared && leftDisabled && ReprojectsLeavingDisabled) Defer(Reproject);
+        if (behavior == FlyoutBehavior.Flyout && DeclaredPresented is { } declared && FlyoutIsPresented != declared)
+            Suppress(() => FlyoutIsPresented = declared);
+        if (leftDisabled && ReprojectsLeavingDisabled && ShouldShow()) Defer(Reproject);
     }
+
+    /// <summary>Whether the pane should be on screen: locked, or a flyout declared open.</summary>
+    private bool ShouldShow() => EffectiveBehavior switch
+    {
+        FlyoutBehavior.Locked => true,
+        FlyoutBehavior.Flyout => DeclaredPresented == true,
+        _ => false,
+    };
 
     private void Reproject()
     {
-        if (!Mounted || EffectiveBehavior != FlyoutBehavior.Flyout || DeclaredPresented != true || !FlyoutIsPresented || DrawerShows()) return;
+        if (!Mounted || !ShouldShow() || !FlyoutIsPresented || DrawerShows()) return;
         Suppress(() =>
         {
             FlyoutIsPresented = false;

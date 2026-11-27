@@ -306,11 +306,15 @@ public class ShellFlyoutPresentationTests
     }
 
     [Theory]
-    [InlineData("controls", false, 2)]
-    [InlineData("controls", true, 0)]
-    [InlineData("direct", false, 2)]
-    [InlineData("direct", true, 0)]
-    public void LeavingDisabled_OnAndroid_ReprojectsAnOpenFlyoutOnTheNextTurn_UnlessTheDrawerShows(string registry, bool drawerShows, int expectedWrites)
+    [InlineData("controls", FlyoutBehavior.Flyout, false, 2)]
+    [InlineData("controls", FlyoutBehavior.Flyout, true, 0)]
+    [InlineData("controls", FlyoutBehavior.Locked, false, 2)]
+    [InlineData("controls", FlyoutBehavior.Locked, true, 0)]
+    [InlineData("direct", FlyoutBehavior.Flyout, false, 2)]
+    [InlineData("direct", FlyoutBehavior.Flyout, true, 0)]
+    [InlineData("direct", FlyoutBehavior.Locked, false, 2)]
+    [InlineData("direct", FlyoutBehavior.Locked, true, 0)]
+    public void LeavingDisabled_OnAndroid_ReprojectsAPaneThatShouldShow_OnTheNextTurn_UnlessTheDrawerShows(string registry, FlyoutBehavior to, bool drawerShows, int expectedWrites)
     {
         var lab = Mount(registry, FlyoutBehavior.Disabled, true);
         lab.Appear(android: true);
@@ -319,7 +323,7 @@ public class ShellFlyoutPresentationTests
         lab.Shell.Defer = deferred.Add;
         lab.Shell.DrawerShows = () => drawerShows;
 
-        lab.Behavior(FlyoutBehavior.Flyout);
+        lab.Behavior(to);
         Assert.True(lab.Shell.FlyoutIsPresented);
         var work = Assert.Single(deferred);
 
@@ -339,7 +343,7 @@ public class ShellFlyoutPresentationTests
     [Theory]
     [InlineData("controls")]
     [InlineData("direct")]
-    public void LeavingDisabled_WithTheFlyoutDeclaredClosed_ReprojectsNothing(string registry)
+    public void LeavingDisabled_WithTheFlyoutDeclaredClosed_ReprojectsNothing_ButALockedPaneIs(string registry)
     {
         var lab = Mount(registry, FlyoutBehavior.Disabled, false);
         lab.Appear(android: true);
@@ -349,5 +353,10 @@ public class ShellFlyoutPresentationTests
         lab.Behavior(FlyoutBehavior.Flyout);
         Assert.Empty(deferred);
         Assert.False(lab.Shell.FlyoutIsPresented);
+
+        // A locked pane shows whatever is declared.
+        lab.Behavior(FlyoutBehavior.Disabled);
+        lab.Behavior(FlyoutBehavior.Locked);
+        Assert.Single(deferred);
     }
 }
