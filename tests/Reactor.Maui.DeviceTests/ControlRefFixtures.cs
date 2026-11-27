@@ -40,10 +40,10 @@ public static partial class Fixtures
         new("ScrollView_ScrollToAnElement_EquivalentTrees_WithInsets", ScrollToEquivalentTrees),
         new("ScrollView_ScrollToAnElement_NotReady", ScrollToNotReady),
 
-        new("WebView_Navigations_AreAttemptedAndCompleted", WebViewNavigations),
-        new("WebView_CommandsThroughARef", WebViewCommands),
-        new("WebView_DeclaredUrlCancelled_LoadsNothing", WebViewDeclaredUrlCancelled),
-        new("WebView_RedeclaredUrl_DoesNothing", WebViewRedeclaredUrl),
+        new("WebView_Navigations_AreAttemptedAndCompleted", WebViewNavigations, WebViewLimit),
+        new("WebView_CommandsThroughARef", WebViewCommands, WebViewLimit),
+        new("WebView_DeclaredUrlCancelled_LoadsNothing", WebViewDeclaredUrlCancelled, WebViewLimit),
+        new("WebView_RedeclaredUrl_DoesNothing", WebViewRedeclaredUrl, WebViewLimit),
         new("CollectionView_RefsInItemComponents_FollowTheirCells [controls]", CollectionViewItemRefs),
     ];
 
@@ -525,13 +525,16 @@ public static partial class Fixtures
     // The process-wide count of web view pages shown, so the notes tell the first load from later ones.
     private static int s_pagesShown;
 
-    // The first web view page in a process waits for WebKit to launch its WebContent and GPU processes:
-    // WebKit logged 6.4 s for each on a freshly erased iOS simulator (page 1 loaded after 8.4 s), against
-    // 0.2-2.5 s for later pages (spec 070 §2.15); a hosted CI simulator is slower still. Later loads
-    // keep the ordinary wait.
-    private static bool s_firstPageLoaded;
-    private const int FirstPageLoadMs = 60000;
-    private const int PageLoadMs = 10000;
+    // A new web view's first page can wait for WebKit to launch a WebContent process: each WKWebView
+    // gets its own, from a prewarmed spare when one is ready, else from a launch (the first in a
+    // process also launches the GPU process). Until it is up, nothing is asked or reported. Measured
+    // (spec 070 §2.15): a launch took 6.4 s on a freshly erased iOS simulator, and a later web view
+    // whose spare wasn't ready waited 8.2 s and more than 10 s on a loaded Mac; CI's hosted simulator timed out
+    // at 10 s on its third. So every new web view's first page gets this wait; navigations inside a
+    // live web view keep the ordinary one.
+    private const int NewWebViewLoadMs = 60000;
+    // The runner's limit for a web view fixture: room for the launches of the web views it shows.
+    private const int WebViewLimit = 150;
 
     private static string PageOf(string url) => url.Contains("page2", StringComparison.Ordinal) ? "page2" : url.Contains("page1", StringComparison.Ordinal) ? "page1" : url;
 
@@ -593,19 +596,17 @@ public static partial class Fixtures
         c.Show(Web("page1.html", log, web));
         await Loaded<IWebView>(c, "web");
         log.Mark("web view loaded");
-        var first = !s_firstPageLoaded;
+        web.Current!.ProcessTerminated += (_, _) => log.Mark("the web content process terminated");
         try
         {
             await c.WaitFor(() => log.Completions.Skip(before).Contains("page1 Success"),
-                first ? "page 1 to load, the process's first web view page (WebKit launches its processes for it)" : "page 1 to load",
-                first ? FirstPageLoadMs : PageLoadMs);
+                "page 1 to load in a new web view (WebKit may launch a WebContent process for it)", NewWebViewLoadMs);
         }
         catch (CheckFailedException ex)
         {
             // Tells a slow load (asked late, or not yet) from a missed or failed completion.
             throw new CheckFailedException($"{ex.Message}; events: [{string.Join("; ", log.Timeline)}]");
         }
-        s_firstPageLoaded = true;
         Note($"web view page {shown}: page 1 loaded in {log.Now - start} ms [{string.Join("; ", log.Timeline.TakeLast(4).Select(e => System.Text.RegularExpressions.Regex.Replace(e, "file:///\\S*/", "")))}]");
         await WaitForJs(c, web, "document.title", "page1", "page 1's title", 5000);
         return web.Current!;
