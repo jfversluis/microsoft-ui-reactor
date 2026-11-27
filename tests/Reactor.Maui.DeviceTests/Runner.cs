@@ -8,7 +8,8 @@ using Microsoft.UI.Reactor.Maui.Hosting;
 namespace Reactor.Maui.DeviceTests;
 
 /// <summary>A device fixture; <paramref name="TimeoutSeconds"/> is the runner's limit for it.</summary>
-public sealed record Fixture(string Name, Func<FixtureContext, Task> Run, int TimeoutSeconds = 30);
+/// <summary>A device fixture. An <paramref name="OnDemand"/> one (a long characterization) runs only when a filter selects it.</summary>
+public sealed record Fixture(string Name, Func<FixtureContext, Task> Run, int TimeoutSeconds = 30, bool OnDemand = false);
 
 /// <summary>A failed check inside a fixture.</summary>
 public sealed class CheckFailedException(string message) : Exception(message);
@@ -148,7 +149,8 @@ public static class Runner
         var fixtures = Fixtures.All
             // "a|b" runs the fixtures matching either substring, in their usual order.
             .Where(f => string.IsNullOrEmpty(filter)
-                || filter.Split('|').Any(part => part.Length > 0 && f.Name.Contains(part, StringComparison.OrdinalIgnoreCase)))
+                ? !f.OnDemand
+                : filter.Split('|').Any(part => part.Length > 0 && f.Name.Contains(part, StringComparison.OrdinalIgnoreCase)))
             .ToList();
         var report = new List<string>();
         void Emit(string line)

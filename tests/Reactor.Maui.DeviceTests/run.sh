@@ -5,7 +5,8 @@
 #   tests/Reactor.Maui.DeviceTests/run.sh ios [simulator-udid]      (default: the booted simulator)
 #   tests/Reactor.Maui.DeviceTests/run.sh android [adb-serial]      (default: the only device)
 #
-# REACTOR_DEVICE_TEST_FILTER=<substring>[|<substring>...] runs only matching fixtures.
+# REACTOR_DEVICE_TEST_FILTER=<substring>[|<substring>...] runs only matching fixtures (and on-demand ones it names).
+# REACTOR_HOST_GESTURES=1 (iOS) tells fixtures that host-gestures.py is performing their REACTOR-GESTURE drags.
 # On Android, a fixture that logs REACTOR-KEY-BACK gets a real back key (adb shell input keyevent 4):
 # an app can't inject key events into itself.
 # The TAP report is written to artifacts/device-tests/<platform>.tap.
@@ -54,7 +55,7 @@ case "$platform" in
     dotnet build "$project" -f net11.0-ios -r "iossimulator-$arch" -c Debug
     app="$(ls -d "$here"/bin/Debug/net11.0-ios/iossimulator-"$arch"/*.app | head -1)"
     xcrun simctl install "$device" "$app"
-    SIMCTL_CHILD_REACTOR_DEVICE_TEST_FILTER="${REACTOR_DEVICE_TEST_FILTER:-}" \
+    SIMCTL_CHILD_REACTOR_DEVICE_TEST_FILTER="${REACTOR_DEVICE_TEST_FILTER:-}" SIMCTL_CHILD_REACTOR_HOST_GESTURES="${REACTOR_HOST_GESTURES:-}" \
       with_timeout xcrun simctl launch --console-pty --terminate-running-process "$device" "$app_id" > "$out/ios.log" 2>&1 || true
     extract_tap < "$out/ios.log" > "$tap"
     ;;
@@ -102,6 +103,15 @@ case "$platform" in
         *"$done_marker"*) break ;;
         *REACTOR-KEY-BACK*) "${adb_cmd[@]}" shell input keyevent 4 ;;
         *REACTOR-BRING-TO-FRONT*) "${adb_cmd[@]}" shell am start -n "$activity" > /dev/null ;;
+        *REACTOR-GESTURE*)
+          # A real touch drag from the shell: REACTOR-GESTURE <id> <x> <y> <dx> <moveMs> <holdMs> (screen pixels).
+          read -r _ gx gy gdx gmove ghold <<< "$(sed -E 's/.*REACTOR-GESTURE [0-9]+ //' <<< "$line" | tr -d '\r' | sed 's/^/x /')"
+          steps=4; script="input motionevent DOWN $gx $gy"
+          for ((i = 1; i <= steps; i++)); do script+="; input motionevent MOVE $((gx + gdx * i / steps)) $gy"; done
+          (( ghold > 0 )) && script+="; sleep $(awk "BEGIN { print $ghold / 1000 }")"
+          script+="; input motionevent UP $((gx + gdx)) $gy"
+          "${adb_cmd[@]}" shell "$script" > /dev/null 2>&1 &
+          ;;
       esac
     done
     exec 3<&-
