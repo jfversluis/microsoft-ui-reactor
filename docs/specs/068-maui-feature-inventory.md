@@ -125,7 +125,7 @@ their sources. It sets the order in §4.
 
 | Item | Status | Notes |
 |---|---|---|
-| Accessibility (semantic description, hint, heading level; AutomationId) | 🧪 | modifiers; AutomationId is exercised by every device fixture, the semantic properties by none. Checked through UIA and Appium in phase 5 |
+| Accessibility (semantic description, hint, heading level; AutomationId) | 🧪 | modifiers; AutomationId is exercised by every device fixture, the semantic properties by none. A changed AutomationId (set once by MAUI) warns once per view or page (spec 070 §4.17). Checked through UIA and Appium in phase 5 |
 | `AutomationProperties` (`IsInAccessibleTree`, `ExcludedWithChildren`) | ⬜ 4d | |
 | Window size and theme hooks | ✅ | `UseWindowSize`, `UseAppTheme` |
 | Element refs | ✅ | spec 070 §2.2–2.5 (4c-1): WinUI's `UseElementRef<T>()`, `.Ref(...)` and `TypedElementRef.Create<T>()` in `Microsoft.UI.Reactor.Input`, with `T : IView` (a Controls-typed ref makes that element a Controls view); nothing moved to the core. Bound by the engine and released on every unmount and failure path; list cells release theirs when retired. Evidence: headless `ElementRefTests`, engine `RefBindingTests`, device `CollectionView_RefsInItemComponents_*` and the focus, scroll and WebView fixtures |
