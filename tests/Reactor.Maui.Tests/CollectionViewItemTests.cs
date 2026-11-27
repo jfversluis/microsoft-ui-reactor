@@ -852,3 +852,53 @@ public class CollectionViewFeatureTests
         Assert.Throws<InvalidOperationException>(() => new CollectionView().ScrollToKey("a"));
     }
 }
+
+/// <summary>Spec 070 §4.16.4 item 2: a template's exception reaches the boundaries above the list.</summary>
+public class TemplateErrorTests
+{
+    public enum Role { Item, GroupHeader, GroupFooter }
+
+    public static TheoryData<string, Role> Cases()
+    {
+        var data = new TheoryData<string, Role>();
+        foreach (var (registry, _) in PropertyMatrixTests.Registries)
+            foreach (var role in Enum.GetValues<Role>()) data.Add(registry, role);
+        return data;
+    }
+
+    private static Element Throw(string what) => throw new InvalidOperationException($"template failed for {what}");
+
+    private static CollectionViewElement List(Role role) => role == Role.Item
+        ? CollectionView(new[] { "a", "boom" }, k => k, k => k == "boom" ? Throw(k) : Label(k))
+        : CollectionView(new[] { "x", "boom" }, g => g, g => new[] { g + "1" }, i => i, i => Label(i),
+            g => role == Role.GroupHeader && g == "boom" ? Throw(g) : Label("header " + g),
+            g => role == Role.GroupFooter && g == "boom" ? Throw(g) : Label("footer " + g));
+
+    [Theory]
+    [MemberData(nameof(Cases))]
+    public void ATemplatesException_WhenThePlatformBindsACell_ReachesTheBoundaryAboveTheList(string registry, Role role)
+    {
+        var errors = new List<Exception>();
+        var host = new TestHost(PropertyMatrixTests.Registries.Single(r => r.Name == registry).Create());
+        host.Root.UnhandledException += errors.Add;
+        host.Render(ErrorBoundary(List(role), e => Label("fallback: " + e.Message)));
+        var view = host.View<CollectionView>();
+
+        // The platform binds the healthy cell, then the failing one; neither throws into the platform.
+        var source = (System.Collections.IList)view.ItemsSource;
+        var template = role switch { Role.GroupHeader => view.GroupHeaderTemplate, Role.GroupFooter => view.GroupFooterTemplate, _ => view.ItemTemplate };
+        var healthy = Cells.Bind(template, source[0]);
+        Assert.NotEqual("<none>", Cells.Text(healthy)); // positive control: the template renders
+        var failing = Cells.Bind(template, source[1]);
+        Assert.Equal("<none>", Cells.Text(failing));
+
+        host.Scheduler.Drain();
+        Assert.Empty(errors);
+        Assert.Equal("fallback: template failed for boom", host.RootView switch
+        {
+            MauiLabel label => label.Text,
+            DirectLabel direct => direct.Text,
+            var other => other?.GetType().Name,
+        });
+    }
+}

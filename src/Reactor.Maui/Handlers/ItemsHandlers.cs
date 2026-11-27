@@ -36,10 +36,17 @@ internal sealed class ItemsHost
     private readonly HashSet<ReactorCell> _cells = [];
     private readonly Dictionary<string, (ItemBox Box, GroupBox? Group)> _byKey = [];
 
-    public ItemsHost(Func<Action<object?>, ReactorRoot> createRoot)
+    public ItemsHost(Func<Action<object?>, ReactorRoot> createRoot, Action<Exception> reportError)
     {
         _createRoot = createRoot;
+        ReportError = reportError;
     }
+
+    /// <summary>
+    /// Reports an exception of app code the list calls when the platform binds a cell (its templates), to
+    /// the error boundaries above the list, as a cell tree's own render error goes (spec 070 §4.16.4 item 2).
+    /// </summary>
+    public Action<Exception> ReportError { get; }
 
     public ObservableCollection<ItemBox> Items { get; } = [];
     public ObservableCollection<GroupBox> Groups { get; } = [];
@@ -265,26 +272,36 @@ internal sealed class ReactorCell : ContentView
         if (_host.Stopped) return;
         Element? element;
         string key;
-        switch (_role, BindingContext)
+        try
         {
-            case (CellRole.Item, ItemBox box):
-                element = _host.Template(box.Item, _host.StateOf(box.Key));
-                key = box.Key;
-                break;
-            case (CellRole.GroupHeader, GroupBox group):
-                element = _host.GroupHeaderTemplate?.Invoke(group.Group);
-                key = group.Key;
-                break;
-            case (CellRole.GroupFooter, GroupBox group):
-                element = _host.GroupFooterTemplate?.Invoke(group.Group);
-                key = group.Key;
-                break;
-            default:
-                // Retired: MAUI cleared the cell's item (iOS and Mac Catalyst's TemplatedCell2.Unbind sets
-                // it to null). Its tree unmounts, running cleanups and releasing refs; a later item mounts
-                // a fresh one, with or without ReuseItemTrees (spec 070 §2.4).
-                Unmount();
-                return;
+            switch (_role, BindingContext)
+            {
+                case (CellRole.Item, ItemBox box):
+                    element = _host.Template(box.Item, _host.StateOf(box.Key));
+                    key = box.Key;
+                    break;
+                case (CellRole.GroupHeader, GroupBox group):
+                    element = _host.GroupHeaderTemplate?.Invoke(group.Group);
+                    key = group.Key;
+                    break;
+                case (CellRole.GroupFooter, GroupBox group):
+                    element = _host.GroupFooterTemplate?.Invoke(group.Group);
+                    key = group.Key;
+                    break;
+                default:
+                    // Retired: MAUI cleared the cell's item (iOS and Mac Catalyst's TemplatedCell2.Unbind sets
+                    // it to null). Its tree unmounts, running cleanups and releasing refs; a later item mounts
+                    // a fresh one, with or without ReuseItemTrees (spec 070 §2.4).
+                    Unmount();
+                    return;
+            }
+        }
+        catch (Exception error)
+        {
+            // Called while the platform binds the cell: thrown, it would escape into the platform's cell
+            // realization rather than reach the boundaries above the list.
+            _host.ReportError(error);
+            return;
         }
         _root ??= _host.CreateRoot(native => Content = native is null ? null : Props.AsView(native));
         element ??= EmptyElement.Instance;
@@ -376,7 +393,7 @@ internal sealed class CollectionViewHandler : ViewHandler<CollectionViewElement,
     protected override ReactorCollectionView Create(HandlerContext<CollectionViewElement> context, CollectionViewElement element)
     {
         var view = new ReactorCollectionView();
-        var host = new ItemsHost(context.CreateChildRoot) { ShowsSelectionHighlight = element.ShowsSelectionHighlight };
+        var host = new ItemsHost(context.CreateChildRoot, context.ReportError) { ShowsSelectionHighlight = element.ShowsSelectionHighlight };
         view.Host = host;
         view.HeaderSlot = new SlotRoot(host, header => view.Header = header);
         view.FooterSlot = new SlotRoot(host, footer => view.Footer = footer);
@@ -516,7 +533,7 @@ internal sealed class CarouselViewHandler : ViewHandler<CarouselViewElement, Rea
     protected override ReactorCarouselView Create(HandlerContext<CarouselViewElement> context, CarouselViewElement element)
     {
         var view = new ReactorCarouselView();
-        var host = new ItemsHost(context.CreateChildRoot);
+        var host = new ItemsHost(context.CreateChildRoot, context.ReportError);
         view.Host = host;
         view.ItemsSource = host.Items;
         view.ItemTemplate = host.CreateDataTemplate();
