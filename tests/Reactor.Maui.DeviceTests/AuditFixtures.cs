@@ -25,6 +25,7 @@ public static partial class Fixtures
             new($"FlyoutPage_SplitRotated [{r.Name}]", c => FlyoutSplitRotated(c, r.Create())),
             new($"ToolbarItems_Platform [{r.Name}]", c => ToolbarPlatform(c, r.Create())),
         }),
+        new("ProgressBar_APlainMauiBarKeepsMausBehavior", PlainProgressBar),
     ];
 
     // ── Platform reads (the properties MAUI's mappers write; spec 070 §4.14.5) ──
@@ -209,6 +210,23 @@ public static partial class Fixtures
         c.Render(Tree(0.7, null));
         await c.Settle();
         SameColor(ProgressState(reference).Color, ProgressState(subject).Color, "the cleared color, as a fresh bar's");
+    }
+
+    /// <summary>
+    /// Reactor completes the color clear on its own bars only: a plain MAUI bar in the same app keeps
+    /// MAUI's behavior (on Android the cleared color stays drawn; the positive control for the scoping).
+    /// </summary>
+    private static async Task PlainProgressBar(FixtureContext c)
+    {
+        if (!OperatingSystem.IsAndroid()) throw new SkipException("the clear Reactor completes is Android's");
+        var bar = new Microsoft.Maui.Controls.ProgressBar { Progress = 0.7, ProgressColor = Colors.Red, WidthRequest = 200, HorizontalOptions = LayoutOptions.Start };
+        c.ShowNative(new VerticalStackLayout { Padding = new Thickness(16, 120, 16, 16), Children = { bar } });
+        await c.WaitFor(() => bar.Handler?.PlatformView is not null && bar.Width > 0, "the plain bar to be laid out");
+        await c.Settle(250);
+        Near(Colors.Red, ProgressState(bar).Color, "the plain bar's color");
+        bar.ProgressColor = null;
+        await c.Settle();
+        Near(Colors.Red, ProgressState(bar).Color, "the plain bar's cleared color, still drawn as MAUI leaves it");
     }
 
     private static ProgressBarElement ProgressColorOrNull(this ProgressBarElement bar, Color? color) => bar with { ProgressColor = color };

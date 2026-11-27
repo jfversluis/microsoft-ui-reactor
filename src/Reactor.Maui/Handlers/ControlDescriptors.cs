@@ -21,12 +21,9 @@ internal static class ControlDescriptors
             .OneWay(static e => e.IsRunning, static (v, running) => v.IsRunning = running)
             .Property(MauiActivityIndicator.ColorProperty, static e => e.Color);
 
-    public static ControlDescriptor<ProgressBarElement, MauiProgressBar> ProgressBar()
+    public static ControlDescriptor<ProgressBarElement, ReactorProgressBar> ProgressBar()
     {
-#if ANDROID
-        ProgressColorClear.Register();
-#endif
-        return ControlDescriptor.Create<ProgressBarElement, MauiProgressBar>()
+        return ControlDescriptor.Create<ProgressBarElement, ReactorProgressBar>()
             .OneWay(static e => e.Progress, static (v, progress) => v.Progress = progress)
             .Property(MauiProgressBar.ProgressColorProperty, static e => e.ProgressColor);
     }
@@ -80,4 +77,16 @@ internal static class ControlDescriptors
                 static e => e.OnTextChanged,
                 static v => v.Text ?? "")
             .Event(static (context, v) => v.SearchButtonPressed += (_, _) => context.Live?.OnSearch?.Invoke(v.Text ?? ""));
+}
+
+/// <summary>
+/// The progress bar Reactor renders on the Controls registry: a subclass, so the Android color clear
+/// (<c>ProgressColorClear</c>) acts on Reactor's bars only. An implicit style for it needs
+/// <c>ApplyToDerivedTypes</c>, as for <c>ScrollView</c>.
+/// </summary>
+internal sealed class ReactorProgressBar : MauiProgressBar
+{
+#if ANDROID
+    static ReactorProgressBar() => ProgressColorClear.Register();
+#endif
 }

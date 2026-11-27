@@ -371,6 +371,10 @@ public sealed class DirectSlider : DirectControl, ISlider
 
 public sealed class DirectProgressBar : DirectControl, IProgress
 {
+#if ANDROID
+    static DirectProgressBar() => Handlers.ProgressColorClear.Register();
+#endif
+
     private double _progress;
     private Color _progressColor = null!;
 

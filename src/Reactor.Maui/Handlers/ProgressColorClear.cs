@@ -7,8 +7,9 @@ namespace Microsoft.UI.Reactor.Maui.Handlers;
 /// <summary>
 /// Completes MAUI's clear of a progress bar's color on Android (spec 070 §4.15). MAUI 11 sets a color as
 /// the bar's progress tint list but clears it by clearing a color filter, so a cleared color stays drawn.
-/// Reactor wraps the mapping once: when a color MAUI applied is cleared, the bar's own tint list comes back. It only
-/// undoes MAUI's own tint (restoring the theme's), so it is right for every progress bar in the app.
+/// Reactor wraps the mapping once, acting only on its own bars (<see cref="ReactorProgressBar"/> and
+/// <c>DirectProgressBar</c>): when a color MAUI applied is cleared, the bar's own tint list (or the
+/// theme's activated color) comes back. Other progress bars in the app keep MAUI's behavior.
 /// </summary>
 internal static class ProgressColorClear
 {
@@ -32,8 +33,9 @@ internal static class ProgressColorClear
         if (Interlocked.Exchange(ref _registered, 1) == 1) return;
         ProgressBarHandler.Mapper.ModifyMapping<IProgress, IProgressBarHandler>(nameof(IProgress.ProgressColor), static (handler, view, previous) =>
         {
-            // Indeterminate bars and Material's indicator clear what they set.
-            if (handler.PlatformView is not { Indeterminate: false } bar || bar is Google.Android.Material.ProgressIndicator.LinearProgressIndicator)
+            // Not Reactor's, or an indeterminate bar or Material's indicator (they clear what they set).
+            if (view is not (ReactorProgressBar or Direct.DirectProgressBar)
+                || handler.PlatformView is not { Indeterminate: false } bar || bar is Google.Android.Material.ProgressIndicator.LinearProgressIndicator)
             {
                 previous?.Invoke(handler, view);
                 return;
