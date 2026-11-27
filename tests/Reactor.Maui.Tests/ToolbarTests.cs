@@ -67,7 +67,7 @@ public class ToolbarTests
     {
         var data = new TheoryData<string, string>();
         foreach (var registry in new[] { "controls", "direct" })
-            foreach (var change in new[] { "text", "icon", "order", "priority", "reorder" })
+            foreach (var change in new[] { "text", "icon", "icon swap", "order", "priority", "reorder" })
                 data.Add(registry, change);
         return data;
     }
@@ -77,11 +77,14 @@ public class ToolbarTests
     public void AStructureChange_Rebuilds_InDeclaredOrder_AndTheOldItemsInvokeNothing(string registry, string change)
     {
         var log = new List<string>();
-        ToolbarAction[] Before() => [Item(log, "A") with { Priority = 1 }, Item(log, "B") with { Priority = 2 }];
+        ToolbarAction[] Before() => change == "icon swap"
+            ? [Item(log, "A") with { Priority = 1, Icon = MatrixCases.Glyph("x") }, Item(log, "B") with { Priority = 2 }]
+            : [Item(log, "A") with { Priority = 1 }, Item(log, "B") with { Priority = 2 }];
         ToolbarAction[] After() => change switch
         {
             "text" => [Item(log, "A2", "A") with { Priority = 1 }, Item(log, "B") with { Priority = 2 }],
             "icon" => [Item(log, "A") with { Priority = 1, Icon = MatrixCases.Glyph("x") }, Item(log, "B") with { Priority = 2 }],
+            "icon swap" => [Item(log, "A") with { Priority = 1, Icon = MatrixCases.Glyph("y") }, Item(log, "B") with { Priority = 2 }],
             "order" => [Item(log, "A") with { Priority = 1, Order = ToolbarItemOrder.Secondary }, Item(log, "B") with { Priority = 2 }],
             "priority" => [Item(log, "A") with { Priority = 3 }, Item(log, "B") with { Priority = 2 }],
             _ => [Item(log, "B") with { Priority = 2 }, Item(log, "A") with { Priority = 1 }],
@@ -95,6 +98,8 @@ public class ToolbarTests
         Assert.Equal(expected.Select(a => a.Text), page.ToolbarItems.Select(i => i.Text));
         Assert.Equal(expected.Select(a => a.Order), page.ToolbarItems.Select(i => i.Order));
         Assert.Equal(expected.Select(a => a.Priority), page.ToolbarItems.Select(i => i.Priority));
+        Assert.All(expected.Zip(page.ToolbarItems), pair =>
+            Assert.True(Microsoft.UI.Reactor.Maui.Handlers.ImageSources.Same(pair.First.Icon, pair.Second.IconImageSource), $"{pair.First.Text}'s icon on the native item"));
         Assert.All(page.ToolbarItems, item => Assert.DoesNotContain(item, old));
 
         foreach (var item in old) Activate(item);
