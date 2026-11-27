@@ -3010,7 +3010,11 @@ show):
   projection runs). `Present` is called explicitly once the staging has finished: at the end of
   `SyncSlots`, after a restore's projection in `Update` (a restore syncs nothing), and after a tab
   bar's or tab's own staging (no commit flag, so a render that throws can't leave one set; review of
-  `45020b46`). It applies the policy to `IFlyoutView.FlyoutBehavior`: under `Flyout` the declaration is written when
+  `45020b46`). Within the Shell's own render (from its update or mount to its `SyncSlots`, a
+  `Rendering` mark that a restore or an unmount also clears) the items' and tabs' staging leaves the
+  policy to `SyncSlots`, so one render runs it once, against the final behavior; a tab's own render
+  below the Shell (whose nearest host is the tab, so the Shell doesn't sync) runs it from the tab's
+  staging (review of `10700a09`). It applies the policy to `IFlyoutView.FlyoutBehavior`: under `Flyout` the declaration is written when
   the Shell differs; under `Locked` and `Disabled` nothing. `PresentationIsPlatforms` keeps outside
   changes under `Locked` and `Disabled`, or while the effective behavior has moved since the policy
   last ran, from being reported. `ReactorShell` is its own `IFlyoutBehaviorObserver`, registered
@@ -3025,7 +3029,9 @@ show):
   it showed (a recycled cell's previous item) and renders nothing.
 - **`AutomationId`** (`AutomationIds.cs`, item 4): a page's or view's changed declaration warns once
   per native (`DiagnosticLog.Warning`, operations `Page.AutomationId` and `View.AutomationId`,
-  deduplicated in a weak table); views on both registries (review of `45020b46`).
+  deduplicated in a weak table); views on both registries (review of `45020b46`). The modifier
+  appliers take an explicit `mounting` flag: an update passes `null` modifiers for an element without
+  any, so `previous is null` didn't mean a mount (review of `10700a09`).
 - **The census**: all 137 `Phase4c3c` keys claimed; `Pending` holds CarouselView's 8 (4c-4), ceiling
   8. In `MatrixCases.Pages.cs`: 57 property cases (both registries; the back button behavior counted
   as replacements of the page's attached object, its fields read from the object current then;
@@ -3054,6 +3060,7 @@ show):
 | C-B4. Android: leaving a first `Disabled` left the pane hidden with `FlyoutIsPresented` true (MAUI creates the drawer then, and its first open is lost) | C3 | the posted re-projection | S6, S9, DM10 |
 | C-B5. A template's exception escaped into the platform's cell realization; a recycled cell kept its previous item's tree | the design review; the review of `45020b46` | reported to the list's boundaries; the cell's tree unmounted | T1, R5 |
 | C-B6. A page's or view's changed `AutomationId` was ignored silently | the design; the review of `45020b46` (views) | warns once per page or view | A1, A2, R13a to R13c |
+| C-B7. A view's `AutomationId` was set again on an update through an element without modifiers (`previous is null` taken as the mount): MAUI threw "AutomationId may only be set one time" and the root went down on Controls; the direct view overwrote it | the review of `10700a09` | an explicit `mounting` flag in `ViewApplier.Apply` and `DirectView.ApplyModifiers`, the only appliers gated on it | V1, V2 |
 
 **Characterization** (§4.16.1): C1 and C2 before the design review; C3 after it, on Mac Catalyst, the
 iPad simulator and Android: every directed transition among the three behaviors with both
@@ -3080,9 +3087,14 @@ throughout; Android differs where the table says.
 | R2a | the re-projection posted on the root's scheduler without `PostReport` | `TheReprojection_IsDroppedAfterUnmount_AndItsExceptionReachesTheRoot` |
 | R2b | the re-projection run in the render's own turn | `LeavingDisabled_OnAndroid_*`, `TheReprojection_*` |
 | R3 | an unset declaration taken as `false` | `AnUncontrolledFlyout_*` |
+| P1 | an item's or tab's staging runs the policy within the Shell's render too | `OneShellRender_WhoseItemsAndTabsRestage_RunsThePolicyOnce` |
+| P2 | an item's or tab's staging never runs the policy | `ATabsOwnRender_OutsideTheShells_RunsThePolicy` |
+| P3 | the Shell's render never ends at `SyncSlots` | `ATabsOwnRender_OutsideTheShells_RunsThePolicy` |
 
 Elsewhere: templates T1, R5 (the recycled cell's tree kept); `AutomationId` A1, A2, R13a (the
-Controls view's warning dropped), R13b (the direct view's), R13c (the dedup dropped); lifecycle L1,
+Controls view's warning dropped), R13b (the direct view's), R13c (the dedup dropped), V1 and V2
+(`previous is null` as the mount again, Controls and direct:
+`AViewsAutomationId_ThroughAnElementWithoutModifiers_IsNotSetAgain`); lifecycle L1,
 L2; selections K1 to K3; stacks N1 to N4; structure Sa to Sq and X1 to X16; each dialog field's,
 `IsOpen`'s and `OnClosed`'s `init` (20); the matrix MX1 to MX4; device DM10 (Android: the
 re-projection off, `Shell_FlyoutBehaviors_DeclaredOpen`) and DM11 (Mac Catalyst: the policy writing
@@ -3125,20 +3137,40 @@ sheet field inits: only the factory's constructor was used).
 5. **A `NavigationStack` subscribes to `Application.ModalPopped` at mount**, so a test must create the
    application first; an app always has one by then.
 
-**Open issues:** the `Entry_Selection_*` fixtures are flaky on the iOS 27.0 iPhone simulator (see Counts). MAUI upstream: Android's `ShellFlyoutRenderer` loses the first open of a drawer it
+**Open issues:** MAUI upstream: Android's `ShellFlyoutRenderer` loses the first open of a drawer it
 creates when leaving `Disabled` (`AddFlyoutContentToLayoutIfNeeded` adds it; the presentation written
 in the same turn is ignored, and the first draw pass doesn't recover it); both platforms re-force the
 presentation on every `AppearanceChanged`. Windows (4g): `ShellNatives.DrawerShows` is false there, so
 the re-projection is Android-only; check Windows' Shell under each behavior on the Dev Box.
 
-**Counts:** headless 1345 after the review of `45020b46` (1327 at it; 1085 before 4c-3c), engine 80; device, passed/skipped: Mac Catalyst 216/18,
-Android 216/18 (a first full run lost the foreground at `SystemBack_AtTheRoot_*`, 4b's, and five
-fixtures after it timed out; they pass alone and the rerun was clean), iPhone 212/21 with one
-`Entry_Selection_*` fixture failing per full run (a different one each time; alone, the
-`Entry_Selection_*` fixtures fail in two of three runs on this iOS 27.0 simulator; 4c-3c changed no
-entry code), iPad subset (Shell, flyout page, the new dialog fixtures) 50/4 (a first run failed
-`FlyoutPage_Split [controls]` right after the rotation characterizations; it passes alone and the
-rerun was clean). Census: pending 145 (4c-3c 137, 4c-4 8) → 8 (4c-4). Release build: 0 warnings.
+**Counts** (at `4d7e849c` and after): headless 1351 (1085 before 4c-3c), engine 80; device,
+passed/skipped/failed, full suites: Mac Catalyst 218/18/0, iPhone (iOS 27.0) 215/21/0, Android
+218/18/0, each including the four `Shell_FlyoutBehaviors_*` fixtures and the Shell and collection
+groups; the iPad subset (Shell, flyout page, the new dialog fixtures) 50/4/0 at `45020b46`. Census:
+pending 145 (4c-3c 137, 4c-4 8) → 8 (4c-4). Release build: 0 warnings.
+
+**Device flakes met on the way, fixed at their cause** (by a separate investigation, in the device
+test runner and fixtures only; no product code was involved):
+
+- **`Entry_Selection_*` on a loaded iOS simulator** (on the base `d986e80a` too; `77b98d1e`): the
+  render a state change scheduled ran about 400 ms late and posted its selection report after the
+  fixture's check, because the fixtures settled with a delay plus a `MainThread` turn, which on iOS
+  and Mac Catalyst goes through the run loop while Reactor queues on the dispatcher's main GCD queue.
+  `FixtureContext.Drain` now dispatches barriers through the window's dispatcher, after everything
+  Reactor queued; the characterization, which ran 17 to 29 s against the 30 s limit, is split in two.
+- **Android, the foreground lost at `SystemBack_AtTheRoot_*`** (`e6f6723a`): a real back key arrived
+  after its fixture had given up (`run.sh` polled the log about 9 s behind on a loaded machine) and
+  landed on the next fixture's root, finishing the activity or backgrounding the app. `run.sh` now
+  follows the log as a stream and answers each request at once; a key the fixture stopped waiting for
+  is absorbed by a callback above every other until the teardown; the teardown brings a backgrounded
+  app to the front and fails the fixture that left it there.
+- **iPad, `FlyoutPage_Split` after the rotation characterizations** (`e6f6723a`): the hit-test oracle
+  ran while MAUI animated the flyout's container (UIKit doesn't hit-test a view whose frame animates),
+  and rotations landed late (a timed-out request still arriving; the runner moving on while a fixture
+  kept rotating). Flyout checks now wait for the flyout's animations; `Rotate` waits until the scene,
+  UIKit's window and MAUI's window agree and stay so, re-requests a refused rotation, and the teardown
+  restores portrait; rotating fixtures get a 120 s limit, and a fixture past its limit is waited for
+  before the next one starts.
 
 ## 5. 4c-4: CarouselView and IndicatorView
 

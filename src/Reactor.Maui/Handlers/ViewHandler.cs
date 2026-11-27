@@ -130,10 +130,8 @@ internal static class ViewApplier
 
     private static readonly ConditionalWeakTable<View, GestureState> Gestures = new();
 
-    /// <param name="mounting">
-    /// Whether the view is being mounted: an update can pass <see langword="null"/> modifiers too (an
-    /// element without any), so <paramref name="previous"/> doesn't tell.
-    /// </param>
+    // mounting is explicit: an update can pass null modifiers too (an element without any), so a null
+    // previous doesn't mean a mount.
     public static void Apply<TElement>(HandlerContext<TElement> context, View view, ViewModifiers? previous, ViewModifiers? next, bool mounting)
         where TElement : ViewElement
     {
