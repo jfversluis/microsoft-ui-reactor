@@ -1,28 +1,16 @@
 namespace Microsoft.UI.Reactor.Maui.Tests;
 
 // The properties still waiting for executable evidence (spec 070 §4.8, §4.14.2), each with the phase
-// that owns it. It started as CensusBaseline.Original; 4c-3a and 4c-3b replaced their entries with
+// that owns it. It started as CensusBaseline.Original; 4c-3a, 4c-3b and 4c-3c replaced their entries with
 // matrix cases and covered-by claims. It may only shrink: every entry is a key of its phase's frozen
 // list (CensusBaseline.Phases), and the ceiling is lowered with every removal.
 public static partial class CensusBaseline
 {
     /// <summary>The list's size: lowered with every entry removed, never raised.</summary>
-    public const int Ceiling = 79;
+    public const int Ceiling = 8;
 
     public static readonly (string Key, string Phase)[] Pending =
     [
-        ("ActionSheetElement.Buttons", "4c-3c"),
-        ("ActionSheetElement.Cancel", "4c-3c"),
-        ("ActionSheetElement.Destruction", "4c-3c"),
-        ("ActionSheetElement.IsOpen", "4c-3c"),
-        ("ActionSheetElement.OnClosed", "4c-3c"),
-        ("ActionSheetElement.Title", "4c-3c"),
-        ("AlertElement.Accept", "4c-3c"),
-        ("AlertElement.Cancel", "4c-3c"),
-        ("AlertElement.IsOpen", "4c-3c"),
-        ("AlertElement.Message", "4c-3c"),
-        ("AlertElement.OnClosed", "4c-3c"),
-        ("AlertElement.Title", "4c-3c"),
         ("CarouselViewElement.ItemKey", "4c-4"),
         ("CarouselViewElement.ItemSpacing", "4c-4"),
         ("CarouselViewElement.ItemTemplate", "4c-4"),
@@ -31,64 +19,5 @@ public static partial class CensusBaseline
         ("CarouselViewElement.OnPositionChanged", "4c-4"),
         ("CarouselViewElement.PeekAreaInsets", "4c-4"),
         ("CarouselViewElement.Position", "4c-4"),
-        ("CollectionViewElement.EmptyView", "4c-3c"),
-        ("CollectionViewElement.Footer", "4c-3c"),
-        ("CollectionViewElement.GroupFooterTemplate", "4c-3c"),
-        ("CollectionViewElement.GroupHeaderTemplate", "4c-3c"),
-        ("CollectionViewElement.Groups", "4c-3c"),
-        ("CollectionViewElement.Header", "4c-3c"),
-        ("CollectionViewElement.ItemKey", "4c-3c"),
-        ("CollectionViewElement.ItemTemplate", "4c-3c"),
-        ("CollectionViewElement.Items", "4c-3c"),
-        ("CollectionViewElement.OnSelectionChanged", "4c-3c"),
-        ("CollectionViewElement.ReuseItemTrees", "4c-3c"),
-        ("CollectionViewElement.SelectedKey", "4c-3c"),
-        ("CollectionViewElement.SelectedKeys", "4c-3c"),
-        ("CollectionViewElement.ShowsSelectionHighlight", "4c-3c"),
-        ("FlyoutItemElement.Tabs", "4c-3c"),
-        ("ItemGroup.Group", "4c-3c"),
-        ("ItemGroup.Items", "4c-3c"),
-        ("ItemGroup.Key", "4c-3c"),
-        ("NavigationStackElement.Animated", "4c-3c"),
-        ("NavigationStackElement.Modals", "4c-3c"),
-        ("NavigationStackElement.OnModalDismissed", "4c-3c"),
-        ("NavigationStackElement.OnPopped", "4c-3c"),
-        ("NavigationStackElement.Pages", "4c-3c"),
-        ("PageElement.AutomationId", "4c-3c"),
-        ("PageElement.Content", "4c-3c"),
-        ("PageElement.OnAppearing", "4c-3c"),
-        ("PageElement.OnDisappearing", "4c-3c"),
-        ("PageElement.TitleView", "4c-3c"),
-        ("PromptElement.Accept", "4c-3c"),
-        ("PromptElement.Cancel", "4c-3c"),
-        ("PromptElement.InitialValue", "4c-3c"),
-        ("PromptElement.IsOpen", "4c-3c"),
-        ("PromptElement.Keyboard", "4c-3c"),
-        ("PromptElement.MaxLength", "4c-3c"),
-        ("PromptElement.Message", "4c-3c"),
-        ("PromptElement.OnClosed", "4c-3c"),
-        ("PromptElement.Placeholder", "4c-3c"),
-        ("PromptElement.Title", "4c-3c"),
-        ("ShellContentElement.Page", "4c-3c"),
-        ("ShellElement.FlyoutContent", "4c-3c"),
-        ("ShellElement.FlyoutFooter", "4c-3c"),
-        ("ShellElement.FlyoutHeader", "4c-3c"),
-        ("ShellElement.Items", "4c-3c"),
-        ("ShellElement.OnSelectedChanged", "4c-3c"),
-        ("ShellElement.Selected", "4c-3c"),
-        ("ShellTabElement.Content", "4c-3c"),
-        ("ShellTabElement.Contents", "4c-3c"),
-        ("SwipeItemData.BackgroundColor", "4c-3c"),
-        ("SwipeItemData.Content", "4c-3c"),
-        ("SwipeItemData.Icon", "4c-3c"),
-        ("SwipeItemData.OnInvoked", "4c-3c"),
-        ("SwipeItemData.Text", "4c-3c"),
-        ("SwipeViewElement.BottomItems", "4c-3c"),
-        ("SwipeViewElement.Content", "4c-3c"),
-        ("SwipeViewElement.LeftItems", "4c-3c"),
-        ("SwipeViewElement.RightItems", "4c-3c"),
-        ("SwipeViewElement.TopItems", "4c-3c"),
-        ("TabBarElement.Tabs", "4c-3c"),
-        ("TabsElement.Pages", "4c-3c"),
     ];
 }

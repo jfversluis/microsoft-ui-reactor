@@ -53,6 +53,7 @@ public static partial class MatrixCases
             "set, update in place (state kept), replace, clear (unmounted), direct child hosted",
             "content not cleared on null (M23) and a remount on every update (M24): red (spec 070 §4.13)"),
         .. ControlCovered(),
+        .. PageCovered(),
     ];
 
     public static readonly IReadOnlyList<ExcludedClaim> Excluded = [];

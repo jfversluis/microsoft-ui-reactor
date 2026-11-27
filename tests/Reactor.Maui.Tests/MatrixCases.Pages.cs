@@ -286,4 +286,197 @@ public static partial class MatrixCases
             static (bool v, Action<string> r) => AShell().FlyoutIsPresented(v, x => r($"{x}")),
             static v => ((MauiShell)v).FlyoutIsPresented, static (v, x) => ((MauiShell)v).FlyoutIsPresented = x, true, false, true, nameof(MauiShell.FlyoutIsPresented));
     }
+
+    // ── Covered-by claims (groups A, E, K, N, S, D) ─────────────────────────
+
+    private static IEnumerable<CoveredClaim> PageCovered()
+    {
+        const string Spec = "(spec 070 §4.17)";
+        static CoveredClaim C(Type type, string property, Type test, string method, string facets, string mutants) => new(type, property, test, method, facets, mutants);
+
+        // Pages (A, E, S)
+        yield return C(typeof(PageElement), nameof(PageElement.AutomationId), typeof(PageAuditTests), nameof(PageAuditTests.APagesAutomationId_IsSetAtMount_AndAChange_WritesNothing_ThrowsNothing_AndWarnsOncePerPage),
+            "set at mount; a change writes nothing and throws nothing; warns once per page (an equal render and later changes don't); another page warns; both registries",
+            $"the per-page dedup dropped (A1) and the warning dropped (A2): red {Spec}");
+        yield return C(typeof(PageElement), nameof(PageElement.OnAppearing), typeof(PageAuditTests), nameof(PageAuditTests.APagesLifecycle_ReachesTheCurrentCallbacks_AndNothingAfterUnmount),
+            "a window-hosted page; each trigger re-armed; the page's own event witnesses every trigger, after unmount too; the current callback; nothing after unmount; both registries",
+            $"the callback read from the mount-time element (L1): red {Spec}");
+        yield return C(typeof(PageElement), nameof(PageElement.OnDisappearing), typeof(PageAuditTests), nameof(PageAuditTests.APagesLifecycle_ReachesTheCurrentCallbacks_AndNothingAfterUnmount),
+            "as OnAppearing, for Disappearing (needs an appeared page: each cycle appears first)",
+            $"the callback read from the mount-time element (L2): red {Spec}");
+        yield return C(typeof(PageElement), nameof(PageElement.Content), typeof(StructureAuditTests), nameof(StructureAuditTests.APagesContentAndTitleView_AreSetUpdatedInPlaceReplacedAndCleared),
+            "set; updated in place (the native and the state kept); replaced (the old tree cleaned up); cleared (null); both registries",
+            $"content not cleared on null (Sa): red {Spec}");
+        yield return C(typeof(PageElement), nameof(PageElement.TitleView), typeof(StructureAuditTests), nameof(StructureAuditTests.APagesContentAndTitleView_AreSetUpdatedInPlaceReplacedAndCleared),
+            "set (Shell's attached title view); updated in place (state kept); cleared (no local value, cleaned up); both registries",
+            $"title view not cleared (Sb): red {Spec}");
+        yield return C(typeof(TabsElement), nameof(TabsElement.Pages), typeof(StructureAuditTests), nameof(StructureAuditTests.TabsPages_AreAddedRemovedAndReordered_KeepingTheirPages),
+            "keyed pages added, removed and reordered, the kept pages' natives kept; both registries",
+            $"the list reorder skipped (Sc): red {Spec}");
+
+        // Shell structure (S)
+        yield return C(typeof(ShellElement), nameof(ShellElement.Items), typeof(StructureAuditTests), nameof(StructureAuditTests.TheShellsItems_AndTheirTabs_AreAddedRemovedAndReordered_KeepingTheirObjects),
+            "root items (flyout items and a tab bar) reordered, removed and added, keeping the kept items' natives and the current item; both registries. Also ShellTests.Build_CreatesItemsTabsAndTopTabs_WithTheirKeys",
+            $"the Shell's staging skipping the reorder (Sh): red {Spec}");
+        yield return C(typeof(TabBarElement), nameof(TabBarElement.Tabs), typeof(StructureAuditTests), nameof(StructureAuditTests.TheShellsItems_AndTheirTabs_AreAddedRemovedAndReordered_KeepingTheirObjects),
+            "a tab bar's tabs reordered keeping their sections; both registries. Also ShellTests.Update_AddsRemovesAndReordersTabsAndTopTabs_KeepingTheirObjects (add, remove, reorder) and ConditionalTabs_AndTopTabs_SkipNulls",
+            $"the staging skipping the reorder (Sh): red {Spec}");
+        yield return C(typeof(FlyoutItemElement), nameof(FlyoutItemElement.Tabs), typeof(StructureAuditTests), nameof(StructureAuditTests.TheShellsItems_AndTheirTabs_AreAddedRemovedAndReordered_KeepingTheirObjects),
+            "a flyout item's tabs reordered keeping their sections, the item kept when moved; both registries",
+            $"the staging skipping the reorder (Sh): red {Spec}");
+        yield return C(typeof(ShellElement), nameof(ShellElement.FlyoutHeader), typeof(StructureAuditTests), nameof(StructureAuditTests.TheShellsFlyoutHeaderFooterAndContent_AreSetUpdatedInPlaceAndCleared_InRetainedHosts),
+            "set; updated in place (state kept); cleared: the retained host emptied and the tree cleaned up; set again into the same host (a fresh tree); both registries. Also ShellTests.Flyout_IsControlled_* (updated in place)",
+            $"the host not emptied (Sd) and the host replaced (Se): red {Spec}");
+        yield return C(typeof(ShellElement), nameof(ShellElement.FlyoutFooter), typeof(StructureAuditTests), nameof(StructureAuditTests.TheShellsFlyoutHeaderFooterAndContent_AreSetUpdatedInPlaceAndCleared_InRetainedHosts),
+            "set; updated in place (state kept); cleared: the retained host emptied, the tree cleaned up; both registries",
+            $"the host not emptied (Sf): red {Spec}");
+        yield return C(typeof(ShellElement), nameof(ShellElement.FlyoutContent), typeof(StructureAuditTests), nameof(StructureAuditTests.TheShellsFlyoutHeaderFooterAndContent_AreSetUpdatedInPlaceAndCleared_InRetainedHosts),
+            "set; updated in place (state kept); cleared (no local value, so the flyout lists its items again; cleaned up); both registries",
+            $"the content not cleared (Sg): red {Spec}");
+        yield return C(typeof(ShellTabElement), nameof(ShellTabElement.Content), typeof(StructureAuditTests), nameof(StructureAuditTests.AShellTabsContent_AndATopTabsPage_AreReplaced_AndTopTabsReordered_KeepingTheirObjects),
+            "a single page replaced by another (keyed), in the tab's own content, which stays; both registries. Also ShellTests.ATabsContentChangingFromADeepHost_PopsTheSectionToItsRoot (host, page and top tabs)",
+            $"the page not replaced (Si): red {Spec}");
+        yield return C(typeof(ShellTabElement), nameof(ShellTabElement.Contents), typeof(StructureAuditTests), nameof(StructureAuditTests.AShellTabsContent_AndATopTabsPage_AreReplaced_AndTopTabsReordered_KeepingTheirObjects),
+            "from one page to top tabs; top tabs reordered keeping their contents; both registries. Also ShellTests.Update_AddsRemovesAndReordersTabsAndTopTabs_KeepingTheirObjects (a top tab removed)",
+            $"the staging skipping the reorder (Sh): red {Spec}");
+        yield return C(typeof(ShellContentElement), nameof(ShellContentElement.Page), typeof(StructureAuditTests), nameof(StructureAuditTests.AShellTabsContent_AndATopTabsPage_AreReplaced_AndTopTabsReordered_KeepingTheirObjects),
+            "a top tab's page replaced, in the same content; both registries",
+            $"the page not replaced (Sj): red {Spec}");
+
+        // Selections (K)
+        yield return C(typeof(ShellElement), nameof(ShellElement.Selected), typeof(ShellTests), nameof(ShellTests.TheSelectionCallback_IsTheCurrentOne_AndNothingIsReportedAfterUnmount),
+            "refused, restored to the declaration; both registries. Also ShellTests.SelectionFromCode_ShowsTheTab_AtEachLevel_WithoutReportingIt (written at each level, unreported), RefusedSwitch_* (restored to the latest), UnknownKey_*, RemovingTheSelectedTab_*",
+            $"the report from the mount-time element (K1): red {Spec}");
+        yield return C(typeof(ShellElement), nameof(ShellElement.OnSelectedChanged), typeof(ShellTests), nameof(ShellTests.TheSelectionCallback_IsTheCurrentOne_AndNothingIsReportedAfterUnmount),
+            "the current callback; nothing after unmount (the switch witnessed natively); both registries. Also UserSwitch_IsReportedOnce_FromNavigated_AndKeptWhenAccepted",
+            $"the report from the mount-time element (K1): red {Spec}");
+        yield return C(typeof(CollectionViewElement), nameof(CollectionViewElement.SelectedKey), typeof(CollectionSelectionTests), nameof(CollectionSelectionTests.TheSelection_FollowsTheMode_ReachesTheCurrentCallback_AndNothingAfterUnmount),
+            "with both keys declared, Single writes SelectedKey; a mode change back to Single writes it, unreported; both registries. Also ControlTests.Selection_IsControlledByKey and the verification tests (spec 070 §3.4)",
+            $"the echo check dropped (K3): red {Spec}");
+        yield return C(typeof(CollectionViewElement), nameof(CollectionViewElement.SelectedKeys), typeof(CollectionSelectionTests), nameof(CollectionSelectionTests.TheSelection_FollowsTheMode_ReachesTheCurrentCallback_AndNothingAfterUnmount),
+            "Multiple writes SelectedKeys (a mode change with a selection, unreported); the user's change reported and, refused, restored; both registries. Also MultipleSelection_DeclaredInAnotherOrder_WritesNothing",
+            $"the echo check dropped (K3): red {Spec}");
+        yield return C(typeof(CollectionViewElement), nameof(CollectionViewElement.OnSelectionChanged), typeof(CollectionSelectionTests), nameof(CollectionSelectionTests.TheSelection_FollowsTheMode_ReachesTheCurrentCallback_AndNothingAfterUnmount),
+            "the current callback; nothing after unmount (the native selection changed: the positive control); both registries. Also AReport_ReachesTheAppBeforeAQueuedRenderApplies",
+            $"the report from the mount-time element (K2): red {Spec}");
+
+        // Navigation stacks (N)
+        yield return C(typeof(NavigationStackElement), nameof(NavigationStackElement.Pages), typeof(NavigationStackAuditTests), nameof(NavigationStackAuditTests.Pages_DeclaredChangesAreUnreported_AUsersPopIsReportedWithItsDepth_RefusedOrAccepted_ToTheCurrentCallback),
+            "declared pushes and pops written, unreported; a user pop refused (pushed back) and accepted (kept); both registries. Also PageTests.NavigationStack_FollowsTheDeclaredStack and APopOfAPageTheAppNoLongerDeclares_IsNotReported",
+            $"no restore after a refused pop (N4): red; the user-pop check dropped (N5): red in APopOfAPageTheAppNoLongerDeclares_IsNotReported {Spec}");
+        yield return C(typeof(NavigationStackElement), nameof(NavigationStackElement.Modals), typeof(NavigationStackAuditTests), nameof(NavigationStackAuditTests.Modals_DeclaredChangesAreUnreported_AUsersDismissalIsReported_RefusedOrAccepted_ToTheCurrentCallback),
+            "a window-hosted stack: declared modals pushed and removed, unreported; a dismissal refused (presented again) and accepted; dismissed at unmount; both registries",
+            $"the dismissal report from the mount-time element (N2): red {Spec}");
+        yield return C(typeof(NavigationStackElement), nameof(NavigationStackElement.Animated), typeof(NavigationStackAuditTests), nameof(NavigationStackAuditTests.Pages_DeclaredChangesAreUnreported_AUsersPopIsReportedWithItsDepth_RefusedOrAccepted_ToTheCurrentCallback),
+            "false and true each reach the navigator for that change; both registries. Also NavigationHostTests.AHostConfiguredNotAnimated_UsesThatForEveryChange_UnlessNavigateSaysOtherwise",
+            $"the declaration ignored (N3): red {Spec}");
+        yield return C(typeof(NavigationStackElement), nameof(NavigationStackElement.OnPopped), typeof(NavigationStackAuditTests), nameof(NavigationStackAuditTests.Pages_DeclaredChangesAreUnreported_AUsersPopIsReportedWithItsDepth_RefusedOrAccepted_ToTheCurrentCallback),
+            "reported once with the depth; the current callback; a late platform pop after unmount reports nothing; both registries",
+            $"the report from the mount-time element (N1): red {Spec}");
+        yield return C(typeof(NavigationStackElement), nameof(NavigationStackElement.OnModalDismissed), typeof(NavigationStackAuditTests), nameof(NavigationStackAuditTests.Modals_DeclaredChangesAreUnreported_AUsersDismissalIsReported_RefusedOrAccepted_ToTheCurrentCallback),
+            "reported once with the modals left; the current callback; nothing for the dismissal at unmount (witnessed by ModalPopped); both registries",
+            $"the report from the mount-time element (N2): red {Spec}");
+
+        // Collections (S)
+        var items = nameof(StructureAuditTests.ACollectionsItems_AreKeyed_TheirTemplateRerendersBoundCells_AndARecycledCellRemountsUnlessTreesAreReused);
+        yield return C(typeof(CollectionViewElement), nameof(CollectionViewElement.Items), typeof(StructureAuditTests), items,
+            "added, removed and reordered by key, the kept and the moved items keeping their boxes and a bound cell its tree; both registries. Also ControlTests.Items_AreDiffedByKey_KeepingUnchangedEntries (a changed value replaces its box)",
+            $"a moved item's box replaced (Sn): red {Spec}");
+        yield return C(typeof(CollectionViewElement), nameof(CollectionViewElement.ItemKey), typeof(StructureAuditTests), items,
+            "the identity of the boxes and cell trees (as Items); both registries. Also ControlTests.Items_AreDiffedByKey_KeepingUnchangedEntries",
+            $"a moved item's box replaced (Sn): red {Spec}");
+        yield return C(typeof(CollectionViewElement), nameof(CollectionViewElement.ItemTemplate), typeof(StructureAuditTests), items,
+            "a changed template re-renders the bound cells; both registries. Also ControlTests.Cells_RenderTheTemplate_InheritContext_* and Cells_Rerender_WhenTheTemplateCapturesChangedParentState",
+            $"the template kept from mount (X1): red {Spec}");
+        yield return C(typeof(CollectionViewElement), nameof(CollectionViewElement.ReuseItemTrees), typeof(StructureAuditTests), items,
+            "off: a recycled cell remounts; on: it keeps its tree and state; both registries. Also ControlTests.ARecycledCell_ResetsItemState_UnlessTreesAreReused",
+            $"trees never reused (So): red {Spec}");
+        var groups = nameof(StructureAuditTests.ACollectionsGroups_AreKeyed_AndTheirTemplatesAreReplacedInPlace_AndRemoved);
+        yield return C(typeof(CollectionViewElement), nameof(CollectionViewElement.Groups), typeof(StructureAuditTests), groups,
+            "groups reordered by key keeping their boxes; both registries. Also CollectionViewFeatureTests.Groups_AreKeyed_AndTheirCellsRenderTheTemplates, GroupedAndFlat_Remount",
+            $"groups not reordered (X4): red {Spec}");
+        yield return C(typeof(CollectionViewElement), nameof(CollectionViewElement.GroupHeaderTemplate), typeof(StructureAuditTests), groups,
+            "set; replaced by another, re-rendering the bound header cells through the same native template; removed (null); both registries",
+            $"not replaced (Sl) and not removed (Sm): red {Spec}");
+        yield return C(typeof(CollectionViewElement), nameof(CollectionViewElement.GroupFooterTemplate), typeof(StructureAuditTests), groups,
+            "set; replaced by another through the same native template; removed (null); both registries",
+            $"not replaced (X2) and not removed (X3): red {Spec}");
+        yield return C(typeof(CollectionViewElement), nameof(CollectionViewElement.Header), typeof(CollectionViewFeatureTests), nameof(CollectionViewFeatureTests.HeaderFooterAndEmptyView_AreSetReplacedAndCleared),
+            "set; updated in place (state kept); cleared (null, cleaned up); both registries (a direct view hosted)",
+            $"the slot not unmounted (X8): red {Spec}");
+        yield return C(typeof(CollectionViewElement), nameof(CollectionViewElement.Footer), typeof(StructureAuditTests), nameof(StructureAuditTests.ACollectionsFooterAndEmptyView_KeepTheirStateOnUpdate_AndCleanUpWhenRemoved),
+            "set; updated in place (the native and the state kept); removed (null, cleaned up); both registries",
+            $"the slot not unmounted (Sk): red {Spec}");
+        yield return C(typeof(CollectionViewElement), nameof(CollectionViewElement.EmptyView), typeof(StructureAuditTests), nameof(StructureAuditTests.ACollectionsFooterAndEmptyView_KeepTheirStateOnUpdate_AndCleanUpWhenRemoved),
+            "set; updated in place (the native and the state kept); removed (null, cleaned up); both registries",
+            $"the slot not unmounted (Sk): red {Spec}");
+        yield return C(typeof(CollectionViewElement), nameof(CollectionViewElement.ShowsSelectionHighlight), typeof(ItemStateTests), nameof(ItemStateTests.TheStateOverload_TurnsOffThePlatformHighlight_OnEveryCell),
+            "false: every cell has the transparent Selected state, early and late; true: none; a toggle remounts (iOS clears its highlight once)",
+            $"a toggle not remounting (X9): red {Spec}");
+        yield return C(typeof(ItemGroup), nameof(ItemGroup.Key), typeof(StructureAuditTests), groups,
+            "a group's box kept by key across a reorder; both registries. Also Groups_AreKeyed_* (duplicate keys throw)",
+            $"boxes never kept (X5): red {Spec}");
+        yield return C(typeof(ItemGroup), nameof(ItemGroup.Group), typeof(StructureAuditTests), groups,
+            "a changed group value re-renders its header; both registries",
+            $"the value not updated (X6): red {Spec}");
+        yield return C(typeof(ItemGroup), nameof(ItemGroup.Items), typeof(CollectionViewFeatureTests), nameof(CollectionViewFeatureTests.Groups_AreKeyed_AndTheirCellsRenderTheTemplates),
+            "a group's items diffed by key (an item kept across a group move of its group); also ACrossGroupMove_KeepsStateOnlyOnADirectRebindOfTheSameCell",
+            $"group items not synced (X7): red {Spec}");
+
+        // Swipe (S)
+        var swipe = nameof(StructureAuditTests.ASwipeViewsContentAndSides_AreSetUpdatedAndCleared_AndItsItemsReachTheCurrentCallback);
+        yield return C(typeof(SwipeViewElement), nameof(SwipeViewElement.Content), typeof(StructureAuditTests), swipe,
+            "set; updated in place (state kept); cleared (null, cleaned up); both registries",
+            $"the content not cleared (Sp): red {Spec}");
+        var sides = nameof(SwipeViewTests.FourSides_TheirModes_AndTheThreshold);
+        yield return C(typeof(SwipeViewElement), nameof(SwipeViewElement.LeftItems), typeof(SwipeViewTests), sides,
+            "each side's items written to its own side (with the others'); cleared in StructureAuditTests (a side emptied, both registries)",
+            $"the left side reading another side's items (X10): red {Spec}");
+        yield return C(typeof(SwipeViewElement), nameof(SwipeViewElement.RightItems), typeof(SwipeViewTests), sides,
+            "two items in order on the right; a side emptied in StructureAuditTests (both registries)",
+            $"the right side reading another side's items (X11): red {Spec}");
+        yield return C(typeof(SwipeViewElement), nameof(SwipeViewElement.TopItems), typeof(SwipeViewTests), sides,
+            "the top side's items", $"the top side reading another side's items (X12): red {Spec}");
+        yield return C(typeof(SwipeViewElement), nameof(SwipeViewElement.BottomItems), typeof(SwipeViewTests), sides,
+            "the bottom side's items", $"the bottom side reading another side's items (X13): red {Spec}");
+        yield return C(typeof(SwipeItemData), nameof(SwipeItemData.Text), typeof(SwipeViewTests), nameof(SwipeViewTests.AChangedTextColorOrIcon_RebuildsOnlyThatSide),
+            "an equal render keeps the side; a changed text rebuilds only that side",
+            $"a text change not rebuilding (X14): red {Spec}");
+        yield return C(typeof(SwipeItemData), nameof(SwipeItemData.Icon), typeof(StructureAuditTests), swipe,
+            "set; removed: a rebuilt item without an icon; both registries. Also AModeOrIconChange_RebuildsTheSide_ButAContentItemsColorDoesNot",
+            $"a removal not rebuilding (Sq): red {Spec}");
+        yield return C(typeof(SwipeItemData), nameof(SwipeItemData.BackgroundColor), typeof(StructureAuditTests), swipe,
+            "set; removed: a rebuilt item at MAUI's default (no local value); both registries. Also AChangedTextColorOrIcon_RebuildsOnlyThatSide",
+            $"a removal not rebuilding (Sq): red {Spec}");
+        yield return C(typeof(SwipeItemData), nameof(SwipeItemData.Content), typeof(SwipeViewTests), nameof(SwipeViewTests.AContentItem_RerendersInPlace_AndUnmountsWhenRemoved),
+            "re-rendered in place (state kept, the item kept); unmounted when removed; both registries. Also UnmountingTheSwipeView_UnmountsItsContentItems",
+            $"content roots not unmounted on a rebuild (X15): red {Spec}");
+        yield return C(typeof(SwipeItemData), nameof(SwipeItemData.OnInvoked), typeof(StructureAuditTests), swipe,
+            "the current callback on a kept item; nothing after unmount; both registries. Also SwipeViewTests.ARetiredItem_InvokesNothing",
+            $"an item invoking its mount-time data (X16): red {Spec}");
+
+        // Dialogs (D): each content field's own mutant, its init made a no-op, turns the theory red.
+        var request = nameof(DialogTests.ADeclarativeDialog_RequestsItsContent_OncePerOpen_AndReportsTheAnswerToTheContentShown);
+        var queue = nameof(DialogTests.ADeclarativeDialog_ChangedWhileQueued_ShowsItsLatestContent_ClosedWhileQueuedIsRemoved_AndUnmountedWhileShownDropsTheAnswer);
+        (Type Type, string[] Fields)[] kinds =
+        [
+            (typeof(AlertElement), [nameof(AlertElement.Title), nameof(AlertElement.Message), nameof(AlertElement.Accept), nameof(AlertElement.Cancel)]),
+            (typeof(ActionSheetElement), [nameof(ActionSheetElement.Title), nameof(ActionSheetElement.Cancel), nameof(ActionSheetElement.Destruction), nameof(ActionSheetElement.Buttons)]),
+            (typeof(PromptElement), [nameof(PromptElement.Title), nameof(PromptElement.Message), nameof(PromptElement.Accept), nameof(PromptElement.Cancel),
+                nameof(PromptElement.Placeholder), nameof(PromptElement.InitialValue), nameof(PromptElement.Keyboard), nameof(PromptElement.MaxLength)]),
+        ];
+        foreach (var (type, fields) in kinds)
+        {
+            foreach (var field in fields)
+                yield return C(type, field, typeof(DialogTests), request,
+                    "in the one request an open makes, set through the factory and through the property; the new value shown after a re-open; the latest while queued (" + queue + ")",
+                    $"its init made a no-op: red {Spec}");
+            yield return C(type, nameof(DialogElement.IsOpen), typeof(DialogTests), request,
+                "closed at mount, nothing; open, one request; an equal render, none; false then true, shown again; closed while queued, removed (" + queue + ")",
+                $"its init made a no-op: red {Spec}");
+            yield return C(type, "OnClosed", typeof(DialogTests), request,
+                "once with the answer, to the content shown (a later render's callback doesn't take it); dropped when unmounted while shown (" + queue + ")",
+                $"its init made a no-op: red {Spec}");
+        }
+    }
 }
