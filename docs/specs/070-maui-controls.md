@@ -2523,9 +2523,11 @@ and on Android and Windows when the display changes (`FlyoutPage.OnMainDisplayIn
 1. **No write while split, on both write paths** (review round 1): `FlyoutHandler.Update` and
    `SyncSlots` write `IsPresented` only when `!IsSplit`; writing `true` while split is skipped too, so
    the rule is one condition.
-2. **The layout behavior is written first, inside the sync scope**, in `Mount` and `Update`: assigning
-   `Split` makes MAUI set `IsPresented = true` inside the write, and leaving split by a behavior change
-   makes it set `false` there (measured, §4.14.1).
+2. **The layout behavior is written first**, in `Mount` and `Update`: assigning `Split` makes MAUI set
+   `IsPresented = true` inside the write, and leaving split by a behavior change makes it set `false`
+   there (measured, §4.14.1). Those notifications are raised while split (entering) or inside the
+   native mode change (leaving), so rules 3 and 4 cover them; the sync scope first proposed around
+   this write was redundant (an equivalent mutant) and was dropped (§4.15).
 3. **No report while split.** An `IsPresentedChanged` raised while `IsSplit` is true is MAUI's
    enforcement, not input (a split flyout has no toggle, measured), so it is neither reported nor
    followed by `RestoreAfterEvent`.
@@ -2647,6 +2649,126 @@ No pending claim of a T-to-R type may remain at 4c-3b's gate, so a find can't be
    the display orientation is portrait whatever the window's shape; and a throwing
    `OnIsPresentedPropertyChanging` leaves the setter stuck, after which the property and the platform
    disagree (§4.14.1).
+
+### 4.15 As built (4c-3b)
+
+**What was built** (commits after `fbde1215`, each step its own commit):
+
+- **The flyout's split rule** (`PageHandlers.cs`): `ReactorFlyoutPage` wraps MAUI's `FlyoutBehavior`
+  mapping (`FlyoutViewHandler.Mapper.ModifyMapping`, registered by its static constructor, acting only
+  on Reactor's flyout pages); `TransitionPending` from the mapping until a reprojection posted to the
+  root's scheduler; `Reproject` writes a differing declaration in the sync scope or calls
+  `Handler.UpdateValue(IsPresented)` for an equal one; `IsPresented` is written (`WritePresented`, from
+  `Update` and `SyncSlots`) only when not split, and nothing is reported while split or during a
+  transition.
+- **The toolbar's identity check**: an item's `Clicked` runs only while it is the page's item at its
+  index.
+- **The census** (`PropertyMatrix.cs`, `MatrixCases.Controls.cs`, `CensusBaseline.Phases.cs`): the
+  pending list holds `(key, phase)` entries, each a key of its phase's frozen list (`Phase4c3c`, 137;
+  `Phase4c4`, 8; both hashes pinned), checked by `PendingViolations` (a negative test plants
+  `PageElement.ToolbarItems`). New claim kinds and runner options: `ControlledCase` (a controlled value
+  and its callback, run by `ControlledValue_IsWrittenUnreported_InputReportedOnce_RefusedRestored`:
+  mounted unreported, a declared change written unreported, an equal render with no write, input
+  reported once and a refusal restored, an accepted input kept, nothing after unmount) and, on
+  `PropertyCase`, `Target` (the object written, a label's span for rich text), `Fresh` (a direct
+  stack has no parameterless constructor), `Cleared` (a hyperlink is underlined when unset) and
+  `OnlyRegistry`.
+- **Claims for the 203 properties of groups T to R**: 143 property cases (232 in all), 9 event cases
+  (10), 13 controlled cases (26 keys), 25 covered-by claims, no exclusion. Each covered-by claim's
+  test and mutation are in the list below; the new tests are `AuditCoverageTests`,
+  `RadioIndicatorTests`, `RowExtrasTests`, `FlyoutSplitTests`, `ToolbarTests` and
+  `ReadmeAuditSnippetTests`.
+- **Device fixtures** (`AuditFixtures.cs`, both registries): `ActivityIndicator_Platform`,
+  `ProgressBar_Platform`, `DirectToggleColors`, `GraphicsView_Redraw`, `FlexLayout_Geometry`,
+  `AbsoluteLayout_Geometry`, `FlyoutPage_IsPresented`, `FlyoutPage_Split` (non-phones),
+  `FlyoutPage_SplitRotated` (tablets), `ToolbarItems_Platform`; the characterizations of §4.14.1 stay
+  in `AuditCharacterization.cs`. The iOS test app is full screen on iPad (`UIRequiresFullScreen`).
+
+**Bugs the audit found, each fixed with a test that failed first:**
+
+| | Found by | Fix | Mutation (red) |
+|---|---|---|---|
+| B1. `DirectCheckBox` remapped its color on every render (a new paint per render, compared by reference) | the matrix's equal-render step (`CheckBoxElement.Color`, direct) | compared by color | K8 |
+| B2. A date picker's range moving later kept its old minimum (MAUI refuses a minimum after the current maximum) | `RowExtrasTests.DatePicker_TheRangeAndTheDate_ChangedInOneRender_InEitherDirection` | the maximum written first when the new minimum is past it | B2 |
+| B3. The same for a stepper's range (`Range.Write`, shared with the slider) | `RowExtrasTests.Stepper_MovesToADisjointRange_InEitherDirection` | the same order in `Range.Write` | B3 |
+| B4. Android: a cleared progress bar color stayed drawn (MAUI 11 sets a tint list and clears a color filter) | `ProgressBar_Platform`, rendered pixels | `ProgressColorClear` (Android): when a color MAUI applied is cleared, the bar's own tint list, or the theme's activated color, comes back; it only undoes MAUI's own tint, so it applies to every progress bar | DM1 |
+| B5. A split flyout never loaded (§4.14.1) | the characterization | §4.14.3 | F1 to F8, DM2, DM6 |
+| B6. A retired toolbar item ran the action now at its index | the characterization | §4.14.4 | T1, DM3 |
+
+**Deviations from §4.14, and why:**
+
+1. **No sync scope around the layout-behavior write** (rule 2): its mutant survived on every path
+   (F7); the notifications it would hide are raised while split or inside the mode change. Writing the
+   behavior before `IsPresented` stays, but its order in `Update` is also guaranteed by `SyncSlots`,
+   which runs after `Update` in every render (F9 survived, equivalent).
+2. **Non-nullable values write their default when unset**, as 4c-3a's deviation 10: stack and grid
+   spacings, the slider's and stepper's range and increment, `IsRunning`, `Progress`, a label's,
+   button's, radio button's or run's text, the picker's items, and a web view's source (unset writes a
+   `null` source). The matrix marks them `clears: false`; a `Style` setter for them can't apply.
+3. **A button's image runs on the Controls registry only**: on the direct registry an image makes the
+   button a Controls view and removing it a direct one again, which
+   `ControlTests.AControlsOnlySetting_SwitchesTheElementToAControlsView_AndBack` covers.
+4. **Android reads are rendered colors where MAUI's write can't be read back**: a spinner's color is
+   the filter on its drawable's current child, a progress bar's is its filled pixels, a switch's track
+   and thumb are their drawables drawn into a bitmap (a 0.15 tolerance for their shading).
+5. **The flyout's leaving-split rule is the mode transition** (review of `3ecc552b`), not a size
+   allocation; an Android tablet's rotation is covered by the headless sequences only (no tablet
+   emulator could be booted here).
+6. **Direct children of a Controls layout aren't its visual children**, so `FlexLayout_Geometry` reads
+   them from the layout's list (spec 065 §4 notes the boundary).
+
+**Census numbers.** Pending before 4c-3b: 348 (one phase). After: 145, all frozen later-phase keys
+(4c-3c 137, 4c-4 8); none of groups T to R. Types: 58 (unchanged).
+
+**Tests.** Headless `Reactor.Maui.Tests`: 1079 (686 before). Engine: 80. Device, full suites: Mac
+Catalyst 198 passed, 17 skipped; iOS (iPhone simulator) 195 passed, 20 skipped; Android (emulator)
+197 passed, 18 skipped (before: 174/7, 174/7, 176/5; the new skips are the iPad- or Catalyst-only
+fixtures). iPad simulator (`222A93E8-ACFB-4F63-BB9F-9553F0E6A3EB`), the flyout, toolbar and audit
+fixtures and the characterizations: 35 passed, 1 skipped. `Reactor.Maui.slnx` builds in Release with
+no warnings.
+
+**Mutation checks** (headless unless named; each broke the code, ran the class's tests, restored and
+touched the file; all red but where said):
+
+- Flyout: report while split (F1), no transition mark (F2), the mark cleared when the mapping returns
+  (F3), no reprojection of an equal value (F4), a write while split (F5, both paths), the wrapper not
+  registered (F6), the declared write outside the sync scope (F8); survived and removed: the behavior
+  write's sync scope (F7); survived, equivalent: the behavior written after `IsPresented` (F9).
+- Toolbar: the index alone (T1).
+- Covered-by claims: the cursor (C1) and length (C2) never written, the selection never reported
+  (C3), layout children not synced (C4) or inserted at the end on direct layouts (C5), grid rows and
+  columns rebuilt every render on both registries (C6 to C9), the graphics view invalidated only on a
+  change (C10), scroll and refresh content not cleared (C11, C12), the flyout's detail (C13) and
+  flyout (C14) slots written only when empty, spans rebuilt every render (C15), radio view content
+  never set (C16), the group name ignored (C17), the indicator always shown (C18) or changed in place
+  (C19), the toolbar never rebuilt (C20) or ignoring its text, order, priority or icon (C21 to C24),
+  the first callback captured (C25).
+- The runner and the fixes: a declared slider write unsuppressed (K1), a stepper refusal not restored
+  (K2), a date picker reporting its own writes and after unmount (K3), a span's font size never cleared
+  (K4), the font family dropped (K5), a direct stack invalidating on every render (K6), the direct font
+  remapped every render (K7), the check box color by paint again (K8), the date (B2) and range (B3)
+  write orders, flex values not cleared (F-flex) and absolute bounds not updated (F-absolute).
+- Device: the progress clear not completed (DM1, Android), a write while split (DM2, Mac Catalyst: the
+  page never loads), the toolbar identity removed (DM3, iPhone), the direct switch's track not
+  remapped (DM4, Android), the graphics view not invalidated (DM5, iPad), report while split (DM6,
+  iPad: MAUI's own `true` at appearing reported).
+
+**Benchmark** (Mac Catalyst, one pair against `8f6965dd`, base first): total time −1.8% to +1.5% in
+every scenario on both renderers, allocations identical to the kilobyte. It renders labels, buttons
+and stacks, so it measures the unchanged paths; the changed ones (flyout, toolbar, date picker, range,
+check box) aren't in it.
+
+**Open issues.**
+
+- **Upstream (MAUI), to file with the 4c-2 and 4c-3a issues:** iOS and iPadOS read the display
+  orientation from `StatusBarOrientation` (`Unknown` in a scene-based app), so `SplitOnLandscape` and
+  `Default` never split and `SplitOnPortrait` stays split in landscape; Mac Catalyst reports portrait
+  for every window; a throwing `IsPresented` change leaves the setter stuck; Android's progress bar
+  clears a color by clearing a filter it never set.
+- **Android tablets**: the flyout's rotation path is headless-only here; run the flyout fixtures on a
+  tablet emulator where one can be booted.
+- **Windows (4g)**: `ProgressColorClear` is Android-only; check MAUI's Windows progress bar clear.
+- **4c-3c**: the 137 page, navigation, Shell, dialog, collection and swipe properties.
 
 ## 5. 4c-4: CarouselView and IndicatorView
 
