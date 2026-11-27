@@ -2796,6 +2796,105 @@ check box) aren't in it.
   suggests the idiom or the window's size meanwhile.
 - **4c-3c**: the 137 page, navigation, Shell, dialog, collection and swipe properties.
 
+### 4.16 4c-3c: pages, navigation, Shell, dialogs, collections and swipe (design)
+
+4c-3c empties the census's frozen `Phase4c3c` list (137 keys, §4.14.2): only CarouselView's 8 keys
+(4c-4) may stay pending. The method, the evidence rules and the handling of finds are §4.8's and
+§4.14.6's; this section says how each group is proven and what was characterized first.
+
+#### 4.16.1 Characterization (device, `ShellAuditCharacterization.cs`)
+
+The design rests on one platform behavior that the existing tests never touched, so it was measured
+first, on Mac Catalyst 26.7, the iPad simulator (iOS 27.2) and the Android 17 emulator (phone).
+
+| | Mac Catalyst | iPad | Android (phone) |
+|---|---|---|---|
+| Plain MAUI `Shell`, `FlyoutIsPresented` per `FlyoutBehavior` | `Flyout` and `Disabled`: `false` at appear; `Locked`: **MAUI sets `true` at appear, outside any write** | the same | the same |
+| Writes of `true` and `false` | accepted under every behavior (no throw, unlike `FlyoutPage`'s split mode), each `PropertyChanged` in-write | the same | the same |
+| The renderer's own change (`SetValueFromRenderer`, what a user's open or close does) | raised outside any write | the same | the same |
+| **Reactor today**, `Locked` with `false` declared | **mount reports MAUI's `true` as the user's input** (once), and the restore writes `false` back | the same | the same, reported **twice** |
+| Reactor today, `Flyout` and `Disabled` | declared writes unreported; a user's open reported once and, refused, restored | the same | the same |
+
+**Not yet known**: what the platform shows for a `Locked` Shell whose `FlyoutIsPresented` is
+`false` (does the locked pane hide?), and for a `Disabled` Shell set to `true`. A platform probe with
+a positive control answers it before the rule in §4.16.4 is fixed (C1).
+
+Headless, a page without a window raises no `Appearing` from `SendAppearing`, so the page lifecycle
+callbacks are proven where a window exists (C2, below).
+
+#### 4.16.2 Groups and how each is proven
+
+| Group | Keys | Proof |
+|---|---|---|
+| **M. Plain values** | Page: `Title`, `BackgroundColor`, `Padding`, `Icon`, `HasNavigationBar`, `HasBackButton`, `BackButtonTitle`, `NavBarIsVisible`, `TabBarIsVisible`, `PresentationMode`, `ModalPresentationStyle`, `SearchHandler`, `BackButtonBehavior`, and `ShellBackButton`'s `Text`, `Icon`, `IsVisible`, `IsEnabled` (read on the attached `BackButtonBehavior`, the §4.15 `Target` option); NavigationStack: `Title`, `Icon`, `BarBackgroundColor`, `BarTextColor`; Tabs: `BarBackgroundColor`, `SelectedTabColor`, `UnselectedTabColor`; Shell: `Title`, `FlyoutBehavior` and its eleven colors; FlyoutItem: `Title`, `Icon`, `DisplayOptions`; ShellTab and ShellContent: `Title`, `Icon`; ShellMenuItem: `Text`, `Icon`; SwipeView: `Threshold` and the four `*ItemsMode`; CollectionView: `Arrangement`, `Span`, `ItemSpacing`, `ItemSizingStrategy`, `RemainingItemsThreshold`, `SelectionMode` (57) | **matrix cases**, both registries (every one of these renders a Controls page or view on both). Shell items are read through `Target` on the native item the case's Shell holds (a fresh item for the default). The swipe modes rebuild their side, so their write is the side's items property; the collection layout values replace `ItemsLayout` (one write) and are non-nullable (`clears: false`, as §4.15 deviation 2) |
+| **E. Events** | Page: `OnAppearing`, `OnDisappearing`; ShellMenuItem: `OnClick`; SwipeView: `OnSwipeStarted`, `OnSwipeChanging`, `OnSwipeEnded`; CollectionView: `OnRemainingItemsThresholdReached` (7) | **event cases** (callback 1, callback 2, nothing after unmount). The page's two run in a windowed host (the `DialogTests` window helper) if C2 shows that raises them; otherwise a covered-by claim on the device fixture that already logs them (`EchoFixtures`' `PageRemovedByTheApp` and its sibling), extended with a callback swap and an unmount |
+| **C. Controlled values** | Tabs: `SelectedIndex` with `OnSelectedIndexChanged`; Shell: `FlyoutIsPresented` with `OnFlyoutIsPresentedChanged` (4) | the **controlled-value runner** (§4.15), both registries. Shell's flyout adds one facet the runner can't express: unset (`null`) is uncontrolled, so a user's change is reported and kept (a covered-by test). `Locked` waits for §4.16.4 |
+| **K. Keyed selections** | Shell: `Selected`, `OnSelectedChanged`; CollectionView: `SelectedKey`, `SelectedKeys`, `OnSelectionChanged` (5) | covered-by claims on the existing tests where they prove the facets (below), plus a **selection theory** for the gaps: a callback swapped between renders reaches the new one, nothing after unmount, both registries, `SelectedKey` and `SelectedKeys` both set (the mode decides which counts, `SelectionRules.Effective`), and a mode change with a selection |
+| **N. Navigation stacks** | NavigationStack: `Pages`, `Modals`, `Animated`, `OnPopped`, `OnModalDismissed` (5) | a **stack theory** over pages and modals: a declared push and pop written and unreported, a user pop reported once with its depth (a dismissal with the modals left), refused and pushed back, accepted and kept, the current callback, nothing after unmount; `Animated` reaching the navigator per change. Claims also cite the existing evidence: `PageTests.NavigationStack_FollowsTheDeclaredStack` and the `NavigationStack_*` device fixtures (reported back, refused back, modal dismissal), `NavigationHostTests.AnimatedFalse_*` |
+| **S. Structure** | Page: `Content`, `TitleView`; Tabs: `Pages`; Shell: `Items`, `FlyoutHeader`, `FlyoutFooter`, `FlyoutContent`; TabBar and FlyoutItem: `Tabs`; ShellTab: `Content`, `Contents`; ShellContent: `Page`; CollectionView: `Items`, `ItemKey`, `ItemTemplate`, `ReuseItemTrees`, `Groups`, `GroupHeaderTemplate`, `GroupFooterTemplate`, `Header`, `Footer`, `EmptyView`, `ShowsSelectionHighlight`; ItemGroup: `Key`, `Group`, `Items`; SwipeView: `Content` and the four sides' items; SwipeItemData: `Text`, `Icon`, `BackgroundColor`, `Content`, `OnInvoked` (36) | **covered-by claims**, each listing the facets its test proves and its own mutation. Reused where the test proves them (read, not named): `ShellTests.Update_AddsRemovesAndReordersTabsAndTopTabs_KeepingTheirObjects` (keyed add, remove, reorder keeping the native objects), `ShellTests.Flyout_IsControlled_TheUsersChangeReported_AndItsHeaderUpdatesInPlace` (header updated in place), `CollectionViewFeatureTests.HeaderFooterAndEmptyView_AreSetReplacedAndCleared` (both registries), `CollectionViewTests.Items_AreDiffedByKey_KeepingUnchangedEntries`, the grouped tests (`Groups_AreKeyed_*`, `ACrossGroupMove_*`), the cell tests (`Cells_*`, `ARecycledCell_*`), the swipe tests (`AContentItem_RerendersInPlace_AndUnmountsWhenRemoved`, `Invoking_ReachesTheLiveCallback_AndNothingAfterUnmount`, `ARetiredItem_InvokesNothing`, `AChangedTextColorOrIcon_RebuildsOnlyThatSide`). **New tests for the gaps the reading found**: a page's content set, updated in place, replaced and cleared, and its title view cleared; the Shell flyout footer updated and cleared and the flyout content cleared after being set; a ShellContent's page replaced; a swipe view's content cleared; a side's items cleared; a swipe item's icon and color removed (a rebuilt item at MAUI's defaults); the group templates removed |
+| **D. Dialogs** | Alert: `Title`, `Message`, `Accept`, `Cancel`, `IsOpen`, `OnClosed`; ActionSheet: `Title`, `Cancel`, `Destruction`, `Buttons`, `IsOpen`, `OnClosed`; Prompt: `Title`, `Message`, `Accept`, `Cancel`, `Placeholder`, `InitialValue`, `Keyboard`, `MaxLength`, `IsOpen`, `OnClosed` (22) | a **dialog theory** over the three kinds with `DialogTests`' fake platform: closed at mount; opened, one request carrying every content field; an equal render no second request; `OnClosed` once with the answer, to the content shown; false then true shows it again with its new content; content changed while queued shows the latest (the queue reads it when dequeued); closed before shown, removed; unmounted while shown, the answer dropped. Today only alerts have these tests. The kinds' content is a value per field, so each content key is claimed by the theory with a mutation that drops that field from the request |
+| **A. Mount-only** | Page: `AutomationId` (1) | MAUI forbids changing an automation id, so Reactor writes it at mount only: a covered-by test that it is set at mount and that a changed declaration writes nothing and throws nothing (C3 asks whether it should warn) |
+
+Totals: 57 matrix, 7 event, 2 controlled cases (4 keys), and 69 keys in specialized and covered-by
+claims (5 keyed selection, 5 stacks, 36 structure, 22 dialog content and lifecycle, 1 mount-only).
+Every covered-by claim names a discovered test, its facets and its own mutation, as before.
+
+#### 4.16.3 Device fixtures
+
+By §4.8's criterion (Reactor code between the element and the platform, or rendering a read can't
+show):
+
+- **New**: `Shell_FlyoutLocked` (after C1; Mac Catalyst, iPad, Android: what the platform shows and
+  what is reported, both registries); `Dialog_PromptFields` (the prompt's initial value, placeholder
+  and maximum length on the platform's text field, and the action sheet's destructive button and its
+  answer: the dialog adapter is Reactor's code, and today's device fixtures check only titles and
+  answers).
+- **Existing, cited by claims**: the `NavigationStack_*`, `Shell_*`, `Dialog*`, `List*` and `Swipe*`
+  fixtures where they prove a claim's facet.
+- **Headless only**: the matrix group (bindable properties MAUI maps, nothing of Reactor's between),
+  as in 4c-3b.
+
+#### 4.16.4 What looks wrong, to characterize before designing around it
+
+1. **A `Locked` Shell's flyout (found, §4.16.1).** Reactor reports MAUI's own `true` as input and
+   restores `false`. The rule follows C1: if a locked pane shows whatever `FlyoutIsPresented` says,
+   the fix is to treat MAUI's appear-time write as the platform's (not reported, and the declaration
+   applied after it, as the flyout page's reprojection, §4.14.3); if it always shows, `FlyoutIsPresented`
+   is the platform's while `Locked` (no write, no report), as for a split flyout. Either is a short
+   design note reviewed before it is built.
+2. **A `Disabled` Shell declared presented**: MAUI accepts `true`; what the platform shows is C1's
+   other half. Documented either way.
+3. **A dialog's content changed while it shows** is not presented (MAUI can't update or dismiss a
+   shown dialog; spec 069 §5.1 says so), and turning `IsOpen` off while it shows drops the answer but
+   leaves it on screen. Both are documented behaviors, so the dialog theory pins them rather than
+   changes them.
+4. **`Page.AutomationId`** changed after mount is silently ignored.
+5. **`ShellMenuItem`'s `Clicked`** stays subscribed after unmount; the handler reads `context.Live`, so
+   nothing runs. The event case proves it.
+6. **The swipe item's color and icon** are not cleared on an item, but a removed value rebuilds the
+   side with a new item, at MAUI's default; the structure tests check it rather than assume it.
+7. **`NavigationStack.OnPopped` and `OnModalDismissed`** read `context.Live` but no test swaps the
+   callback or unmounts first; the stack theory does.
+
+#### 4.16.5 Characterization gates (before the rest is built)
+
+- **C1**: a Shell flyout visibility probe on Mac Catalyst, the iPad and Android (the flyout pane on
+  screen, with a positive control: `Flyout` behavior opened and closed), then `Locked` with
+  `FlyoutIsPresented` `false` and `true`, and `Disabled` with `true`.
+- **C2**: whether a page in a window-hosted tree raises `Appearing` and `Disappearing` headlessly.
+- **C3** (a decision, not a measurement): see open question 2.
+
+#### 4.16.6 Open questions
+
+1. **A `Locked` Shell's flyout**: which of §4.16.4 item 1's two rules, once C1 is measured.
+2. **`AutomationId` changed after mount**: keep it silent (documented), or warn once as other
+   unsupported changes do?
+3. **Dialog content changed while shown**: keep spec 069's documented behavior (not shown), pinned by
+   the dialog theory?
+4. **The device criterion** for the bar, tab and Shell colors (headless only), as in 4c-3b?
+5. **One PR** for the 137 keys: most are claims of existing tests plus three new runners (stack,
+   selection, dialog); the Shell flyout fix is the only behavior change known so far.
+
 ## 5. 4c-4: CarouselView and IndicatorView
 
 To be designed when 4c-4 starts. Moved out of 4c-2 by its design review (round 1), which found the
