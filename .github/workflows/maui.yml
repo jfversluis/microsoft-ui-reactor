@@ -166,6 +166,10 @@ jobs:
 
       - name: Run device tests
         run: tests/Reactor.Maui.DeviceTests/run.sh ${{ matrix.platform }}
+        env:
+          # From launch to the end of the suite; the hosted simulator is several times slower than a
+          # local one.
+          REACTOR_DEVICE_TEST_TIMEOUT: 1800
 
       - name: Upload TAP report
         if: always()

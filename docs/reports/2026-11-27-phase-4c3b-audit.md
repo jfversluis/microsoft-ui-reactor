@@ -59,6 +59,12 @@ loaded on Mac Catalyst and iPad, and toolbar items that ran another item's actio
 - **Not measured on a device:** an Android tablet's rotation path; none could be booted here. It is
   covered by headless tests.
 
+## CI
+
+- **The first iOS run on the hosted runner was stopped at `run.sh`'s 600 s limit**, partway through the suite and with no failing fixture. The suite has grown to 216 fixtures and needs longer on the hosted simulator.
+- **The limit now defaults to 1500 s, and the workflow sets 1800 s.** The job timeout stays at 60 minutes.
+- **`run.sh` now says when it stopped a run at the limit.** It was checked with a 25 s limit, and a full Mac Catalyst run with the new script passes (198 + 18 skipped).
+
 ## Performance
 
 `/perf` ran on PR #19. This phase changes no file under `src/Reactor`, `src/Reactor.Core` or the
