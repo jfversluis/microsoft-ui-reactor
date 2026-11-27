@@ -31,6 +31,10 @@ internal static class CarouselPorts
 
         public CarouselSample? Sample()
         {
+            // Not ready until MAUI has made its initial positioning (it sets CurrentItem then): until
+            // then MAUI ignores the platform's position and, about 100 ms after the first layout, scrolls
+            // to its own Position, which would undo a projection made before it (§5.13).
+            if (view.CurrentItem is null) return null;
             if (view.Handler?.PlatformView is not UIKit.UIView root || root.Window is null || root.Bounds.Width <= 0) return null;
             var center = root.ConvertPointToView(new CoreGraphics.CGPoint(root.Bounds.Width / 2, root.Bounds.Height / 2), null);
             UIKit.UIView? best = null;
@@ -55,7 +59,17 @@ internal static class CarouselPorts
             Watch(scroller);
             var moving = scroller is not null && (scroller.Tracking || scroller.Dragging || scroller.Decelerating);
             var user = scroller is not null && (scroller.Tracking || scroller.Dragging);
-            return new CarouselSample(index, Math.Abs(bestDistance) < 1, bestDistance, moving, user);
+            return new CarouselSample(index, Math.Abs(bestDistance) < 1 || AtEdge(scroller, bestDistance), bestDistance, moving, user);
+        }
+
+        // An item the scroller can't center (the first or last, with peek): as aligned as it gets.
+        private static bool AtEdge(UIKit.UIScrollView? scroller, double distance)
+        {
+            if (scroller is null) return false;
+            var offset = scroller.ContentOffset.X;
+            var min = -scroller.AdjustedContentInset.Left;
+            var max = scroller.ContentSize.Width - scroller.Bounds.Width + scroller.AdjustedContentInset.Right;
+            return distance > 0 ? offset >= max - 0.5 : offset <= min + 0.5;
         }
 
         // In the window, not hidden, and horizontally inside the carousel: UIKit keeps reusable cells around.
@@ -83,8 +97,29 @@ internal static class CarouselPorts
             _watchToken = scroller.PanGestureRecognizer.AddTarget(() => notify());
         }
 
-        public void ScrollTo(int index, bool animate) =>
-            view.ScrollTo(index, position: ScrollToPosition.Center, animate: animate);
+        // Through the page scroller's offset, measured from the shown item: MAUI's ScrollTo does nothing on
+        // iOS and Mac Catalyst when the layout has an ItemSpacing and no peek (measured, §5.13), and a
+        // Position write is debounced. MAUI's ScrollTo remains the fallback.
+        public void ScrollTo(int index, bool animate)
+        {
+            if (!OffsetScroll(index, animate)) view.ScrollTo(index, position: ScrollToPosition.Center, animate: animate);
+        }
+
+        private bool OffsetScroll(int index, bool animate)
+        {
+            if (Sample() is not { } sample || _watched is not { } scroller || Collection() is not { } collection) return false;
+            var count = (int)collection.NumberOfItemsInSection(0);
+            if (count <= 0) return false;
+            var spacing = (view.ItemsLayout as LinearItemsLayout)?.ItemSpacing ?? 0;
+            var pitch = (scroller.ContentSize.Width + spacing) / count;
+            if (pitch <= 0) return false;
+            var target = scroller.ContentOffset.X + (index - sample.Shown) * pitch + sample.Offset;
+            var min = -scroller.AdjustedContentInset.Left;
+            var max = scroller.ContentSize.Width - scroller.Bounds.Width + scroller.AdjustedContentInset.Right;
+            if (target < min - 0.5 || target > max + 0.5) return false;
+            scroller.SetContentOffset(new CoreGraphics.CGPoint(target, scroller.ContentOffset.Y), animate);
+            return true;
+        }
 
         public bool Barrier(Action completion)
         {
@@ -135,6 +170,8 @@ internal static class CarouselPorts
 
         public CarouselSample? Sample()
         {
+            // Not ready until MAUI has made its initial positioning (it sets CurrentItem then).
+            if (view.CurrentItem is null) return null;
             if (Recycler() is not { } rv || !rv.IsAttachedToWindow || rv.Width <= 0) return null;
             Watch(rv);
             var density = rv.Context?.Resources?.DisplayMetrics?.Density ?? 1;
@@ -160,7 +197,9 @@ internal static class CarouselPorts
             var index = view.Host.Items.IndexOf(bestBox);
             if (index < 0) return null;
             var state = rv.ScrollState;
-            return new CarouselSample(index, Math.Abs(bestDistance) < 1, bestDistance,
+            // An item the list can't center (the first or last, with peek) is as aligned as it gets.
+            var aligned = Math.Abs(bestDistance) < 1 || !rv.CanScrollHorizontally(bestDistance > 0 ? 1 : -1);
+            return new CarouselSample(index, aligned, bestDistance,
                 state != AndroidX.RecyclerView.Widget.RecyclerView.ScrollStateIdle,
                 state == AndroidX.RecyclerView.Widget.RecyclerView.ScrollStateDragging);
         }

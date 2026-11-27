@@ -466,20 +466,60 @@ public static partial class Fixtures
 /// <summary>Native readback and input for the carousel characterization.</summary>
 public static partial class CarouselPlatform
 {
-#if IOS && !MACCATALYST || ANDROID
+#if IOS || MACCATALYST || ANDROID
     private static int s_gestures;
 #endif
 
+    /// <summary>
+    /// Waits for a verified rest (spec 070 §5.9, review 8): two consecutive display frames with no motion
+    /// flag and an unchanged offset. Fails while the carousel still moves at the timeout.
+    /// </summary>
     public static async Task WaitAtRest(MauiCarouselView carousel, int timeoutMs)
     {
         var clock = Stopwatch.StartNew();
         var still = 0;
-        while (clock.ElapsedMilliseconds < timeoutMs && still < 6)
+        double? last = null;
+        while (still < 2)
         {
-            still = Moving(carousel) ? 0 : still + 1;
-            await Task.Delay(50);
+            if (clock.ElapsedMilliseconds > timeoutMs)
+                throw new CheckFailedException($"the carousel still moved after {timeoutMs} ms: {State(carousel)}");
+            await NextFrame();
+            var offset = OffsetValue(carousel);
+            still = !Moving(carousel) && last is { } previous && Math.Abs(previous - offset) < 0.5 ? still + 1 : 0;
+            last = offset;
         }
     }
+
+    /// <summary>Completes on the next display frame (CADisplayLink, Choreographer).</summary>
+    public static Task NextFrame()
+    {
+        var done = new TaskCompletionSource();
+#if IOS || MACCATALYST
+        CoreAnimation.CADisplayLink? link = null;
+        link = CoreAnimation.CADisplayLink.Create(() =>
+        {
+            link?.Invalidate();
+            done.TrySetResult();
+        });
+        link.AddToRunLoop(Foundation.NSRunLoop.Main, Foundation.NSRunLoopMode.Common);
+#elif ANDROID
+        global::Android.Views.Choreographer.Instance!.PostFrameCallback(new FrameDone(done));
+#else
+        done.TrySetResult();
+#endif
+        return done.Task;
+    }
+
+#if ANDROID
+    private sealed class FrameDone(TaskCompletionSource done) : Java.Lang.Object, global::Android.Views.Choreographer.IFrameCallback
+    {
+        public void DoFrame(long frameTimeNanos) => done.TrySetResult();
+    }
+
+    private static double OffsetValue(MauiCarouselView carousel) => Recycler(carousel).ComputeHorizontalScrollOffset();
+#elif IOS || MACCATALYST
+    private static double OffsetValue(MauiCarouselView carousel) => Scroller(carousel).ContentOffset.X;
+#endif
 
 #if IOS || MACCATALYST
     [DllImport("/usr/lib/libobjc.dylib", EntryPoint = "objc_msgSend")]
@@ -585,16 +625,30 @@ public static partial class CarouselPlatform
     }
 #endif
 
-#if IOS && !MACCATALYST
-    public const string Input = "XCUITest touches through Appium (host driver), real UIKit pans";
+#if IOS || MACCATALYST
+    public static string Input => HostGestures
+        ? "XCUITest touches through Appium (host driver), real UIKit pans"
+        : "simulated: the page scroller's pan recognizer driven through its states, the offset stepped (no real pointer input in-process)";
 
-    /// <summary>Asks the host's driver for a real touch drag and follows it through the scroller's state.</summary>
-    public static async Task Drag(MauiCarouselView carousel, Fixtures.Drag drag, Action<string> mark, Func<Task>? duringHold)
+    /// <summary>Whether host-gestures.py performs this run's drags (iOS simulators only).</summary>
+    public static bool HostGestures => !OperatingSystem.IsMacCatalyst() && Environment.GetEnvironmentVariable("REACTOR_HOST_GESTURES") == "1";
+
+    /// <summary>
+    /// A drag: real touches from the host's driver when it runs, else simulated (the scroller's pan
+    /// recognizer through its states, so UIKit reports dragging, and the offset stepped). Characterizations
+    /// pass <paramref name="allowSimulated"/> false on iOS: they record only what real touches do.
+    /// </summary>
+    public static async Task Drag(MauiCarouselView carousel, Fixtures.Drag drag, Action<string> mark, Func<Task>? duringHold, bool allowSimulated = false)
+    {
+        if (HostGestures) await HostDrag(carousel, drag, mark, duringHold);
+        else if (allowSimulated || OperatingSystem.IsMacCatalyst()) await SimulatedDrag(carousel, drag, mark, duringHold);
+        else throw new SkipException("real touches need the host's gesture driver (tests/Reactor.Maui.DeviceTests/host-gestures.py, REACTOR_HOST_GESTURES=1)");
+    }
+
+    private static async Task HostDrag(MauiCarouselView carousel, Fixtures.Drag drag, Action<string> mark, Func<Task>? duringHold)
     {
         var s = Scroller(carousel);
         var center = s.ConvertPointToView(new CoreGraphics.CGPoint(s.ContentOffset.X + s.Bounds.Width / 2, s.Bounds.Height / 2), null);
-        if (Environment.GetEnvironmentVariable("REACTOR_HOST_GESTURES") != "1")
-            throw new SkipException("real touches need the host's gesture driver (tests/Reactor.Maui.DeviceTests/host-gestures.py, REACTOR_HOST_GESTURES=1)");
         var id = ++s_gestures;
         Console.WriteLine($"REACTOR-GESTURE {id} {center.X:0} {center.Y:0} {drag.Dx:0} {drag.MoveMs} {drag.HoldMs}");
         var clock = Stopwatch.StartNew();
@@ -619,23 +673,27 @@ public static partial class CarouselPlatform
         }
         mark($"finger up (native tracking ended); offsets while tracking: {string.Join(",", samples.Distinct())}");
     }
-#elif MACCATALYST
-    public const string Input = "simulated: the scroller's pan recognizer driven through its states (the offset doesn't follow; no real pointer input is available in-process)";
 
-    public static async Task Drag(MauiCarouselView carousel, Fixtures.Drag drag, Action<string> mark, Func<Task>? duringHold)
+    private static async Task SimulatedDrag(MauiCarouselView carousel, Fixtures.Drag drag, Action<string> mark, Func<Task>? duringHold)
     {
         var s = Scroller(carousel);
         var pan = s.PanGestureRecognizer;
         var setState = ObjCRuntime.Selector.GetHandle("setState:");
         void State(UIKit.UIGestureRecognizerState state) => SendNint(pan.Handle, setState, (nint)(long)state);
+        var start = s.ContentOffset.X;
         State(UIKit.UIGestureRecognizerState.Began);
         mark($"simulated pan began: native dragging {s.Dragging}");
-        await Task.Delay(drag.MoveMs);
-        for (var i = 1; i <= 4; i++) { State(UIKit.UIGestureRecognizerState.Changed); await Task.Delay(16); }
+        const int steps = 6;
+        for (var i = 1; i <= steps; i++)
+        {
+            await NextFrame();
+            s.ContentOffset = new CoreGraphics.CGPoint(start - drag.Dx * i / steps, s.ContentOffset.Y);
+            State(UIKit.UIGestureRecognizerState.Changed);
+        }
         if (duringHold is not null) await duringHold();
         else await Task.Delay(drag.HoldMs);
         State(UIKit.UIGestureRecognizerState.Ended);
-        mark($"simulated pan ended: native dragging {s.Dragging}");
+        mark($"simulated pan ended at offset {s.ContentOffset.X:0.#}");
     }
 #elif ANDROID
     public const string Input = "in-process MotionEvents dispatched to the RecyclerView (its real touch handling, velocity and snap)";
@@ -684,8 +742,9 @@ public static partial class CarouselPlatform
         return $"{rv.GetType().Name} {rv.Width}x{rv.Height}px, layout {rv.GetLayoutManager()?.GetType().Name}, fling listener {rv.GetOnFlingListener()?.GetType().Name ?? "-"}";
     }
 
-    public static async Task Drag(MauiCarouselView carousel, Fixtures.Drag drag, Action<string> mark, Func<Task>? duringHold)
+    public static async Task Drag(MauiCarouselView carousel, Fixtures.Drag drag, Action<string> mark, Func<Task>? duringHold, bool allowSimulated = false)
     {
+        _ = allowSimulated;
         var rv = Recycler(carousel);
         var density = rv.Context!.Resources!.DisplayMetrics!.Density;
         float x = rv.Width / 2f, y = rv.Height / 2f;

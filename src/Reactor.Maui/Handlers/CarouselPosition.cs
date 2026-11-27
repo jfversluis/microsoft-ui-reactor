@@ -125,6 +125,8 @@ internal sealed class CarouselPositionController
     internal int Publications { get; private set; }
     internal int BarriersIssued { get; private set; }
     internal bool TransactionPending => _transactionPending;
+    internal bool Polling => _polling;
+    internal bool AwaitingAnswer => _awaitingAnswer;
     internal bool BarrierPending => _barrierPending;
     internal int? OwnTarget => _ownTarget;
 
@@ -362,7 +364,10 @@ internal sealed class CarouselPositionController
             // An own projection's settle (rule 5), at its target or short of it if a newer declaration
             // superseded it: never reported; the newest declaration is projected.
             _lastRest = sample.Shown;
-            if (declared is { } d && (sample.Shown != d || !sample.Aligned))
+            // Landed on its item but off center: asked once more (an interrupted scroll); if it lands
+            // there again it's as centered as the platform makes it (MAUI's centering of an edge item
+            // with peek stops a few points off), and done.
+            if (declared is { } d && (sample.Shown != d || !sample.Aligned && _ownRetries == 0 && d == own))
             {
                 // Keep the target for the retry count only when it's the same projection again.
                 if (d != own) _ownTarget = null;

@@ -42,6 +42,7 @@ public static partial class Fixtures
         .. AuditFixtures(),
         .. ShellAuditCharacterizationFixtures(),
         .. ShellAuditFixtures(),
+        .. CarouselFixtures(),
         .. CarouselCharacterizationFixtures(),
         new("NavigationStack_PushReachesThePlatform_AndBackIsReported", NavigationBack),
         new("NavigationStack_BackDuringThePushAnimation_IsReported", NavigationBackDuringPush),
