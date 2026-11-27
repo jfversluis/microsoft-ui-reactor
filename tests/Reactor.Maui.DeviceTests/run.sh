@@ -80,17 +80,34 @@ case "$platform" in
     launched=$SECONDS
     deadline=$((SECONDS + timeout_seconds))
     # Fixtures that need a real back key (an app can't inject one into itself) log REACTOR-KEY-BACK;
-    # each one gets one key event to the focused window.
-    keys_sent=0
-    until "${adb_cmd[@]}" logcat -d -s DOTNET:I | grep -q "$done_marker"; do
+    # each one gets one key event to the focused window. The runner logs REACTOR-BRING-TO-FRONT when a
+    # fixture left the app in the background; the shell can bring it back, which the app itself can't.
+    # The log is followed as a stream, so a request is answered at once: polling full dumps fell
+    # seconds behind on a loaded machine, and a key that came after its fixture gave up landed on the
+    # next one.
+    fifo="$out/android-logcat.fifo"
+    rm -f "$fifo"
+    mkfifo "$fifo"
+    "${adb_cmd[@]}" logcat -v brief -s DOTNET:I > "$fifo" &
+    logcat_pid=$!
+    trap 'kill "$logcat_pid" 2>/dev/null || true; rm -f "$fifo"' EXIT
+    exec 3< "$fifo"
+    while :; do
       if (( SECONDS > deadline )); then echo "Timed out waiting for the device tests." >&2; break; fi
-      keys_wanted="$("${adb_cmd[@]}" logcat -d -s DOTNET:I | grep -c "REACTOR-KEY-BACK" || true)"
-      while (( keys_sent < keys_wanted )); do
-        "${adb_cmd[@]}" shell input keyevent 4
-        keys_sent=$((keys_sent + 1))
-      done
-      sleep 0.3
+      if ! IFS= read -r -t 1 line <&3; then
+        kill -0 "$logcat_pid" 2>/dev/null || { echo "adb logcat stopped." >&2; break; }
+        continue
+      fi
+      case "$line" in
+        *"$done_marker"*) break ;;
+        *REACTOR-KEY-BACK*) "${adb_cmd[@]}" shell input keyevent 4 ;;
+        *REACTOR-BRING-TO-FRONT*) "${adb_cmd[@]}" shell am start -n "$activity" > /dev/null ;;
+      esac
     done
+    exec 3<&-
+    kill "$logcat_pid" 2>/dev/null || true
+    wait "$logcat_pid" 2>/dev/null || true
+    rm -f "$fifo"
     "${adb_cmd[@]}" logcat -d -s DOTNET:I > "$out/android.log"
     extract_tap < "$out/android.log" > "$tap"
     ;;

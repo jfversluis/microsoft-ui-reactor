@@ -7,7 +7,8 @@ using Microsoft.UI.Reactor.Maui.Hosting;
 
 namespace Reactor.Maui.DeviceTests;
 
-public sealed record Fixture(string Name, Func<FixtureContext, Task> Run);
+/// <summary>A device fixture; <paramref name="TimeoutSeconds"/> is the runner's limit for it.</summary>
+public sealed record Fixture(string Name, Func<FixtureContext, Task> Run, int TimeoutSeconds = 30);
 
 /// <summary>A failed check inside a fixture.</summary>
 public sealed class CheckFailedException(string message) : Exception(message);
@@ -170,7 +171,13 @@ public static class Runner
             try
             {
                 var run = fixture.Run(context);
-                if (await Task.WhenAny(run, Task.Delay(30_000)) != run) failure = "timed out after 30 s";
+                if (await Task.WhenAny(run, Task.Delay(fixture.TimeoutSeconds * 1000)) != run)
+                {
+                    failure = $"timed out after {fixture.TimeoutSeconds} s";
+                    // Still running, it would act on the next fixture's screen (rotate it, navigate it):
+                    // its own waits end it soon, so the teardown waits for that first.
+                    if (await Task.WhenAny(run, Task.Delay(30_000)) != run) failure += "; still running 30 s later";
+                }
                 else await run;
             }
             catch (SkipException skip)
@@ -208,6 +215,25 @@ public static class Runner
                     window.Page = blank;
                 }
                 await Task.Delay(100);
+                try
+                {
+                    if (await Fixtures.IsolateFromTheNextFixture(context, n => Emit($"# teardown after {fixture.Name}: {n}")) is { } background)
+                        failure ??= background;
+                }
+                catch (Exception ex)
+                {
+                    failure ??= "teardown: isolating the next fixture failed: " + ex.Message;
+                }
+                // An iPad left rotated (or with a rotation still on its way) would lay out the next
+                // fixture in the wrong orientation.
+                try
+                {
+                    if (await Fixtures.RestorePortrait(context) is { } restored) Emit($"# teardown after {fixture.Name}: {restored}");
+                }
+                catch (Exception ex)
+                {
+                    failure ??= "teardown: restoring portrait failed: " + ex.Message;
+                }
             }
             // Checked after teardown: unmounting runs effect cleanups, which can fail too.
             if (failure is null && context.UnhandledErrors.Count > 0) failure = "unhandled render error: " + context.UnhandledErrors[0];

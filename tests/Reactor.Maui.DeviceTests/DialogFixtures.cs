@@ -752,17 +752,90 @@ public static partial class Fixtures
     }
 
     private static int s_keyRequests;
+    // Keys requested whose arrival wasn't seen: a key that comes after its fixture gave up must not
+    // land on the next fixture (at a root, it finishes the activity or moves the app to the background).
+    private static int s_keysOutstanding;
+#if ANDROID
+    private static StandInCallback? s_lateKeySink;
+    private static int s_lateKeysAbsorbed;
+#endif
 
     /// <summary>
     /// The back key as the user presses it: a real key event to the focused window. An app can't inject
-    /// one into itself (INJECT_EVENTS), so the fixture asks run.sh, which watches the log for
+    /// one into itself (INJECT_EVENTS), so the fixture asks run.sh, which follows the log for
     /// <c>REACTOR-KEY-BACK</c> and runs <c>adb shell input keyevent 4</c>. Waits until
-    /// <paramref name="arrived"/> shows the key reached the app.
+    /// <paramref name="arrived"/> shows the key reached the app; one that doesn't arrive in time is
+    /// absorbed when it comes (<see cref="AbsorbLateBackKeys"/>), not left to the next fixture.
     /// </summary>
     private static async Task PressBack(FixtureContext c, Func<bool> arrived)
     {
+        s_keysOutstanding++;
         Console.WriteLine($"REACTOR-KEY-BACK {++s_keyRequests}");
-        await c.WaitFor(arrived, "the back key from run.sh (adb shell input keyevent 4)", 8000);
+        try
+        {
+            await c.WaitFor(arrived, "the back key from run.sh (adb shell input keyevent 4)", 8000);
+            s_keysOutstanding--;
+        }
+        catch (CheckFailedException)
+        {
+            // Synchronously on the UI thread, so the key can't be dispatched between the timeout and this.
+            AbsorbLateBackKeys();
+            throw;
+        }
+    }
+
+    /// <summary>A callback above every other swallows the back keys still on their way, until the runner's teardown.</summary>
+    private static void AbsorbLateBackKeys()
+    {
+#if ANDROID
+        if (s_lateKeySink is not null || Microsoft.Maui.ApplicationModel.Platform.CurrentActivity is not AndroidX.Activity.ComponentActivity activity) return;
+        s_lateKeysAbsorbed = 0;
+        s_lateKeySink = new StandInCallback(() => s_lateKeysAbsorbed++);
+        activity.OnBackPressedDispatcher.AddCallback(activity, s_lateKeySink);
+#endif
+    }
+
+    /// <summary>
+    /// The runner's teardown on Android, so one fixture's leftovers can't reach the next: an app a
+    /// fixture left in the background is brought back to the front through run.sh (an app in the
+    /// background can't start its own activity, and Android freezes it soon after), then the back keys
+    /// still on their way are waited for and absorbed. Returns a failure for the fixture when the app
+    /// had left the foreground.
+    /// </summary>
+    internal static async Task<string?> IsolateFromTheNextFixture(FixtureContext c, Action<string> note)
+    {
+#if ANDROID
+        if (Microsoft.Maui.ApplicationModel.Platform.CurrentActivity is not AndroidX.Activity.ComponentActivity activity) return null;
+        string? failure = null;
+        bool InFront() => activity.Lifecycle.CurrentState.IsAtLeast(AndroidX.Lifecycle.Lifecycle.State.Resumed!);
+        if (!InFront())
+        {
+            // Paused for a moment (a dialog's window closing) is not the background: wait a little first.
+            var wait = System.Diagnostics.Stopwatch.StartNew();
+            while (!InFront() && wait.ElapsedMilliseconds < 1000) await Task.Delay(50);
+            if (!InFront())
+            {
+                var state = activity.Lifecycle.CurrentState;
+                Console.WriteLine("REACTOR-BRING-TO-FRONT");
+                wait.Restart();
+                while (!InFront() && wait.ElapsedMilliseconds < 15000) await Task.Delay(50);
+                failure = $"teardown: the app was in the background ({state}){(InFront() ? "; run.sh brought it back" : "; it could not be brought back")}";
+            }
+        }
+        if (s_lateKeySink is { } sink)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (s_lateKeysAbsorbed < s_keysOutstanding && clock.ElapsedMilliseconds < 20000) await Task.Delay(50);
+            note($"absorbed {s_lateKeysAbsorbed} of {s_keysOutstanding} late back key(s)");
+            sink.Remove();
+            s_lateKeySink = null;
+        }
+        s_keysOutstanding = 0;
+        return failure;
+#else
+        await Task.CompletedTask;
+        return null;
+#endif
     }
 
     private sealed record ModalBackProps(List<string> Log, HashSet<string> Handles);

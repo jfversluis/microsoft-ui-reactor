@@ -22,7 +22,7 @@ public static partial class Fixtures
             new($"AbsoluteLayout_Geometry [{r.Name}]", c => AbsoluteGeometry(c, r.Create())),
             new($"FlyoutPage_IsPresented [{r.Name}]", c => FlyoutIsPresented(c, r.Create())),
             new($"FlyoutPage_Split [{r.Name}]", c => FlyoutSplit(c, r.Create())),
-            new($"FlyoutPage_SplitRotated [{r.Name}]", c => FlyoutSplitRotated(c, r.Create())),
+            new($"FlyoutPage_SplitRotated [{r.Name}]", c => FlyoutSplitRotated(c, r.Create()), RotationLimit),
             new($"ToolbarItems_Platform [{r.Name}]", c => ToolbarPlatform(c, r.Create())),
         }),
         new("ProgressBar_APlainMauiBarKeepsMausBehavior", PlainProgressBar),
@@ -414,6 +414,29 @@ public static partial class Fixtures
 
     private static bool Shown(FlyoutPage page) => FlyoutShown(page).StartsWith("yes", StringComparison.Ordinal);
 
+    /// <summary>
+    /// Waits (up to 3 s) until no view between the flyout's content and the window is animating. UIKit
+    /// doesn't hit-test a view while its frame animates, and MAUI animates the flyout's container
+    /// (0.25 s) when it presents it, including when it handles a size transition after a rotation,
+    /// which can start after a fixed settle; <see cref="Shown"/> reads the flyout through a hit test.
+    /// </summary>
+    private static async Task FlyoutSteady(FlyoutPage page)
+    {
+#if IOS || MACCATALYST
+        bool Animating()
+        {
+            if (page.Flyout is not ContentPage { Content.Handler.PlatformView: UIKit.UIView view }) return false;
+            for (UIKit.UIView? v = view; v is not null; v = v.Superview)
+                if (v.Layer.AnimationKeys is { Length: > 0 }) return true;
+            return false;
+        }
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (Animating() && clock.ElapsedMilliseconds < 3000) await Task.Delay(50);
+#else
+        await Task.CompletedTask;
+#endif
+    }
+
     private static async Task FlyoutIsPresented(FixtureContext c, ElementHandlerRegistry registry)
     {
         // A popover flyout never splits, so this is the toggled path on every device (split mode is FlyoutPage_Split).
@@ -424,12 +447,14 @@ public static partial class Fixtures
             context.Show(Component<FlyoutPageApp, FlyoutProps>(new(accept, FlyoutLayoutBehavior.Popover, reports)), registry);
             var page = await LoadedPage<FlyoutPage>(context);
             await context.Settle();
+            await FlyoutSteady(page);
             Check(!Shown(page), $"closed at mount ({FlyoutShown(page)})");
 
             var log = new FlyoutLog();
             var opened = await TogglePlatform(context, page, log, open: true);
             await context.Settle(600);
             Equal("True", string.Join(",", reports), $"the user's opening reported once ({opened})");
+            await FlyoutSteady(page);
             if (accept) Check(Shown(page) && page.IsPresented, $"accepted, it stays open ({FlyoutShown(page)})");
             else Check(!Shown(page) && !page.IsPresented, $"refused, it closes ({FlyoutShown(page)}, presented {page.IsPresented})");
 
@@ -438,6 +463,7 @@ public static partial class Fixtures
             FlyoutPageApp.Set!(!page.IsPresented);
             await context.Settle(600);
             Check(reports.Count == 0, $"a declared change reports nothing ({string.Join(",", reports)})");
+            await FlyoutSteady(page);
             Check(Shown(page) == page.IsPresented, $"the flyout shows the declaration ({FlyoutShown(page)}, presented {page.IsPresented})");
 
             context.Unmount();
@@ -462,6 +488,7 @@ public static partial class Fixtures
             await context.Settle();
             Check(context.UnhandledErrors.Count == 0, $"{behavior}: no error at mount ({string.Join(" | ", context.UnhandledErrors.Select(e => e.Message))})");
             Check(((IFlyoutPageController)page).ShouldShowSplitMode, $"{behavior}: split (precondition)");
+            await FlyoutSteady(page);
             Check(Shown(page), $"{behavior}: the flyout shown ({FlyoutShown(page)})");
             Check(reports.Count == 0, $"{behavior}: nothing reported at mount ({string.Join(",", reports)})");
 
@@ -470,6 +497,7 @@ public static partial class Fixtures
             FlyoutPageApp.Set!(false);
             await context.Settle();
             Check(context.UnhandledErrors.Count == 0, $"{behavior}: no error for declarations while split");
+            await FlyoutSteady(page);
             Check(Shown(page), $"{behavior}: still shown");
             context.Unmount();
             c.Pages.Set(new ContentPage());
@@ -490,6 +518,7 @@ public static partial class Fixtures
             await context.Settle(800);
             Check(!((IFlyoutPageController)page).ShouldShowSplitMode, "not split after the change (precondition)");
             Equal(declared, page.IsPresented, "IsPresented after leaving split");
+            await FlyoutSteady(page);
             Equal(declared, Shown(page), $"the flyout shows the declaration after leaving split ({FlyoutShown(page)})");
             Check(reports.Count == 0, $"nothing reported ({string.Join(",", reports)})");
             Check(context.UnhandledErrors.Count == 0, "no error");
@@ -517,6 +546,7 @@ public static partial class Fixtures
                 await Rotate(c, landscape: true);
                 var splitInLandscape = ((IFlyoutPageController)page).ShouldShowSplitMode;
                 if (splitInLandscape != split) modeChanges.Add($"{behavior}: {split} -> {splitInLandscape}");
+                await FlyoutSteady(page);
                 Equal(splitInLandscape, Shown(page), $"{behavior}: shown in landscape exactly when split");
                 FlyoutPageApp.Set!(true);
                 await context.Settle();
@@ -526,6 +556,7 @@ public static partial class Fixtures
                 Console.WriteLine($"# flyout rotated {behavior}: split {split}, in landscape {splitInLandscape}, back {((IFlyoutPageController)page).ShouldShowSplitMode}, shown {FlyoutShown(page)}, reports [{string.Join(",", reports)}]");
                 Check(context.UnhandledErrors.Count == 0, $"{behavior}: no error ({string.Join(" | ", context.UnhandledErrors.Select(e => e.Message))})");
                 Check(reports.Count == 0, $"{behavior}: nothing reported");
+                await FlyoutSteady(page);
                 Equal(split, Shown(page), $"{behavior}: shown exactly when split");
                 context.Unmount();
                 c.Pages.Set(new ContentPage());
