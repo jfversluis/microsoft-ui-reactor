@@ -2993,6 +2993,112 @@ show):
 5. One PR for the 137 keys.
 6. Template exceptions go to the list's boundaries (§4.16.4 item 2).
 
+### 4.17 As built (4c-3c)
+
+**What was built** (commits after `10e7aee9`, each step its own commit):
+
+- **The Shell's presentation rule** (`ShellHandlers.cs`, §4.16.4 item 1). `ReactorShell.Project` runs
+  Reactor's projection as one echo scope (`Apply` with the behavior write, the restore's selection, the
+  `SyncSlots` staging, and a tab bar's or tab's own staging through `Stage`); a commit begun in
+  `Update` ends in `SyncSlots` (a restore, which syncs nothing, ends its own), and then `Present`
+  applies the policy to `IFlyoutView.FlyoutBehavior`: under `Flyout` the declaration is written when
+  the Shell differs; under `Locked` and `Disabled` nothing. `PresentationIsPlatforms` keeps outside
+  changes under `Locked` and `Disabled`, or while the effective behavior has moved since the policy
+  last ran, from being reported. `ReactorShell` is its own `IFlyoutBehaviorObserver`, registered
+  before the platform's: an effective behavior changed outside a projection asks for a restore. On
+  Android, leaving `Disabled` for a pane that should show (`Locked`, or `Flyout` declared open) posts
+  one re-projection to the next dispatcher turn, skipped when the `DrawerLayout` shows a drawer
+  (`ShellNatives.DrawerShows`).
+- **Template exceptions** (`ItemsHandlers.cs`, item 2): `ReactorCell.Render` catches the item, group
+  header and group footer templates' exceptions and reports them through `ItemsHost.ReportError`
+  (`HandlerContext.ReportError`), the route a cell tree's own errors take; the cell renders nothing.
+- **`Page.AutomationId`** (`PageHandlers.cs`, item 4): a changed declaration warns once per page
+  (`DiagnosticLog.Warning`, operation `Page.AutomationId`, deduplicated by an attached flag).
+- **The census**: all 137 `Phase4c3c` keys claimed; `Pending` holds CarouselView's 8 (4c-4), ceiling
+  8. In `MatrixCases.Pages.cs`: 57 property cases (both registries; the back button behavior counted
+  as replacements of the page's attached object, its fields read from the object current then;
+  Shell items through `Target` on the item the Shell holds), 5 event cases, 2 controlled cases (4
+  keys: `Tabs.SelectedIndex`, `Shell.FlyoutIsPresented` under `Flyout`), and 71 covered-by claims.
+  New tests: `ShellFlyoutPresentationTests` (72 cases, with a stub behavior observer that forces what MAUI's
+  renderers force), `TemplateErrorTests`, `PageAuditTests`, `NavigationStackAuditTests`,
+  `StructureAuditTests`, the dialog theory in `DialogTests`, and the selection gaps in `ShellTests`
+  and `CollectionSelectionTests`; the Shell harness takes a registry.
+- **Device fixtures** (`ShellAuditFixtures.cs`): `Shell_FlyoutBehaviors_DeclaredOpen` and
+  `_DeclaredClosed` (both registries; every directed behavior change by a render, the open sequence
+  starting from a first `Disabled`; a page pushed and popped natively under `Locked` and `Disabled`;
+  the user's change under `Flyout` as the positive control), `Dialog_PromptFields_ReachThePlatformsTextField`,
+  `Dialog_ActionSheetDestruction_IsTheDestructiveButton`; the characterizations of §4.16.1 stay in
+  `ShellAuditCharacterization.cs`. `NativeDialogs` exposes the prompt's field and an action's style.
+
+**Bugs the audit found, each fixed with a test that failed first:**
+
+| | Found by | Fix | Mutation (red) |
+|---|---|---|---|
+| C-B1. MAUI's presentation writes inside Reactor's projection (the behavior write, the selection staging) were reported as the user's, and an accepting callback overwrote the declaration | the design review, then C3 | one echo scope for the projection; the outside-change filter | S2, S2b, S4 |
+| C-B2. The declaration was written before the staging, so a close the staging forced (a tab bar's `Disabled`) stood, and nothing reapplied it once the item had a flyout again | the design review | the policy after the staging | S3, S8 |
+| C-B3. MAUI's forcing writes at appear and at every page change under `Locked` and `Disabled` were reported as the user's (C1, C3) | the characterization | `PresentationIsPlatforms`; no write under `Locked` and `Disabled` | S4, S7, DM2 |
+| C-B4. Android: leaving a first `Disabled` left the pane hidden with `FlyoutIsPresented` true (MAUI creates the drawer then, and its first open is lost) | C3 | the posted re-projection | S6, S9, DM1 |
+| C-B5. A template's exception escaped into the platform's cell realization | the design review | reported to the list's boundaries | T1 |
+| C-B6. A page's changed `AutomationId` was ignored silently | the design | warns once per page | A1, A2 |
+
+**Characterization** (§4.16.1): C1 and C2 before the design review; C3 after it, on Mac Catalyst, the
+iPad simulator and Android: every directed transition among the three behaviors with both
+declarations, a change 60 ms into an animation, the `FlyoutItem` ↔ `TabBar` switch with the root
+unset, `Disabled` fresh and after a realized drawer, when a re-projection after leaving `Disabled`
+takes effect (the next dispatcher turn, not the same one), and a page change under `Locked` and
+`Disabled` (MAUI forces the presentation again, outside any write). Mac Catalyst and the iPad agree
+throughout; Android differs where the table says.
+
+**Mutants** (each turns the named tests red unless noted): the Shell rule S2 to S9; templates T1;
+`AutomationId` A1, A2; lifecycle L1, L2; selections K1 to K3; stacks N1 to N4; structure Sa to Sq and
+X1 to X16; each dialog field's, `IsOpen`'s and `OnClosed`'s `init` (20); the matrix MX1 to MX4; device
+DM1 (Android) and DM2 (Mac Catalyst). Survivors: **S1** (the behavior write outside the scope) is
+equivalent, as the outside-change filter attributes every write MAUI forces from a behavior change to
+the platform; `APresentationChangeMauiRaisesInsideReactorsProjection_IsAnEcho_*` isolates the scope
+with a stub that closes on every notification, which the filter can't attribute. **K1b** (Shell's
+`!Mounted` check in `OnNavigated`) is equivalent: unmount also clears `ReportSelected` and `Live`.
+**N5** (the user-pop check) survives in the stack theory, as headless MAUI raises no `Popped` for a
+declared pop, and is red in `PageTests.APopOfAPageTheAppNoLongerDeclares_IsNotReported`, which the
+claim cites. Three mutants first survived and were fixed in the tests (K1: a shared closure made the
+stale callback log the new generation; Sn: only an unmoved item was checked; the alert and action
+sheet field inits: only the factory's constructor was used).
+
+**Deviations from §4.16, and why:**
+
+1. **The `Locked` rule changed after C3** (decision 1): the property is the platform's under
+   `Locked` and `Disabled` on all three platforms, rather than Android applying the declaration,
+   because MAUI forces it again at every page change. The Android re-projection covers `Locked` too:
+   a locked pane should show, and after a first `Disabled` it didn't.
+2. **The page lifecycle callbacks** are a covered-by claim on `PageAuditTests` rather than event
+   cases with a `Windowed` option: re-arming each trigger and witnessing it natively (review item 7)
+   needs steps the event runner doesn't have.
+3. **Values whose clear isn't MAUI's default** are `clears: false` with their `Cleared` value: the
+   Shell's title (MAUI mirrors the shown page's), a menu item's text (required), the back button's
+   fields (the behavior stays, with that field at MAUI's default), the swipe modes (a side is always
+   written), and the collection's layout values, threshold and selection mode (non-nullable).
+4. **The prompt's maximum length on iOS and Mac Catalyst** is driven through the handlers UIKit's
+   delegate call reaches (`ShouldChangeCharactersInRanges` from iOS 26, else
+   `ShouldChangeCharacters`), each key inserted only when allowed: `UITextField.InsertText` from code
+   doesn't ask the delegate (measured: it typed past the maximum). Android types through the field's
+   input connection, which applies its filters.
+5. **A `NavigationStack` subscribes to `Application.ModalPopped` at mount**, so a test must create the
+   application first; an app always has one by then.
+
+**Open issues:** the `Entry_Selection_*` fixtures are flaky on the iOS 27.0 iPhone simulator (above). MAUI upstream: Android's `ShellFlyoutRenderer` loses the first open of a drawer it
+creates when leaving `Disabled` (`AddFlyoutContentToLayoutIfNeeded` adds it; the presentation written
+in the same turn is ignored, and the first draw pass doesn't recover it); both platforms re-force the
+presentation on every `AppearanceChanged`. Windows (4g): `ShellNatives.DrawerShows` is false there, so
+the re-projection is Android-only; check Windows' Shell under each behavior on the Dev Box.
+
+**Counts:** headless 1327 (from 1085), engine 80; device, passed/skipped: Mac Catalyst 216/18,
+Android 216/18 (a first full run lost the foreground at `SystemBack_AtTheRoot_*`, 4b's, and five
+fixtures after it timed out; they pass alone and the rerun was clean), iPhone 212/21 with one
+`Entry_Selection_*` fixture failing per full run (a different one each time; alone, the
+`Entry_Selection_*` fixtures fail in two of three runs on this iOS 27.0 simulator; 4c-3c changed no
+entry code), iPad subset (Shell, flyout page, the new dialog fixtures) 50/4 (a first run failed
+`FlyoutPage_Split [controls]` right after the rotation characterizations; it passes alone and the
+rerun was clean). Census: pending 145 (4c-3c 137, 4c-4 8) → 8 (4c-4). Release build: 0 warnings.
+
 ## 5. 4c-4: CarouselView and IndicatorView
 
 To be designed when 4c-4 starts. Moved out of 4c-2 by its design review (round 1), which found the
