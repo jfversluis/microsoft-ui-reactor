@@ -40,6 +40,8 @@ public static partial class Fixtures
         .. VisualsFixtures(),
         .. AuditCharacterizationFixtures(),
         .. AuditFixtures(),
+        .. ShellAuditCharacterizationFixtures(),
+        .. ShellAuditFixtures(),
         new("NavigationStack_PushReachesThePlatform_AndBackIsReported", NavigationBack),
         new("NavigationStack_BackDuringThePushAnimation_IsReported", NavigationBackDuringPush),
         new("NavigationStack_BackTheAppRefuses_PushesThePageBack", NavigationRefusedBack),
@@ -407,7 +409,8 @@ public static partial class Fixtures
                 NavigationStack([Page("first", Label("first"))]) with
                 {
                     Title = "First",
-                    Modals = [Page("sheet", Label("sheet"))],
+                    // Over full screen, so the tabs stay in the window beneath it (see TwoStacksShareModals).
+                    Modals = [Page("sheet", Label("sheet")) with { ModalPresentationStyle = Microsoft.Maui.Controls.PlatformConfiguration.iOSSpecific.UIModalPresentationStyle.OverFullScreen }],
                     OnModalDismissed = Props,
                 },
                 NavigationStack([Page("second", Label("second"))]) with { Title = "Second" });
@@ -421,10 +424,14 @@ public static partial class Fixtures
         var tabs = await LoadedPage<TabbedPage>(c);
         await c.WaitFor(() => c.Window.Navigation.ModalStack.Count == 1, "the first stack's modal");
         await c.Settle();
-        // Showing the second stack makes it reconcile (it loads), with the first stack's modal up.
+        // Showing the second stack makes it reconcile (it loads), with the first stack's modal up. The
+        // tab can load only while the tabs are in the window: a full-screen modal (MAUI's default)
+        // takes the presenter's view out of the window once its presentation finishes, so a tab
+        // selected after that never loads until the modal goes. The fixture used to race that
+        // (selected 400 ms after the modal appeared; an iPad full run lost the race). The modal is
+        // over full screen, which keeps the tabs in the window on iOS; Reactor doesn't write the
+        // style on Mac Catalyst, and Android has no such removal.
         tabs.CurrentPage = tabs.Children[1];
-        // UIKit loads a tab beneath a modal on its own schedule; a hosted CI simulator has taken
-        // more than five seconds (MAUI run 45514660132), so this wait allows longer.
         await c.WaitFor(() => tabs.Children[1].IsLoaded, "the second stack to load", timeoutMs: 20000);
         await c.Settle(2000);
         // The second stack declares no modals; it must leave the first stack's one alone.

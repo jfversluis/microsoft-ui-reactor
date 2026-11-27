@@ -15,10 +15,10 @@ public static partial class Fixtures
         new("Characterize_FlyoutPage_PlatformToggle", FlyoutPlatformToggle),
         new("Characterize_FlyoutPage_WindowShape", FlyoutWindowShape),
         .. new[] { FlyoutLayoutBehavior.SplitOnLandscape, FlyoutLayoutBehavior.Default, FlyoutLayoutBehavior.SplitOnPortrait, FlyoutLayoutBehavior.Split, FlyoutLayoutBehavior.Popover }
-            .Select(behavior => new Fixture($"Characterize_FlyoutPage_Rotation_{behavior}", c => FlyoutRotation(c, behavior))),
+            .Select(behavior => new Fixture($"Characterize_FlyoutPage_Rotation_{behavior}", c => FlyoutRotation(c, behavior), RotationLimit)),
         .. new[] { FlyoutLayoutBehavior.SplitOnLandscape, FlyoutLayoutBehavior.Default }
-            .Select(behavior => new Fixture($"Characterize_FlyoutElement_Rotation_{behavior}", c => FlyoutElementRotation(c, behavior))),
-        new("Characterize_Orientation_DeviceKvc", OrientationDeviceKvc),
+            .Select(behavior => new Fixture($"Characterize_FlyoutElement_Rotation_{behavior}", c => FlyoutElementRotation(c, behavior), RotationLimit)),
+        new("Characterize_Orientation_DeviceKvc", OrientationDeviceKvc, RotationLimit),
         new("Characterize_FlyoutPage_BehaviorChange", FlyoutBehaviorChange),
         new("Characterize_FlyoutElement_Today", FlyoutElementToday),
         new("Characterize_ToolbarItem_StaleInvocation", ToolbarStaleInvocation),
@@ -143,7 +143,13 @@ public static partial class Fixtures
             var center = contentView.ConvertPointToView(new CoreGraphics.CGPoint(contentView.Bounds.Width / 2, contentView.Bounds.Height / 2), null);
             var hit = window.HitTest(center, null);
             var inFlyout = hit is not null && hit.IsDescendantOfView(flyoutRoot);
-            return inFlyout ? $"yes at x {frame.X:0}" : $"no (x {frame.X:0}, hit {hit?.GetType().Name ?? "nothing"})";
+            if (inFlyout) return $"yes at x {frame.X:0}";
+            var chain = new List<string>();
+            for (var v = hit; v is not null && chain.Count < 8; v = v.Superview) chain.Add($"{v.Class.Name}[{v.Frame.X:0},{v.Frame.Y:0} {v.Frame.Width:0}x{v.Frame.Height:0} a{v.Alpha:0.##}]");
+            var animating = new List<string>();
+            for (UIKit.UIView? v = contentView; v is not null; v = v.Superview)
+                if (v.Layer.AnimationKeys is { Length: > 0 } keys) animating.Add($"{v.Class.Name}[{string.Join(",", keys)}]");
+            return $"no (x {frame.X:0}, hit {string.Join(" < ", chain)}; window {window.Bounds.Width:0}x{window.Bounds.Height:0}; flyout root in window {flyoutRoot.Window is not null}, frame {flyoutRoot.ConvertRectToView(flyoutRoot.Bounds, null)}; animating [{string.Join(" ", animating)}])";
 #else
             return $"unknown platform (x {frame.X:0})";
 #endif
@@ -278,22 +284,51 @@ public static partial class Fixtures
         return $"{(c.Window.Width > c.Window.Height ? "landscape" : "portrait")} {c.Window.Width:0}x{c.Window.Height:0}, {sources}";
     }
 
-    /// <summary>Rotates an iPad (simulator) in process, waiting for the window's shape to follow.</summary>
+    // Fixtures that rotate wait for each rotation to finish, which takes several seconds on a loaded
+    // machine: they get more than the runner's usual 30 s.
+    private const int RotationLimit = 120;
+
+    /// <summary>
+    /// Rotates an iPad (simulator) in process and waits until the rotation is over: the scene's interface
+    /// orientation, UIKit's window and MAUI's window all agree, and stay so. A request still on its way
+    /// from an earlier call (one that timed out under load) is waited for first, so it can't land after
+    /// this one and leave the next fixture rotated.
+    /// </summary>
     private static async Task Rotate(FixtureContext c, bool landscape)
     {
 #if IOS && !MACCATALYST
-        UIKit.UIWindowScene? scene = null;
-        foreach (var connected in UIKit.UIApplication.SharedApplication.ConnectedScenes)
-            if (connected is UIKit.UIWindowScene windowScene) scene = windowScene;
-        if (scene is null) throw new InvalidOperationException("no window scene");
-        string? error = null;
-        var mask = landscape ? UIKit.UIInterfaceOrientationMask.LandscapeRight : UIKit.UIInterfaceOrientationMask.Portrait;
         if (!OperatingSystem.IsIOSVersionAtLeast(16)) throw new SkipException("rotation from code needs iOS 16");
+        var scene = Scene() ?? throw new InvalidOperationException("no window scene");
+        if (s_rotationRequested is { } pending && pending != landscape)
+        {
+            await c.WaitFor(() => InOrientation(c, scene, pending), $"an earlier rotation to {(pending ? "landscape" : "portrait")} to land", 20000);
+            await SteadyGeometry(c, scene);
+        }
+        s_rotationRequested = null;
+        if (InOrientation(c, scene, landscape))
+        {
+            await SteadyGeometry(c, scene);
+            if (InOrientation(c, scene, landscape)) return;
+        }
+        var mask = landscape ? UIKit.UIInterfaceOrientationMask.LandscapeRight : UIKit.UIInterfaceOrientationMask.Portrait;
         foreach (var window in scene.Windows) window.RootViewController?.SetNeedsUpdateOfSupportedInterfaceOrientations();
-        scene.RequestGeometryUpdate(new UIKit.UIWindowSceneGeometryPreferencesIOS(mask), e => error = e.LocalizedDescription);
-        await c.WaitFor(() => error is not null || (c.Window.Width > c.Window.Height) == landscape, $"the window to turn {(landscape ? "landscape" : "portrait")}", 8000);
-        if (error is not null) throw new InvalidOperationException("rotation refused: " + error);
-        await c.Settle(1000);
+        for (var attempt = 1; ; attempt++)
+        {
+            string? error = null;
+            s_rotationRequested = landscape;
+            scene.RequestGeometryUpdate(new UIKit.UIWindowSceneGeometryPreferencesIOS(mask), e => error = e.LocalizedDescription);
+            await c.WaitFor(() => error is not null || InOrientation(c, scene, landscape), $"the window to turn {(landscape ? "landscape" : "portrait")}", 20000);
+            if (error is null) break;
+            // Refused: nothing is on its way. On a loaded machine the system's own request times out
+            // (BSActionErrorDomain error 2), so a refused request is made again, twice at most.
+            s_rotationRequested = null;
+            Console.WriteLine($"# rotation to {(landscape ? "landscape" : "portrait")} refused (attempt {attempt}): {error}");
+            if (attempt == 3) throw new InvalidOperationException("rotation refused: " + error);
+            await SteadyGeometry(c, scene);
+        }
+        s_rotationRequested = null;
+        await SteadyGeometry(c, scene);
+        await c.Settle(500);
 #elif ANDROID
         var activity = Microsoft.Maui.ApplicationModel.Platform.CurrentActivity ?? throw new InvalidOperationException("no activity");
         activity.RequestedOrientation = landscape ? Android.Content.PM.ScreenOrientation.Landscape : Android.Content.PM.ScreenOrientation.Portrait;
@@ -304,6 +339,63 @@ public static partial class Fixtures
         throw new SkipException("rotation is characterized on an iPad simulator or an Android tablet");
 #endif
     }
+
+    /// <summary>
+    /// The runner's teardown on an iPad: puts the device back in portrait when a fixture left it rotated or
+    /// a rotation request still on its way. Returns what it did, or null when nothing was needed.
+    /// </summary>
+    internal static async Task<string?> RestorePortrait(FixtureContext c)
+    {
+#if IOS && !MACCATALYST
+        if (DeviceInfo.Idiom != DeviceIdiom.Tablet || !OperatingSystem.IsIOSVersionAtLeast(16) || Scene() is not { } scene) return null;
+        if (s_rotationRequested is null && InOrientation(c, scene, landscape: false)) return null;
+        var before = Orientation(c);
+        await Rotate(c, landscape: false);
+        return $"restored portrait (was {before})";
+#else
+        await Task.CompletedTask;
+        return null;
+#endif
+    }
+
+#if IOS && !MACCATALYST
+    // The orientation last requested and not yet seen on screen.
+    private static bool? s_rotationRequested;
+
+    private static UIKit.UIWindowScene? Scene()
+    {
+        UIKit.UIWindowScene? scene = null;
+        foreach (var connected in UIKit.UIApplication.SharedApplication.ConnectedScenes)
+            if (connected is UIKit.UIWindowScene windowScene) scene = windowScene;
+        return scene;
+    }
+
+    private static UIKit.UIInterfaceOrientation? SceneOrientation(UIKit.UIWindowScene scene) =>
+        OperatingSystem.IsIOSVersionAtLeast(16) ? scene.EffectiveGeometry.InterfaceOrientation : null;
+
+    private static bool InOrientation(FixtureContext c, UIKit.UIWindowScene scene, bool landscape)
+    {
+        var sceneLandscape = SceneOrientation(scene) is UIKit.UIInterfaceOrientation.LandscapeLeft or UIKit.UIInterfaceOrientation.LandscapeRight;
+        var bounds = scene.Windows.FirstOrDefault()?.Bounds ?? default;
+        return sceneLandscape == landscape && (bounds.Width > bounds.Height) == landscape && (c.Window.Width > c.Window.Height) == landscape;
+    }
+
+    // Unchanged for 750 ms: the rotation's layout passes are over.
+    private static async Task SteadyGeometry(FixtureContext c, UIKit.UIWindowScene scene)
+    {
+        string Shape() => $"{SceneOrientation(scene)} {scene.Windows.FirstOrDefault()?.Bounds} {c.Window.Width}x{c.Window.Height}";
+        var last = Shape();
+        var since = System.Diagnostics.Stopwatch.StartNew();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (since.ElapsedMilliseconds < 750)
+        {
+            if (clock.ElapsedMilliseconds > 20000) throw new CheckFailedException($"the window's geometry didn't settle within 20 s ({Shape()})");
+            await Task.Delay(50);
+            var now = Shape();
+            if (now != last) { last = now; since.Restart(); }
+        }
+    }
+#endif
 
     /// <summary>
     /// iPad: the device orientation set through UIDevice (what a physical rotation changes), to see whether

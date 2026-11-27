@@ -58,6 +58,20 @@ public static class NativeDialogs
 #endif
     }
 
+#if IOS || MACCATALYST
+    /// <summary>The text field of the prompt on screen, if one is.</summary>
+    public static UITextField? PromptField(Window window) =>
+        Alerts(window).LastOrDefault(a => !a.IsBeingDismissed)?.TextFields?.FirstOrDefault();
+
+    /// <summary>The style of the action <paramref name="title"/> of the alert on screen.</summary>
+    public static UIAlertActionStyle? ActionStyle(Window window, string title) =>
+        Alerts(window).LastOrDefault(a => !a.IsBeingDismissed)?.Actions.FirstOrDefault(a => a.Title == title)?.Style;
+#elif ANDROID
+    /// <summary>The text field of the prompt on screen, if one is.</summary>
+    public static Android.Widget.EditText? PromptField(Window window) =>
+        DialogRoots().LastOrDefault() is { } root ? Find<Android.Widget.EditText>(root) : null;
+#endif
+
     /// <summary>
     /// Answers the dialog on screen through its button <paramref name="button"/>, typing
     /// <paramref name="text"/> first for a prompt, and returns once the dialog has gone from the screen;

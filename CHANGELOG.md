@@ -274,6 +274,21 @@ Conventions for contributors:
 
 ### Fixed
 
+- **MAUI renderer (spec 070 §4.16, §4.17).** A Shell's flyout presentation no longer reports MAUI's
+  own opens and closes as the user's: those MAUI makes when Reactor changes the flyout behavior or the
+  selection (a tab bar has no flyout), and those it forces at appear and at every page change under
+  `Locked` (open) and `Disabled` (closed); an accepting callback overwrote the declaration with them.
+  The declaration now applies only under the `Flyout` behavior, after the Shell's items and selection
+  are staged, and on Android a pane that should show after a first `Disabled` (whose drawer MAUI never
+  created) is re-projected (§4.16.4 item 1). An item, group header or group footer template that
+  throws now reaches the `ErrorBoundary` above the list instead of the platform's cell realization
+  (§4.16.4 item 2), and a recycled cell rebound to an item whose template throws no longer keeps the
+  previous item's tree mounted. A page's or view's `AutomationId` changed after mount, ignored
+  silently before, is logged once per page or view (§4.16.4 item 4). A view's `AutomationId` is no
+  longer set again when an update passes through an element without modifiers (`Label(…)` between two
+  `.AutomationId(…)` renders): MAUI threw "AutomationId may only be set one time" on the Controls
+  renderer, and the direct renderer overwrote the id (§4.17, C-B7).
+
 - **MAUI renderer (spec 070 §4.14, §4.15).** A split flyout (iPad and Mac Catalyst with `Split` or
   `SplitOnPortrait`, Android tablets per orientation) no longer fails to load: while split, and while
   the platform changes mode, its `IsPresented` is the platform's (never written, never reported), and

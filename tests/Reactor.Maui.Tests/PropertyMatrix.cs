@@ -138,6 +138,8 @@ public sealed record ExcludedClaim(Type ElementType, string Property, string Rea
     public string Key => $"{ElementType.Name}.{Property}";
 }
 
+// Builds Shells (their cases), whose MAUI routes are process-wide: the Shell collection.
+[Collection("MauiShell")]
 public class PropertyMatrixTests
 {
     public static readonly (string Name, Func<ElementHandlerRegistry> Create)[] Registries =

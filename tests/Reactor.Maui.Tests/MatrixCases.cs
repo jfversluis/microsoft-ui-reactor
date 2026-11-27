@@ -25,9 +25,10 @@ public static partial class MatrixCases
     private static readonly Point[] BigTriangle = [new(0, 0), new(20, 0), new(0, 20)];
 
     public static readonly IReadOnlyList<PropertyCase> Properties =
-        [.. ShapeCases(), .. ContainerCases(), .. ImageCases(), .. TextCases(), .. ControlCases(), .. LayoutCases(), .. RichTextCases()];
+        [.. ShapeCases(), .. ContainerCases(), .. ImageCases(), .. TextCases(), .. ControlCases(), .. LayoutCases(), .. RichTextCases(),
+         .. PageCases(), .. ShellCases(), .. SwipeAndCollectionCases()];
 
-    public static readonly IReadOnlyList<ControlledCase> Controlled = ControlledCases();
+    public static readonly IReadOnlyList<ControlledCase> Controlled = [.. ControlledCases(), .. PageControlled()];
 
     public static readonly IReadOnlyList<EventCase> Events =
     [
@@ -40,6 +41,7 @@ public static partial class MatrixCases
             Payload = "clicked",
         },
         .. ControlEvents(),
+        .. PageEvents(),
     ];
 
     public static readonly IReadOnlyList<CoveredClaim> Covered =
@@ -51,6 +53,7 @@ public static partial class MatrixCases
             "set, update in place (state kept), replace, clear (unmounted), direct child hosted",
             "content not cleared on null (M23) and a remount on every update (M24): red (spec 070 §4.13)"),
         .. ControlCovered(),
+        .. PageCovered(),
     ];
 
     public static readonly IReadOnlyList<ExcludedClaim> Excluded = [];

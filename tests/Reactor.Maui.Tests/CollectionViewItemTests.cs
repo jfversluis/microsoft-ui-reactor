@@ -275,6 +275,57 @@ public class CollectionSelectionTests
         Assert.Empty(reports);
     }
 
+    /// <summary>
+    /// Spec 070 §4.16.2 group K: with both keys declared, the mode decides which counts; the callback is
+    /// the current one; a mode change with a selection; nothing after unmount. Both registries.
+    /// </summary>
+    [Theory]
+    [InlineData("controls")]
+    [InlineData("direct")]
+    public void TheSelection_FollowsTheMode_ReachesTheCurrentCallback_AndNothingAfterUnmount(string registry)
+    {
+        var log = new List<string>();
+        CollectionViewElement List(SelectionMode mode, string generation) =>
+            CollectionView(new[] { "a", "b", "c" }, k => k, k => Label(k)) with
+            {
+                SelectionMode = mode,
+                SelectedKey = "a",
+                SelectedKeys = ["b", "c"],
+                OnSelectionChanged = keys => log.Add($"{generation} {string.Join("+", keys)}"),
+            };
+        string Native(CollectionView v) => v.SelectionMode == SelectionMode.Multiple
+            ? string.Join("+", v.SelectedItems.OfType<ItemBox>().Select(b => b.Key))
+            : (v.SelectedItem as ItemBox)?.Key ?? "none";
+        var host = new TestHost(PropertyMatrixTests.Registries.Single(r => r.Name == registry).Create()).Render(List(SelectionMode.Single, "first"));
+        var view = host.View<CollectionView>();
+        host.Scheduler.Drain();
+        Assert.Equal("a", Native(view));
+
+        // A mode change with a selection writes the other key set, unreported.
+        host.Render(List(SelectionMode.Multiple, "first"));
+        host.Scheduler.Drain();
+        Assert.Equal("b+c", Native(view));
+        Assert.Empty(log);
+
+        view.SelectedItems = [Cells.Box(view, "a")];
+        host.Scheduler.Drain();
+        Assert.Equal(["first a"], log);
+        Assert.Equal("b+c", Native(view)); // refused: restored
+
+        host.Render(List(SelectionMode.Single, "second"));
+        host.Scheduler.Drain();
+        Assert.Equal("a", Native(view));
+        view.SelectedItem = Cells.Box(view, "c");
+        host.Scheduler.Drain();
+        Assert.Equal(["first a", "second c"], log);
+
+        host.Root.Unmount();
+        view.SelectedItem = Cells.Box(view, "b");
+        host.Scheduler.Drain();
+        Assert.Equal("b", Native(view)); // positive control: the native selection changed
+        Assert.Equal(2, log.Count);
+    }
+
     [Fact]
     public void MultipleSelection_DeclaredInAnotherOrder_WritesNothing()
     {
@@ -850,5 +901,87 @@ public class CollectionViewFeatureTests
         Assert.False(view.ScrollToKey("zz"));
         Assert.Single(requests);
         Assert.Throws<InvalidOperationException>(() => new CollectionView().ScrollToKey("a"));
+    }
+}
+
+/// <summary>Spec 070 §4.16.4 item 2: a template's exception reaches the boundaries above the list.</summary>
+public class TemplateErrorTests
+{
+    public enum Role { Item, GroupHeader, GroupFooter }
+
+    public static TheoryData<string, Role> Cases()
+    {
+        var data = new TheoryData<string, Role>();
+        foreach (var (registry, _) in PropertyMatrixTests.Registries)
+            foreach (var role in Enum.GetValues<Role>()) data.Add(registry, role);
+        return data;
+    }
+
+    private static Element Throw(string what) => throw new InvalidOperationException($"template failed for {what}");
+
+    private static CollectionViewElement List(Role role) => role == Role.Item
+        ? CollectionView(new[] { "a", "boom" }, k => k, k => k == "boom" ? Throw(k) : Label(k))
+        : CollectionView(new[] { "x", "boom" }, g => g, g => new[] { g + "1" }, i => i, i => Label(i),
+            g => role == Role.GroupHeader && g == "boom" ? Throw(g) : Label("header " + g),
+            g => role == Role.GroupFooter && g == "boom" ? Throw(g) : Label("footer " + g));
+
+    [Theory]
+    [MemberData(nameof(Cases))]
+    public void ATemplatesException_WhenThePlatformBindsACell_ReachesTheBoundaryAboveTheList(string registry, Role role)
+    {
+        var errors = new List<Exception>();
+        var host = new TestHost(PropertyMatrixTests.Registries.Single(r => r.Name == registry).Create());
+        host.Root.UnhandledException += errors.Add;
+        host.Render(ErrorBoundary(List(role), e => Label("fallback: " + e.Message)));
+        var view = host.View<CollectionView>();
+
+        // The platform binds the healthy cell, then the failing one; neither throws into the platform.
+        var source = (System.Collections.IList)view.ItemsSource;
+        var template = role switch { Role.GroupHeader => view.GroupHeaderTemplate, Role.GroupFooter => view.GroupFooterTemplate, _ => view.ItemTemplate };
+        var healthy = Cells.Bind(template, source[0]);
+        Assert.NotEqual("<none>", Cells.Text(healthy)); // positive control: the template renders
+        var failing = Cells.Bind(template, source[1]);
+        Assert.Equal("<none>", Cells.Text(failing));
+
+        host.Scheduler.Drain();
+        Assert.Empty(errors);
+        Assert.Equal("fallback: template failed for boom", host.RootView switch
+        {
+            MauiLabel label => label.Text,
+            DirectLabel direct => direct.Text,
+            var other => other?.GetType().Name,
+        });
+    }
+
+    /// <summary>A cell already rendering an item, rebound to one whose template throws, keeps nothing of the old item.</summary>
+    [Theory]
+    [MemberData(nameof(Cases))]
+    public void ARecycledCellRebound_ToAnItemWhoseTemplateThrows_UnmountsTheOldTree(string registry, Role role)
+    {
+        var errors = new List<Exception>();
+        var log = new List<string>();
+        var host = new TestHost(PropertyMatrixTests.Registries.Single(r => r.Name == registry).Create());
+        host.Root.UnhandledException += errors.Add;
+        Element Row(string k) => Component<StructureProbe, StructureProbeProps>(new($"{registry}-{role}-{k}", log, []));
+        var list = role == Role.Item
+            ? CollectionView(new[] { "a", "boom" }, k => k, k => k == "boom" ? Throw(k) : Row(k))
+            : CollectionView(new[] { "x", "boom" }, g => g, g => new[] { g + "1" }, i => i, i => Label(i),
+                g => role == Role.GroupHeader && g == "boom" ? Throw(g) : Row(g),
+                g => role == Role.GroupFooter && g == "boom" ? Throw(g) : Row(g));
+        host.Render(ErrorBoundary(list, e => Label("fallback: " + e.Message)));
+        var view = host.View<CollectionView>();
+        var source = (System.Collections.IList)view.ItemsSource;
+        var template = role switch { Role.GroupHeader => view.GroupHeaderTemplate, Role.GroupFooter => view.GroupFooterTemplate, _ => view.ItemTemplate };
+        var cell = Cells.Bind(template, source[0]);
+        Assert.NotEqual("<none>", Cells.Text(cell)); // positive control: the old item's tree
+        Assert.Empty(log);
+
+        cell.BindingContext = source[1];
+
+        Assert.Null(cell.Content);
+        Assert.Single(log); // the old tree's cleanup ran
+        host.Scheduler.Drain();
+        Assert.Empty(errors);
+        Assert.IsNotType<CollectionView>(host.RootView, exactMatch: false);
     }
 }

@@ -9,7 +9,8 @@ Phase 4c closes the controls rows of spec 068's inventory. It lands in four gate
 | 4c-3 | Shapes, gradient brushes, ContentView, image source equality, tests for every remaining 🧪 control and layout, and the §1 audit of every ✅ row of spec 068 |
 | 4c-4 | CarouselView and IndicatorView (moved out of 4c-2 in its design review) |
 
-This spec details 4c-1 (§2), 4c-2 (§3) and 4c-3 (§4, two PRs: 4c-3a and 4c-3b). §5 is
+This spec details 4c-1 (§2), 4c-2 (§3) and 4c-3 (§4, three PRs: 4c-3a, 4c-3b and 4c-3c, the last split off
+4c-3b in its design review, §4.14.2). §5 is
 written when 4c-4 starts. The bar for each item is spec 068 §1.
 
 ## 1. Scope
@@ -800,8 +801,16 @@ allocations +0.0–0.2%.
   taking 5.9 s). Locally, on a freshly erased simulator, the first load took 8.4 s and 3.6 s, with
   `OnNavigating` and `OnNavigated` both raised, just late: the time is WebKit launching its WebContent
   and GPU processes (its own log: 6.4 s and 1.4 s), not a missed event, a rejected completion or an
-  unresolved asset URL. The fixtures now give the process's first web view page 60 s and later ones
-  the ordinary 10 s, note each load's time, and on a timeout list every event with its time and URL.
+  unresolved asset URL. The fixtures note each load's time, and on a timeout they list every event
+  with its time and URL.
+- **Correction (4c-3c, `ff96f9ee`):** the earlier rule (60 s for the process's first web view only)
+  was wrong. Every `WKWebView` gets its own WebContent process, and WebKit keeps only one spare
+  started. A later new web view can also wait for a process to start, and on CI's
+  `WebView_CommandsThroughARef` it stalled past 10 s with no event at all.
+  - **Reproduced:** killing the spare process under load showed the same stall.
+  - **Ruled out:** a crash (WebKit restarts the process) and a lost source write.
+  - **Fix:** every new web view's first page now gets 60 s, and later navigations in the same web
+    view keep 10 s. The WebView fixtures run under a 150 s limit.
 - `WebView_Navigations_AreAttemptedAndCompleted` failed intermittently in full Android runs (2 of 3
   on the 4c-2 branch, never alone). Two fixture races, both reproduced on purpose:
   - **The recovery after a late cancel.** Where Android's late-cancelled reload landed early, it left
@@ -1667,7 +1676,9 @@ items (shapes, gradient brushes, ContentView), image source equality, tests for 
 control and layout, and the §1 audit of every ✅ row. Modifiers (fonts, opacity, shadow, clip,
 transforms, accessibility, swipe and pan) stay in 4d and 4e (spec 068 §4).
 
-**Two gated PRs** (proposed here, accepted in design review round 1):
+**Two gated PRs** (proposed here, accepted in design review round 1; 4c-3b's design later split its
+audit, moving the page, navigation, Shell, dialog, collection and swipe properties to a third, 4c-3c,
+§4.14.2 and §4.16):
 
 | PR | Scope | Rows it closes |
 |---|---|---|
@@ -2795,6 +2806,379 @@ check box) aren't in it.
   or leaves split mode, after WinUI's `SplitView`/`NavigationView` `DisplayModeChanged`; the README
   suggests the idiom or the window's size meanwhile.
 - **4c-3c**: the 137 page, navigation, Shell, dialog, collection and swipe properties.
+
+### 4.16 4c-3c: pages, navigation, Shell, dialogs, collections and swipe (design)
+
+4c-3c empties the census's frozen `Phase4c3c` list (137 keys, §4.14.2): only CarouselView's 8 keys
+(4c-4) may stay pending. The method, the evidence rules and the handling of finds are §4.8's and
+§4.14.6's; this section says how each group is proven and what was characterized first.
+
+#### 4.16.1 Characterization (device, `ShellAuditCharacterization.cs`)
+
+The design rests on one platform behavior that the existing tests never touched, so it was measured
+first, on Mac Catalyst 26.7, the iPad simulator (iOS 27.2) and the Android 17 emulator (phone).
+
+| | Mac Catalyst | iPad | Android (phone) |
+|---|---|---|---|
+| Plain MAUI `Shell`, `FlyoutIsPresented` per `FlyoutBehavior` | `Flyout` and `Disabled`: `false` at appear; `Locked`: **MAUI sets `true` at appear, outside any write** | the same | the same |
+| Writes of `true` and `false` | accepted under every behavior (no throw, unlike `FlyoutPage`'s split mode), each `PropertyChanged` in-write | the same | the same |
+| The renderer's own change (`SetValueFromRenderer`, what a user's open or close does) | raised outside any write | the same | the same |
+| **Reactor today**, `Locked` with `false` declared | **mount reports MAUI's `true` as the user's input** (once), and the restore writes `false` back | the same | the same, reported **twice** |
+| Reactor today, `Flyout` and `Disabled` | declared writes unreported; a user's open reported once and, refused, restored | the same | the same |
+
+**Gate C1, what the platform shows** (`Characterize_ShellFlyout_Visibility`: the flyout header on
+screen, by the window's hit test on iOS and Mac Catalyst and by being shown inside the window on
+Android; the positive control is the `Flyout` behavior, opened and closed by writes):
+
+| | Mac Catalyst | iPad | Android (phone) |
+|---|---|---|---|
+| `Flyout`: `false`, `true`, `false` | hidden, shown, hidden (positive control) | the same | the same |
+| `Locked`: MAUI's `true` at appear, then `false`, `true`, `false` | **shown throughout**: the locked pane ignores `FlyoutIsPresented` | the same | **follows it**: shown, hidden, shown, hidden |
+| `Disabled`: `false`, `true`, `false` | hidden, **shown**, hidden: code can open a disabled flyout (the user can't) | the same | never realized: `true` shows nothing |
+| Events | each write's in-write; `Locked`'s appear-time `true` outside any write; nothing else | the same | the same |
+
+Nobody can toggle a locked flyout by hand on any of the three (no button, no gesture), so every
+change raised outside Reactor's writes while `Locked` is MAUI's.
+
+**Gate C2**: a page in a tree hosted by a `Window` raises `Appearing` and `Disappearing` headlessly
+(`SendAppearing`, `SendDisappearing`, `SendAppearing` gave appearing, disappearing, appearing); without a
+window it raises nothing. So the page lifecycle callbacks are event cases in a windowed host.
+
+**Gate C3, behavior transitions** (asked by the design review; plain MAUI `Shell`s with a flyout item
+and a tab bar, `Characterize_ShellFlyout_TransitionsFrom*`, `_Animation`, `_ItemSwitch`,
+`_DisabledFresh`, `_DisabledAfterFlyout`, `_LeaveDisabledTiming`, `_PageChange`). "In-write" means
+raised synchronously inside the behavior or selection write, which is how Reactor's own projection
+triggers them; "outside" means raised later by the platform.
+
+| From → to, presentation declared before | Mac Catalyst and iPad (identical) | Android (phone) |
+|---|---|---|
+| `Flyout` → `Locked`, `false` | MAUI writes `true` in-write; shown | the same |
+| `Flyout` → `Disabled`, `true` | MAUI writes `false` in-write; hidden | the same |
+| `Locked` → `Flyout`, `true` | nothing written; still shown | **MAUI writes `false` in-write** (closes the drawer leaving `Locked`); hidden |
+| `Locked` → `Flyout`, `false` | nothing written; hidden (the pane only showed because locked) | nothing; hidden |
+| `Locked` → `Disabled`, `true` | MAUI writes `false` in-write; hidden | the same |
+| `Disabled` → `Locked`, `false` | MAUI writes `true` in-write; shown | MAUI writes `true` in-write; **hidden when `Disabled` was the first behavior** (the drawer was never realized) |
+| `Disabled` → `Flyout`, `true` | nothing written; shown | nothing written; **hidden when `Disabled` was the first behavior**: `FlyoutIsPresented` is `true` and the pane closed, after 2.5 s too. A write of `false` then `true` opens it, but only from the next dispatcher turn: written in the same turn as the behavior it is ignored (a posted message runs after the layout traversal that realizes the drawer) |
+| `Disabled` after a realized flyout, then `true` written | shown | **shown**: `Disabled` closes but doesn't remove a realized drawer, and a write opens it |
+| A behavior change 60 ms into an open or close animation | the end state is the behavior's (`Locked` shown and `true`, `Disabled` hidden and `false`), MAUI's forcing write in-write | the same |
+| `FlyoutItem` → `TabBar` with the root behavior unset, `true` | effective `Flyout` → `Disabled`: MAUI writes `false` in-write; hidden. `true` written there: shown | the same |
+| `TabBar` → `FlyoutItem`, `true` | nothing written; shown | the same |
+| Root `Locked`, switching items | nothing written; shown throughout | the same |
+| **A page pushed and popped in the shown section**, `Locked` with `false` | **MAUI writes `true` outside any write**; shown | the same, and the hidden pane opens |
+| The same, `Disabled` with `true` (realized, shown) | **MAUI writes `false` outside any write**; hidden | the same |
+
+The last two rows decide the rule: MAUI runs its behavior observers on every structure or page change
+(`Shell.AppearanceChanged` → `NotifyFlyoutBehaviorObservers`), and both platforms' observers force
+`true` under `Locked` and `false` under `Disabled` each time. So a declaration that disagrees with
+either can't be held: MAUI overwrites it at the next navigation, wherever that comes from.
+
+#### 4.16.2 Groups and how each is proven
+
+| Group | Keys | Proof |
+|---|---|---|
+| **M. Plain values** | Page: `Title`, `BackgroundColor`, `Padding`, `Icon`, `HasNavigationBar`, `HasBackButton`, `BackButtonTitle`, `NavBarIsVisible`, `TabBarIsVisible`, `PresentationMode`, `ModalPresentationStyle`, `SearchHandler`, `BackButtonBehavior`, and `ShellBackButton`'s `Text`, `Icon`, `IsVisible`, `IsEnabled` (read on the attached `BackButtonBehavior`, the §4.15 `Target` option); NavigationStack: `Title`, `Icon`, `BarBackgroundColor`, `BarTextColor`; Tabs: `BarBackgroundColor`, `SelectedTabColor`, `UnselectedTabColor`; Shell: `Title`, `FlyoutBehavior` and its eleven colors; FlyoutItem: `Title`, `Icon`, `DisplayOptions`; ShellTab and ShellContent: `Title`, `Icon`; ShellMenuItem: `Text`, `Icon`; SwipeView: `Threshold` and the four `*ItemsMode`; CollectionView: `Arrangement`, `Span`, `ItemSpacing`, `ItemSizingStrategy`, `RemainingItemsThreshold`, `SelectionMode` (57) | **matrix cases**, both registries (every one of these renders a Controls page or view on both). Shell items are read through `Target` on the native item the case's Shell holds (a fresh item for the default). `BackButtonBehavior` and the `ShellBackButton` fields are not plain writes: the handler replaces the whole attached `BackButtonBehavior` object, so their cases count replacements of `Shell.BackButtonBehaviorProperty` on the page and read each field from the object current then, and a case removes the whole behavior (the property cleared, MAUI's default back button). The swipe modes rebuild their side, so their write is the side's items property; the collection layout values replace `ItemsLayout` (one write) and are non-nullable (`clears: false`, as §4.15 deviation 2) |
+| **E. Events** | Page: `OnAppearing`, `OnDisappearing`; ShellMenuItem: `OnClick`; SwipeView: `OnSwipeStarted`, `OnSwipeChanging`, `OnSwipeEnded`; CollectionView: `OnRemainingItemsThresholdReached` (7) | **event cases** (callback 1, callback 2, nothing after unmount). The page's two run in a windowed host (C2), with a specialized test rather than the plain event case: MAUI's `SendAppearing` needs an `Application`-parented window and ignores a repeat, and `SendDisappearing` needs an appeared page, so each fire re-arms its trigger (disappear before the next appear, appear before the next disappear), and a native witness (a handler on the page's own `Appearing`/`Disappearing`) proves each trigger raised the event, after Reactor's unmount too, while Reactor's callback stays silent there |
+| **C. Controlled values** | Tabs: `SelectedIndex` with `OnSelectedIndexChanged`; Shell: `FlyoutIsPresented` with `OnFlyoutIsPresentedChanged` (4) | the **controlled-value runner** (§4.15), both registries. Shell's flyout adds facets the runner can't express: unset (`null`) is uncontrolled, so a user's change is reported and kept; and the `Locked` rule (§4.16.4); both covered-by tests |
+| **K. Keyed selections** | Shell: `Selected`, `OnSelectedChanged`; CollectionView: `SelectedKey`, `SelectedKeys`, `OnSelectionChanged` (5) | covered-by claims on the existing tests where they prove the facets (below), plus a **selection theory** for the gaps: a callback swapped between renders reaches the new one, nothing after unmount, both registries, `SelectedKey` and `SelectedKeys` both set (the mode decides which counts, `SelectionRules.Effective`), and a mode change with a selection |
+| **N. Navigation stacks** | NavigationStack: `Pages`, `Modals`, `Animated`, `OnPopped`, `OnModalDismissed` (5) | a **stack theory** over pages and modals: a declared push and pop written and unreported, a user pop reported once with its depth (a dismissal with the modals left), refused and pushed back, accepted and kept, the current callback, nothing after unmount; `Animated` reaching the navigator per change. Claims also cite the existing evidence: `PageTests.NavigationStack_FollowsTheDeclaredStack` and the `NavigationStack_*` device fixtures (reported back, refused back, modal dismissal), `NavigationHostTests.AnimatedFalse_*` |
+| **S. Structure** | Page: `Content`, `TitleView`; Tabs: `Pages`; Shell: `Items`, `FlyoutHeader`, `FlyoutFooter`, `FlyoutContent`; TabBar and FlyoutItem: `Tabs`; ShellTab: `Content`, `Contents`; ShellContent: `Page`; CollectionView: `Items`, `ItemKey`, `ItemTemplate`, `ReuseItemTrees`, `Groups`, `GroupHeaderTemplate`, `GroupFooterTemplate`, `Header`, `Footer`, `EmptyView`, `ShowsSelectionHighlight`; ItemGroup: `Key`, `Group`, `Items`; SwipeView: `Content` and the four sides' items; SwipeItemData: `Text`, `Icon`, `BackgroundColor`, `Content`, `OnInvoked` (36) | **covered-by claims**, each listing the facets its test proves and its own mutation. Reused where the test proves them (read, not named): `ShellTests.Update_AddsRemovesAndReordersTabsAndTopTabs_KeepingTheirObjects` (keyed add, remove, reorder keeping the native objects), `ShellTests.Flyout_IsControlled_TheUsersChangeReported_AndItsHeaderUpdatesInPlace` (header updated in place), `CollectionViewFeatureTests.HeaderFooterAndEmptyView_AreSetReplacedAndCleared` (both registries), `CollectionViewTests.Items_AreDiffedByKey_KeepingUnchangedEntries`, the grouped tests (`Groups_AreKeyed_*`, `ACrossGroupMove_*`), the cell tests (`Cells_*`, `ARecycledCell_*`), the swipe tests (`AContentItem_RerendersInPlace_AndUnmountsWhenRemoved`, `Invoking_ReachesTheLiveCallback_AndNothingAfterUnmount`, `ARetiredItem_InvokesNothing`, `AChangedTextColorOrIcon_RebuildsOnlyThatSide`). **New tests for the gaps the reading found**: a page's content set, updated in place, replaced and cleared, and its title view cleared; the Shell flyout header cleared, its retained host emptied and the header's tree cleaned up (an effect cleanup probe), and set again into the same host; the flyout footer updated and cleared and the flyout content cleared after being set; the root `Shell.Items` added, removed and reordered (whole items, not tabs inside one tab bar), keeping each item's native object; a ShellContent's page replaced; CollectionView's header, footer and empty view each with a stateful component (state set, then an update in place keeps it, a removal runs its cleanup; a remount fails the test); a group template changed to a different non-null template, the group cells keeping their identities and showing the new template; a swipe view's content cleared; a side's items cleared; a swipe item's icon and color removed (a rebuilt item at MAUI's defaults); the group templates removed. Each with its own mutant |
+| **D. Dialogs** | Alert: `Title`, `Message`, `Accept`, `Cancel`, `IsOpen`, `OnClosed`; ActionSheet: `Title`, `Cancel`, `Destruction`, `Buttons`, `IsOpen`, `OnClosed`; Prompt: `Title`, `Message`, `Accept`, `Cancel`, `Placeholder`, `InitialValue`, `Keyboard`, `MaxLength`, `IsOpen`, `OnClosed` (22) | a **dialog theory** over the three kinds with `DialogTests`' fake platform: closed at mount; opened, one request carrying every content field; an equal render no second request; `OnClosed` once with the answer, to the content shown; false then true shows it again with its new content; content changed while queued shows the latest (the queue reads it when dequeued); closed before shown, removed; unmounted while shown, the answer dropped. Today only alerts have these tests. The kinds' content is a value per field, so each content key is claimed by the theory with a mutation that drops that field from the request |
+| **A. Mount-only** | Page: `AutomationId` (1) | MAUI forbids changing an automation id, so Reactor writes it at mount only, and a changed declaration now **warns once** (`DiagnosticLog`, deduplicated per page). A covered-by test: set at mount; a change writes nothing, throws nothing and warns once; a second change doesn't warn again |
+
+Totals: 57 matrix, 7 event, 2 controlled cases (4 keys), and 69 keys in specialized and covered-by
+claims (5 keyed selection, 5 stacks, 36 structure, 22 dialog content and lifecycle, 1 mount-only).
+Every covered-by claim names a discovered test, its facets and its own mutation, as before.
+
+#### 4.16.3 Device fixtures
+
+By §4.8's criterion (Reactor code between the element and the platform, or rendering a read can't
+show):
+
+- **New**: `Shell_FlyoutBehaviors` (Mac Catalyst, iPad, Android, both registries: mount under each
+  behavior with each declaration, nothing reported; a behavior change by a render in each direction
+  with a callback that accepts what it is given, the declaration kept and the pane as §4.16.4 item 1
+  says; a page pushed under `Locked` and `Disabled`, nothing reported; Android leaving a first
+  `Disabled` with `true` declared, the pane shown); `Dialog_PromptFields` (the prompt's initial value
+  and placeholder on the platform's text field; the maximum length and keyboard proven by **input**:
+  text typed into the native field through the platform's input path (`UITextField`'s
+  `ShouldChangeCharacters` delegate on iOS and Mac Catalyst, the `EditText`'s input filters on
+  Android, which is what a keyboard reaches) is cut at the maximum, and the native field's keyboard
+  type is the declared one's (`UIKeyboardType`, `InputType`); the action sheet's destructive button
+  and its answer. The dialog adapter (`MauiDialogPlatform`) is Reactor's code past the point the
+  headless fake platform stops, and today's device fixtures check only titles and answers).
+- **Existing, cited by claims**: the `NavigationStack_*`, `Shell_*`, `Dialog*`, `List*` and `Swipe*`
+  fixtures where they prove a claim's facet.
+- **Headless only**: the matrix group (bindable properties MAUI maps, nothing of Reactor's between),
+  as in 4c-3b.
+
+#### 4.16.4 What looks wrong, to characterize before designing around it
+
+1. **The Shell's flyout presentation (found, §4.16.1; rule chosen by C1 and C3).** Three defects:
+   MAUI's forcing writes inside Reactor's own projection were reported as the user's input (the
+   behavior write sits outside the echo scope, and so do the selection and structure staging, which
+   can change the *effective* behavior: `FlyoutItem` → `Flyout`, `TabBar` → `Disabled` with the root's
+   unset); the declaration was written before that staging, so a forced close after it stood; and
+   MAUI's forcing writes on page changes under `Locked` and `Disabled` (outside any write) were
+   reported too. The rule:
+   - **One projection, echo throughout.** The Shell's commit (its `Apply`, including the behavior
+     write; the staging of items, tabs and top tabs and the selection; the flyout slots) is one
+     suppressed scope on the Shell: no `FlyoutIsPresented` change raised inside it is reported. A tab
+     bar's or tab's own sync, which stages through the Shell when only that subtree renders, opens the
+     same scope.
+   - **The presentation after the staging.** Once the staging has finished (at the end of
+     `SyncSlots`, after a restore's projection, and after a tab bar's or tab's own staging), Reactor
+     applies the presentation policy to the effective behavior then (`IFlyoutView.FlyoutBehavior`, MAUI's
+     `GetEffectiveFlyoutBehavior`): under `Flyout`, the declaration is written when the Shell differs
+     (unset declares nothing); under `Locked` and `Disabled`, **the property is the platform's**: no
+     write. Not after `Apply` alone, so a selection that changes the effective behavior is seen first.
+   - **Outside changes.** A `FlyoutIsPresented` change raised outside Reactor's scope while the
+     effective behavior is `Locked` or `Disabled` is the platform's (MAUI's appear-time `true`, its
+     forcing writes on page changes): never reported, nothing restored. Under `Flyout` it is the
+     user's, reported once and, refused, restored (unchanged).
+   - **An effective behavior changed outside a render** (MAUI's behavior observers are told on every
+     structure or page change; Reactor registers one, `IFlyoutBehaviorObserver`): when the effective
+     behavior differs from the one the policy last saw, a restore is requested, so the policy runs
+     again (under `Flyout`, the declaration comes back).
+   - **Android leaving a first `Disabled`** (C3): when the policy sees the effective behavior leave
+     `Disabled` for a pane that should show (`Locked`, or `Flyout` with `true` declared), it posts one
+     re-projection to the next dispatcher turn: if the Shell is still mounted, the pane still should
+     show, the property is `true`, and the native drawer (`Shell.Handler.PlatformView`, MAUI's
+     `DrawerLayout`) shows no drawer, it writes `false` then `true` inside the echo scope (MAUI's own
+     open path; under `Locked` it re-asserts MAUI's own value, measured to work in C3). A drawer that is
+     open or opening is left alone, so the re-projection can't close one.
+   So: `Locked` shows the pane on iOS and Mac Catalyst and, as MAUI forces `true` at every page change,
+   effectively on Android too; `Disabled` hides it on all three, which the platforms already did except
+   Android after a realized drawer (now never written). This replaces the earlier per-platform
+   `Locked` rule (Android applying the declaration after MAUI's appear-time `true`): C3 showed MAUI
+   forces `true` again at every page change, so a declared `false` would reopen at each navigation.
+   Tests (headless, with a stub behavior observer that forces what MAUI's renderers force, in-write,
+   and with page changes simulated by re-notifying the observers): every directed transition among the
+   three behaviors with `true` and `false` declared, and the `FlyoutItem` ↔ `TabBar` switch with the
+   root unset and `true` declared, each with a callback that **accepts** whatever it is given: nothing
+   reported, the declaration intact, the Shell's value the policy's; a forced write outside the scope
+   under `Locked` and `Disabled` not reported, under `Flyout` reported (the positive control); an
+   outside effective-behavior change restoring the declaration; the Android re-projection posted only
+   when leaving `Disabled` for a pane that should show (`Locked`, or `Flyout` with `true`), on the next
+   turn of the root's scheduler, and skipped when the drawer shows. Mutants: the behavior write
+   outside the scope, the staging outside the scope, the policy run before the staging (after `Apply`),
+   the outside-change filter dropped, the observer's restore dropped, the re-projection's
+   drawer check dropped; each turns a test red. The re-projection is tested for both `Flyout` and
+   `Locked`, and not posted for a flyout declared closed.
+2. **Template exceptions escaped the error boundary (found by the design review).** A list's item,
+   group header and group footer templates are app code that `ReactorCell.Render` calls when the
+   platform binds a cell, before the cell's child root renders, so an exception there was thrown into
+   MAUI's binding (on device, into the platform's cell realization) instead of reaching the error
+   boundary above the list. Rule: a template's exception is reported like an exception of the cell's
+   tree, to the boundaries above the list (`HandlerContext.ReportError`, the route a child root's
+   uncaught errors take); the cell renders nothing. Tests: throwing item, group header and group
+   footer templates under an `ErrorBoundary`, bound the way the platform binds (a cell from the
+   list's `DataTemplate`, its `BindingContext` set): no exception escapes, the boundary shows its
+   fallback with the template's exception; a cell already showing an item, rebound to one whose
+   template throws, unmounts the old item's tree (review of `45020b46`). Mutants: the catch removed;
+   the old tree kept.
+3. **A dialog's content changed while it shows** is not presented (MAUI can't update or dismiss a
+   shown dialog; spec 069 §5.1 says so), and turning `IsOpen` off while it shows drops the answer but
+   leaves it on screen. Both are documented behaviors, kept (answered): the dialog theory pins them.
+4. **`Page.AutomationId`** changed after mount was silently ignored; it now warns once (answered).
+5. **`ShellMenuItem`'s `Clicked`** stays subscribed after unmount; the handler reads `context.Live`, so
+   nothing runs. The event case proves it.
+6. **The swipe item's color and icon** are not cleared on an item, but a removed value rebuilds the
+   side with a new item, at MAUI's default; the structure tests check it rather than assume it.
+7. **`NavigationStack.OnPopped` and `OnModalDismissed`** read `context.Live` but no test swaps the
+   callback or unmounts first; the stack theory does.
+
+#### 4.16.5 Characterization gates
+
+- **C1**, done (§4.16.1): the locked pane follows `FlyoutIsPresented` on Android and ignores it on iOS
+  and Mac Catalyst; a disabled flyout opens from code on iOS and Mac Catalyst and never on Android.
+- **C2**, done (§4.16.1): a window-hosted page raises its lifecycle headlessly.
+- **C3**, done (§4.16.1): behavior transitions, animations, item switches, `Disabled` fresh and after a
+  realized drawer, page changes.
+
+#### 4.16.6 Decisions (answered before implementation)
+
+1. The Shell presentation rule of §4.16.4 item 1. The first answer chose a per-platform `Locked` rule
+   (Android applying the declaration) and left `Disabled` unchanged; C3, run after the review, showed
+   MAUI forcing both again on every page change, so under both the property is the platform's on all
+   three (the answer's fallback, "the platform's while locked", applied to `Disabled` by its
+   measurement).
+2. A changed `AutomationId` warns once (`DiagnosticLog`, deduplicated); documented in the README.
+3. Spec 069's dialog behavior is kept and pinned by the dialog theory.
+4. Bar, tab and Shell colors are headless only, as in 4c-3b.
+5. One PR for the 137 keys.
+6. Template exceptions go to the list's boundaries (§4.16.4 item 2).
+
+### 4.17 As built (4c-3c)
+
+**What was built** (commits after `10e7aee9`, each step its own commit):
+
+- **The Shell's presentation rule** (`ShellHandlers.cs`, §4.16.4 item 1). `ReactorShell.Project` runs
+  Reactor's projection as one echo scope (`Apply` with the behavior write, the restore's selection, the
+  `SyncSlots` staging, and a tab bar's or tab's own staging through `Stage`, which wraps itself when no
+  projection runs). `Present` is called explicitly once the staging has finished: at the end of
+  `SyncSlots`, after a restore's projection in `Update` (a restore syncs nothing), and after a tab
+  bar's or tab's own staging (no commit flag, so a render that throws can't leave one set; review of
+  `45020b46`). Within the Shell's own render (from its update or mount to its `SyncSlots`, a
+  `Rendering` mark that a restore or an unmount also clears) the items' and tabs' staging leaves the
+  policy to `SyncSlots`, so one render runs it once, against the final behavior; a tab's own render
+  below the Shell (whose nearest host is the tab, so the Shell doesn't sync) runs it from the tab's
+  staging (review of `10700a09`). It applies the policy to `IFlyoutView.FlyoutBehavior`: under `Flyout` the declaration is written when
+  the Shell differs; under `Locked` and `Disabled` nothing. `PresentationIsPlatforms` keeps outside
+  changes under `Locked` and `Disabled`, or while the effective behavior has moved since the policy
+  last ran, from being reported. `ReactorShell` is its own `IFlyoutBehaviorObserver`, registered
+  before the platform's: an effective behavior changed outside a projection asks for a restore. On
+  Android, leaving `Disabled` for a pane that should show (`Locked`, or `Flyout` declared open) posts
+  one re-projection through the handler's `PostReport` (the root's scheduler, the next dispatcher
+  turn; dropped once unmounted, its exceptions routed to the error boundaries), skipped when the
+  `DrawerLayout` shows a drawer (`ShellNatives.DrawerShows`).
+- **Template exceptions** (`ItemsHandlers.cs`, item 2): `ReactorCell.Render` catches the item, group
+  header and group footer templates' exceptions and reports them through `ItemsHost.ReportError`
+  (`HandlerContext.ReportError`), the route a cell tree's own errors take; the cell unmounts the tree
+  it showed (a recycled cell's previous item) and renders nothing.
+- **`AutomationId`** (`AutomationIds.cs`, item 4): a page's or view's changed declaration warns once
+  per native (`DiagnosticLog.Warning`, operations `Page.AutomationId` and `View.AutomationId`,
+  deduplicated in a weak table); views on both registries (review of `45020b46`). The modifier
+  appliers take an explicit `mounting` flag: an update passes `null` modifiers for an element without
+  any, so `previous is null` didn't mean a mount (review of `10700a09`).
+- **The census**: all 137 `Phase4c3c` keys claimed; `Pending` holds CarouselView's 8 (4c-4), ceiling
+  8. In `MatrixCases.Pages.cs`: 57 property cases (both registries; the back button behavior counted
+  as replacements of the page's attached object, its fields read from the object current then;
+  Shell items through `Target` on the item the Shell holds), 5 event cases, 2 controlled cases (4
+  keys: `Tabs.SelectedIndex`, `Shell.FlyoutIsPresented` under `Flyout`), and 71 covered-by claims.
+  New tests: `ShellFlyoutPresentationTests` (72 cases, with a stub behavior observer that forces what MAUI's
+  renderers force), `TemplateErrorTests`, `PageAuditTests`, `NavigationStackAuditTests`,
+  `StructureAuditTests`, the dialog theory in `DialogTests`, and the selection gaps in `ShellTests`
+  and `CollectionSelectionTests`; the Shell harness takes a registry. The classes that build Shells
+  (`ShellFlyoutPresentationTests`, `StructureAuditTests`, `PropertyMatrixTests`) share the
+  `MauiShell` collection: MAUI's routes are process-wide.
+- **Device fixtures** (`ShellAuditFixtures.cs`): `Shell_FlyoutBehaviors_DeclaredOpen` and
+  `_DeclaredClosed` (both registries; every directed behavior change by a render, the open sequence
+  starting from a first `Disabled`; a page pushed and popped natively under `Locked` and `Disabled`;
+  the user's change under `Flyout` as the positive control), `Dialog_PromptFields_ReachThePlatformsTextField`,
+  `Dialog_ActionSheetDestruction_IsTheDestructiveButton`; the characterizations of §4.16.1 stay in
+  `ShellAuditCharacterization.cs`. `NativeDialogs` exposes the prompt's field and an action's style.
+
+**Bugs the audit found, each fixed with a test that failed first:**
+
+| | Found by | Fix | Mutation (red) |
+|---|---|---|---|
+| C-B1. MAUI's presentation writes inside Reactor's projection (the behavior write, the selection staging) were reported as the user's, and an accepting callback overwrote the declaration | the design review, then C3 | one echo scope for the projection; the outside-change filter | S2, S2b, S4 |
+| C-B2. The declaration was written before the staging, so a close the staging forced (a tab bar's `Disabled`) stood, and nothing reapplied it once the item had a flyout again | the design review | the policy after the staging | S3, S8 |
+| C-B3. MAUI's forcing writes at appear and at every page change under `Locked` and `Disabled` were reported as the user's (C1, C3) | the characterization | `PresentationIsPlatforms`; no write under `Locked` and `Disabled` | S4, S7, DM11 |
+| C-B4. Android: leaving a first `Disabled` left the pane hidden with `FlyoutIsPresented` true (MAUI creates the drawer then, and its first open is lost) | C3 | the posted re-projection | S6, S9, DM10 |
+| C-B5. A template's exception escaped into the platform's cell realization; a recycled cell kept its previous item's tree | the design review; the review of `45020b46` | reported to the list's boundaries; the cell's tree unmounted | T1, R5 |
+| C-B6. A page's or view's changed `AutomationId` was ignored silently | the design; the review of `45020b46` (views) | warns once per page or view | A1, A2, R13a to R13c |
+| C-B7. A view's `AutomationId` was set again on an update through an element without modifiers (`previous is null` taken as the mount): MAUI threw "AutomationId may only be set one time" and the root went down on Controls; the direct view overwrote it | the review of `10700a09` | an explicit `mounting` flag in `ViewApplier.Apply` and `DirectView.ApplyModifiers`, the only appliers gated on it | V1, V2 |
+
+**Characterization** (§4.16.1): C1 and C2 before the design review; C3 after it, on Mac Catalyst, the
+iPad simulator and Android: every directed transition among the three behaviors with both
+declarations, a change 60 ms into an animation, the `FlyoutItem` ↔ `TabBar` switch with the root
+unset, `Disabled` fresh and after a realized drawer, when a re-projection after leaving `Disabled`
+takes effect (the next dispatcher turn, not the same one), and a page change under `Locked` and
+`Disabled` (MAUI forces the presentation again, outside any write). Mac Catalyst and the iPad agree
+throughout; Android differs where the table says.
+
+**Mutants** (each turns the named tests red unless noted). The Shell rule, in
+`ShellFlyoutPresentationTests` unless named:
+
+| Mutant | Mutation | Red |
+|---|---|---|
+| S2 | `SyncSlots` runs its sync outside `Project`, and `Stage` never wraps itself | `TheShellsOwnStaging_IsAnEcho_*`, `APresentationChangeMauiRaisesInsideReactorsProjection_*` |
+| S2b | `Stage` never wraps itself (a tab bar's or tab's own staging unscoped) | `AnItemsOrTabsOwnStaging_IsAnEcho_*`, `APresentationChangeMauiRaisesInsideReactorsProjection_*` |
+| S3 | `SyncSlots` doesn't call `Present` | `ASelectionTheShellsOwnStagingMakes_IsFollowedByThePolicy` |
+| S4 | the outside-change filter (`PresentationIsPlatforms`) dropped | `MauisForcingWrites_*`, `AnEffectiveBehaviorChangedOutsideARender_*` |
+| S5 | the observer's restore request dropped | `AnEffectiveBehaviorChangedOutsideARender_*` |
+| S6 | the re-projection's drawer check dropped | `LeavingDisabled_OnAndroid_*` |
+| S7 | the policy writes under `Locked` and `Disabled` too | the transition theory, `SwitchingBetweenAFlyoutItemAndATabBar_*` |
+| S8 | a restore doesn't call `Present` | `ShellTests.Flyout_IsControlled_*`, `AnEffectiveBehaviorChangedOutsideARender_*` |
+| S9 | a locked pane isn't re-projected (`ShouldShow` false under `Locked`) | `LeavingDisabled_OnAndroid_*`, `LeavingDisabled_WithTheFlyoutDeclaredClosed_*` |
+| R2a | the re-projection posted on the root's scheduler without `PostReport` | `TheReprojection_IsDroppedAfterUnmount_AndItsExceptionReachesTheRoot` |
+| R2b | the re-projection run in the render's own turn | `LeavingDisabled_OnAndroid_*`, `TheReprojection_*` |
+| R3 | an unset declaration taken as `false` | `AnUncontrolledFlyout_*` |
+| P1 | an item's or tab's staging runs the policy within the Shell's render too | `OneShellRender_WhoseItemsAndTabsRestage_RunsThePolicyOnce` |
+| P2 | an item's or tab's staging never runs the policy | `ATabsOwnRender_OutsideTheShells_RunsThePolicy` |
+| P3 | the Shell's render never ends at `SyncSlots` | `ATabsOwnRender_OutsideTheShells_RunsThePolicy` |
+
+Elsewhere: templates T1, R5 (the recycled cell's tree kept); `AutomationId` A1, A2, R13a (the
+Controls view's warning dropped), R13b (the direct view's), R13c (the dedup dropped), V1 and V2
+(`previous is null` as the mount again, Controls and direct:
+`AViewsAutomationId_ThroughAnElementWithoutModifiers_IsNotSetAgain`); lifecycle L1,
+L2; selections K1 to K3; stacks N1 to N4; structure Sa to Sq and X1 to X16; each dialog field's,
+`IsOpen`'s and `OnClosed`'s `init` (20); the matrix MX1 to MX4; device DM10 (Android: the
+re-projection off, `Shell_FlyoutBehaviors_DeclaredOpen`) and DM11 (Mac Catalyst: the policy writing
+under `Locked`, `Shell_FlyoutBehaviors_DeclaredClosed`), named apart from 4c-3b's DM1 to DM9.
+Survivors: **S1** (the behavior write outside the scope) is
+equivalent, as the outside-change filter attributes every write MAUI forces from a behavior change to
+the platform; `APresentationChangeMauiRaisesInsideReactorsProjection_IsAnEcho_*` isolates the scope
+with a stub that closes on every notification, which the filter can't attribute. **K1b** (Shell's
+`!Mounted` check in `OnNavigated`) is equivalent: unmount also clears `ReportSelected` and `Live`. **S2
+with only `SyncSlots`' own scope removed** is equivalent: `Stage` wraps itself whenever no projection
+runs, so only the flyout slot assignments would be unscoped, and they raise no presentation change.
+Two review items have no failing-first test: the `MauiShell` collection (a race between test classes
+isn't reproducible on demand), and the removed commit flag (a render that throws past the Shell
+unmounts it, so the stuck flag the review found had no observable path left; the explicit calls
+remove the state).
+**N5** (the user-pop check) survives in the stack theory, as headless MAUI raises no `Popped` for a
+declared pop, and is red in `PageTests.APopOfAPageTheAppNoLongerDeclares_IsNotReported`, which the
+claim cites. Three mutants first survived and were fixed in the tests (K1: a shared closure made the
+stale callback log the new generation; Sn: only an unmoved item was checked; the alert and action
+sheet field inits: only the factory's constructor was used).
+
+**Deviations from §4.16, and why:**
+
+1. **The `Locked` rule changed after C3** (decision 1): the property is the platform's under
+   `Locked` and `Disabled` on all three platforms, rather than Android applying the declaration,
+   because MAUI forces it again at every page change. The Android re-projection covers `Locked` too:
+   a locked pane should show, and after a first `Disabled` it didn't.
+2. **The page lifecycle callbacks** are a covered-by claim on `PageAuditTests` rather than event
+   cases with a `Windowed` option: re-arming each trigger and witnessing it natively (review item 7)
+   needs steps the event runner doesn't have.
+3. **Values whose clear isn't MAUI's default** are `clears: false` with their `Cleared` value: the
+   Shell's title (MAUI mirrors the shown page's), a menu item's text (required), the back button's
+   fields (the behavior stays, with that field at MAUI's default), the swipe modes (a side is always
+   written), and the collection's layout values, threshold and selection mode (non-nullable).
+4. **The prompt's maximum length on iOS and Mac Catalyst** is driven through the handlers UIKit's
+   delegate call reaches (`ShouldChangeCharactersInRanges` from iOS 26, else
+   `ShouldChangeCharacters`), each key inserted only when allowed: `UITextField.InsertText` from code
+   doesn't ask the delegate (measured: it typed past the maximum). Android types through the field's
+   input connection, which applies its filters.
+5. **A `NavigationStack` subscribes to `Application.ModalPopped` at mount**, so a test must create the
+   application first; an app always has one by then.
+
+**Open issues:** MAUI upstream: Android's `ShellFlyoutRenderer` loses the first open of a drawer it
+creates when leaving `Disabled` (`AddFlyoutContentToLayoutIfNeeded` adds it; the presentation written
+in the same turn is ignored, and the first draw pass doesn't recover it); both platforms re-force the
+presentation on every `AppearanceChanged`. Windows (4g): `ShellNatives.DrawerShows` is false there, so
+the re-projection is Android-only; check Windows' Shell under each behavior on the Dev Box.
+
+**Counts** (at `4d7e849c` and after): headless 1351 (1085 before 4c-3c), engine 80; device,
+passed/skipped/failed, full suites: Mac Catalyst 218/18/0, iPhone (iOS 27.0) 215/21/0, Android
+218/18/0, each including the four `Shell_FlyoutBehaviors_*` fixtures and the Shell and collection
+groups; the iPad subset (Shell, flyout page, the new dialog fixtures) 50/4/0 at `45020b46`. Census:
+pending 145 (4c-3c 137, 4c-4 8) → 8 (4c-4). Release build: 0 warnings.
+
+**Device flakes met on the way, fixed at their cause** (by a separate investigation, in the device
+test runner and fixtures only; no product code was involved):
+
+- **`Entry_Selection_*` on a loaded iOS simulator** (on the base `d986e80a` too; `77b98d1e`): the
+  render a state change scheduled ran about 400 ms late and posted its selection report after the
+  fixture's check, because the fixtures settled with a delay plus a `MainThread` turn, which on iOS
+  and Mac Catalyst goes through the run loop while Reactor queues on the dispatcher's main GCD queue.
+  `FixtureContext.Drain` now dispatches barriers through the window's dispatcher, after everything
+  Reactor queued; the characterization, which ran 17 to 29 s against the 30 s limit, is split in two.
+- **Android, the foreground lost at `SystemBack_AtTheRoot_*`** (`e6f6723a`): a real back key arrived
+  after its fixture had given up (`run.sh` polled the log about 9 s behind on a loaded machine) and
+  landed on the next fixture's root, finishing the activity or backgrounding the app. `run.sh` now
+  follows the log as a stream and answers each request at once; a key the fixture stopped waiting for
+  is absorbed by a callback above every other until the teardown; the teardown brings a backgrounded
+  app to the front and fails the fixture that left it there.
+- **iPad, `FlyoutPage_Split` after the rotation characterizations** (`e6f6723a`): the hit-test oracle
+  ran while MAUI animated the flyout's container (UIKit doesn't hit-test a view whose frame animates),
+  and rotations landed late (a timed-out request still arriving; the runner moving on while a fixture
+  kept rotating). Flyout checks now wait for the flyout's animations; `Rotate` waits until the scene,
+  UIKit's window and MAUI's window agree and stay so, re-requests a refused rotation, and the teardown
+  restores portrait; rotating fixtures get a 120 s limit, and a fixture past its limit is waited for
+  before the next one starts.
 
 ## 5. 4c-4: CarouselView and IndicatorView
 

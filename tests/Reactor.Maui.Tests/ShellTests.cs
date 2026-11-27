@@ -138,7 +138,7 @@ public class ShellTests
 
     private sealed class Harness
     {
-        public TestHost Host { get; } = new(MauiHandlers.CreateRegistry());
+        public TestHost Host { get; }
         public ShellLab Lab { get; }
         public List<Exception> Errors { get; } = [];
         internal QueueTurns Turns { get; } = new();
@@ -147,8 +147,9 @@ public class ShellTests
         public Window? Window;
         private int _generation;
 
-        public Harness(Action<ShellLab>? configure = null)
+        public Harness(Action<ShellLab>? configure = null, string registry = "controls")
         {
+            Host = new(PropertyMatrixTests.Registries.Single(r => r.Name == registry).Create());
             Lab = new ShellLab();
             configure?.Invoke(Lab);
             Host.Root.UnhandledException += Errors.Add;
@@ -409,6 +410,38 @@ public class ShellTests
         Assert.Equal(["b"], h.Lab.Selected);
         Assert.Equal("b", h.Lab.Tab);
         Assert.Equal("b", h.ShownKey);
+    }
+
+    [Theory]
+    [InlineData("controls")]
+    [InlineData("direct")]
+    public void TheSelectionCallback_IsTheCurrentOne_AndNothingIsReportedAfterUnmount(string registry)
+    {
+        var log = new List<string>();
+        var generation = "first";
+        // Each render's callback is its own closure over the generation it was rendered in.
+        Action<string> Callback(string g) => key => log.Add($"{g} {key}");
+        var h = new Harness(lab => lab.Build = l => Shell(l.Tab, Callback(generation),
+            TabBar(ShellTab("a", "A", Page("A", null)), ShellTab("b", "B", Page("B", null)), ShellTab("c", "C", Page("C", null)))), registry);
+
+        h.TapTab("b");
+        Assert.Equal(["first b"], log);
+        Assert.Equal("a", h.ShownKey); // refused (the callback doesn't change state): restored
+
+        generation = "second";
+        h.RenderAgain();
+        h.TapTab("c");
+        Assert.Equal(["first b", "second c"], log);
+
+        var shell = h.Shell;
+        var b = h.Section("b");
+        h.Host.Root.Unmount();
+        Assert.True(((IShellItemController)b.Parent).ProposeSection(b)); // positive control: the switch still happens natively
+        h.Host.Scheduler.Drain();
+        h.Turns.RunPending();
+        h.Host.Scheduler.Drain();
+        Assert.Equal("b", shell.ShownKey());
+        Assert.Equal(["first b", "second c"], log);
     }
 
     [Fact]

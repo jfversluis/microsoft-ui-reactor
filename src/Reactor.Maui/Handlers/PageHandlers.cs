@@ -23,8 +23,11 @@ internal sealed class PageHandler : Reactor.Hosting.IElementHandler<PageElement,
         return page;
     }
 
-    public void Update(HandlerContext<PageElement> context, PageElement oldElement, PageElement newElement, ContentPage control) =>
+    public void Update(HandlerContext<PageElement> context, PageElement oldElement, PageElement newElement, ContentPage control)
+    {
+        AutomationIds.WarnIfChanged(control, oldElement.AutomationId, newElement.AutomationId, "Page.AutomationId");
         Apply(context, control, oldElement, newElement);
+    }
 
     private static void Apply(HandlerContext<PageElement> context, ContentPage page, PageElement? previous, PageElement next)
     {

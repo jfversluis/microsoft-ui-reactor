@@ -48,19 +48,154 @@ internal static class ShellNatives
             if (e is ReactorShell shell) return shell;
         return null;
     }
+
+    /// <summary>
+    /// Whether the platform shows the flyout drawer, opening, open or closing: on Android, MAUI's Shell
+    /// renders into a <c>DrawerLayout</c> (its <c>ShellFlyoutRenderer</c>). Elsewhere, false.
+    /// </summary>
+    public static bool DrawerShows(Shell shell)
+    {
+#if ANDROID
+        return shell.Handler?.PlatformView is AndroidX.DrawerLayout.Widget.DrawerLayout drawer
+            && drawer.IsDrawerVisible((int)global::Android.Views.GravityFlags.Start);
+#else
+        return false;
+#endif
+    }
 }
 
 /// <summary>
 /// The Shell Reactor renders. It holds the declared selection, routes Shell's navigation events to
 /// the sections' navigators, and reports the user's switches (spec 069 §4.3).
 /// </summary>
-internal sealed class ReactorShell : Shell
+internal sealed class ReactorShell : Shell, IFlyoutBehaviorObserver
 {
     public ReactorShell()
     {
         var platform = new PlatformShellTransitions(Dispatcher);
         Turns = platform;
         Transitions = platform;
+        // Registered before the platform's observers, so it is told of every effective behavior first.
+        ((IShellController)this).AddFlyoutBehaviorObserver(this);
+    }
+
+    /// <summary>The flyout presentation the app declares; null leaves it to the user.</summary>
+    internal bool? DeclaredPresented;
+
+    /// <summary>Runs a write with the Shell's change events suppressed as echoes (the handler's echo guard).</summary>
+    internal Action<Action> Suppress { get; set; } = static work => work();
+
+    /// <summary>
+    /// Posts work to the root's scheduler (the next dispatcher turn) as the handler's
+    /// <c>PostReport</c>: skipped once unmounted, its exceptions routed to the error boundaries.
+    /// </summary>
+    internal Action<Action> Defer { get; set; } = static _ => { };
+
+    /// <summary>
+    /// Whether leaving a <c>Disabled</c> behavior re-projects a pane that should show (locked, or a flyout
+    /// declared open) on the next turn: Android's drawer, never realized under a first <c>Disabled</c>,
+    /// stays closed otherwise (spec 070 §4.16.4 item 1). Tests set it.
+    /// </summary>
+    internal bool ReprojectsLeavingDisabled { get; set; } = OperatingSystem.IsAndroid();
+
+    /// <summary>Whether the platform shows the flyout drawer (Android's <c>DrawerLayout</c>); tests replace it.</summary>
+    internal Func<bool> DrawerShows { get; set; } = static () => false;
+
+    private int _projecting;
+    private bool _rendering;
+    private FlyoutBehavior? _presentedUnder;
+
+    /// <summary>How many times the presentation policy ran; tests read it.</summary>
+    internal int PolicyRuns { get; private set; }
+
+    /// <summary>
+    /// The Shell's own render begins (mount or update with a new element): its items' and tabs' staging
+    /// leaves the policy to the end of <c>SyncSlots</c>, so it runs once, against the final behavior.
+    /// </summary>
+    internal void BeginRender() => _rendering = true;
+
+    /// <summary>The Shell's own render ends (its <c>SyncSlots</c>, a restore, or an unmount).</summary>
+    internal void EndRender() => _rendering = false;
+
+    /// <summary>
+    /// The behavior MAUI applies: the nearest set on the current page, its content, section or item,
+    /// else the root's, else the item's default (a flyout item has a flyout, a tab bar none).
+    /// </summary>
+    internal FlyoutBehavior EffectiveBehavior => ((IFlyoutView)this).FlyoutBehavior;
+
+    /// <summary>
+    /// Whether a <c>FlyoutIsPresented</c> change raised now is the platform's rather than the user's: under
+    /// <c>Locked</c> and <c>Disabled</c> MAUI forces the presentation (at appear and at every page change),
+    /// and a change while the effective behavior moved since the policy last ran is MAUI's forcing write.
+    /// </summary>
+    internal bool PresentationIsPlatforms =>
+        EffectiveBehavior != FlyoutBehavior.Flyout || (_presentedUnder is { } seen && seen != FlyoutBehavior.Flyout);
+
+    /// <summary>Whether a projection is running.</summary>
+    internal bool Projecting => _projecting > 0;
+
+    /// <summary>Whether the Shell's own render is in progress (from its update to its SyncSlots).</summary>
+    internal bool Rendering => _rendering;
+
+    /// <summary>
+    /// Runs Reactor's projection onto the Shell (its properties, items, selection or flyout slots) as one
+    /// echo scope: MAUI's presentation writes it triggers are not the user's. The callers apply the
+    /// presentation policy (<see cref="Present"/>) once the staging has finished: at the end of
+    /// <c>SyncSlots</c>, after a restore, and after a tab bar's or tab's own staging.
+    /// </summary>
+    internal void Project(Action work)
+    {
+        _projecting++;
+        try
+        {
+            Suppress(work);
+        }
+        finally
+        {
+            _projecting--;
+        }
+    }
+
+    /// <summary>
+    /// The presentation policy (spec 070 §4.16.4 item 1): under <c>Flyout</c> the declaration is written;
+    /// under <c>Locked</c> and <c>Disabled</c> the property is the platform's.
+    /// </summary>
+    internal void Present()
+    {
+        if (!Mounted) return;
+        PolicyRuns++;
+        var behavior = EffectiveBehavior;
+        var leftDisabled = _presentedUnder == FlyoutBehavior.Disabled && behavior != FlyoutBehavior.Disabled;
+        _presentedUnder = behavior;
+        if (behavior == FlyoutBehavior.Flyout && DeclaredPresented is { } declared && FlyoutIsPresented != declared)
+            Suppress(() => FlyoutIsPresented = declared);
+        if (leftDisabled && ReprojectsLeavingDisabled && ShouldShow()) Defer(Reproject);
+    }
+
+    /// <summary>Whether the pane should be on screen: locked, or a flyout declared open.</summary>
+    private bool ShouldShow() => EffectiveBehavior switch
+    {
+        FlyoutBehavior.Locked => true,
+        FlyoutBehavior.Flyout => DeclaredPresented == true,
+        _ => false,
+    };
+
+    private void Reproject()
+    {
+        if (!Mounted || !ShouldShow() || !FlyoutIsPresented || DrawerShows()) return;
+        Suppress(() =>
+        {
+            FlyoutIsPresented = false;
+            FlyoutIsPresented = true;
+        });
+    }
+
+    void IFlyoutBehaviorObserver.OnFlyoutBehaviorChanged(FlyoutBehavior behavior)
+    {
+        // A projection runs the policy itself; outside one (a page change, a user's item switch), a
+        // changed effective behavior asks for it once state has settled.
+        if (_projecting > 0 || !Mounted || _presentedUnder is not { } seen || seen == behavior) return;
+        RequestRestore?.Invoke();
     }
 
     /// <summary>Schedules the dispatcher turns a user's back is watched on; tests replace it.</summary>
@@ -271,6 +406,14 @@ internal sealed class ReactorShell : Shell
     /// </summary>
     internal static void Stage<T>(IList<T> actual, IReadOnlyList<T> desired, ReactorShell? shell, Func<T?> current) where T : BaseShellItem
     {
+        // A tab bar's or tab's own sync stages through the Shell outside its commit: the same projection.
+        if (shell is { Projecting: false })
+        {
+            shell.Project(() => Stage(actual, desired, shell, current));
+            // An item's or tab's own render applies the policy; within the Shell's render, SyncSlots does.
+            if (!shell.Rendering) shell.Present();
+            return;
+        }
         var added = false;
         for (var i = 0; i < desired.Count; i++)
         {
@@ -330,34 +473,52 @@ internal sealed class ShellHandler : Reactor.Hosting.IElementHandler<ShellElemen
         };
         shell.Post = node.Root.Post;
         shell.RequestRestore = context.RestoreAfterEvent;
+        shell.Suppress = work => context.WriteSuppressed(shell, work);
+        shell.Defer = work => context.PostReport(work);
+        shell.DrawerShows = () => ShellNatives.DrawerShows(shell);
         shell.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName != Shell.FlyoutIsPresentedProperty.PropertyName || context.IsEchoing(shell)) return;
-            if (context.Live is not { } live) return;
+            // MAUI's own presentation under Locked and Disabled is neither reported nor restored.
+            if (shell.PresentationIsPlatforms || context.Live is not { } live) return;
             live.OnFlyoutIsPresentedChanged?.Invoke(shell.FlyoutIsPresented);
             context.RestoreAfterEvent();
         };
-        Apply(context, shell, null, element);
+        // The presentation is applied at the end of SyncSlots, once the items are staged.
+        shell.BeginRender();
+        shell.Project(() => Apply(shell, null, element));
         return shell;
     }
 
     public void Update(HandlerContext<ShellElement> context, ShellElement oldElement, ShellElement newElement, ReactorShell control)
     {
-        Apply(context, control, oldElement, newElement);
-        control.Declared = newElement.Selected;
-        // A restore (the same element) re-asserts the declared selection; a new element's is applied
-        // once its items are synced.
-        if (ReferenceEquals(oldElement, newElement)) control.ApplySelection();
+        // A render's presentation is applied at the end of SyncSlots, after the items and selection are
+        // staged; a restore (the same element) syncs nothing, so it is applied here.
+        var restore = ReferenceEquals(oldElement, newElement);
+        // A restore runs after renders have finished, so it also ends one a throw may have left open.
+        if (restore) control.EndRender();
+        else control.BeginRender();
+        control.Project(() =>
+        {
+            Apply(control, oldElement, newElement);
+            control.Declared = newElement.Selected;
+            // A restore (the same element) re-asserts the declared selection; a new element's is applied
+            // once its items are synced.
+            if (restore) control.ApplySelection();
+        });
+        if (restore) control.Present();
     }
 
     public void Unmount(ReactorShell control)
     {
+        control.EndRender();
         control.Mounted = false;
         control.ReportSelected = null;
     }
 
-    private static void Apply(HandlerContext<ShellElement> context, ReactorShell shell, ShellElement? previous, ShellElement next)
+    private static void Apply(ReactorShell shell, ShellElement? previous, ShellElement next)
     {
+        shell.DeclaredPresented = next.FlyoutIsPresented;
         Props.SetRef(shell, Page.TitleProperty, previous?.Title, next.Title);
         Props.Set(shell, Shell.FlyoutBehaviorProperty, previous?.FlyoutBehavior, next.FlyoutBehavior);
         Props.SetRef(shell, Shell.BackgroundColorProperty, previous?.BackgroundColor, next.BackgroundColor);
@@ -371,9 +532,7 @@ internal sealed class ShellHandler : Reactor.Hosting.IElementHandler<ShellElemen
         Props.SetRef(shell, Shell.TabBarTitleColorProperty, previous?.TabBarTitleColor, next.TabBarTitleColor);
         Props.SetRef(shell, Shell.TabBarUnselectedColorProperty, previous?.TabBarUnselectedColor, next.TabBarUnselectedColor);
         Props.SetRef(shell, Shell.TabBarDisabledColorProperty, previous?.TabBarDisabledColor, next.TabBarDisabledColor);
-        // Compared with the Shell, not the previous element: a restore re-asserts the declared value.
-        if (next.FlyoutIsPresented is { } presented && shell.FlyoutIsPresented != presented)
-            context.WriteSuppressed(shell, () => shell.FlyoutIsPresented = presented);
+        // The presentation is written by the policy once the commit's staging has finished (Present).
     }
 
     public IChildrenStrategy<ShellElement, ReactorShell> Children { get; } = new ShellChildren();
@@ -385,6 +544,19 @@ internal sealed class ShellHandler : Reactor.Hosting.IElementHandler<ShellElemen
             [.. element.Items, element.FlyoutHeader, element.FlyoutFooter, element.FlyoutContent];
 
         public void SyncSlots(ShellElement element, ReactorShell shell, IReadOnlyList<IReadOnlyList<object>> slots)
+        {
+            try
+            {
+                shell.Project(() => Sync(element, shell, slots));
+            }
+            finally
+            {
+                shell.EndRender();
+            }
+            shell.Present();
+        }
+
+        private static void Sync(ShellElement element, ReactorShell shell, IReadOnlyList<IReadOnlyList<object>> slots)
         {
             var count = element.Items.Length;
             var items = slots.Take(count).SelectMany(static s => s).Select(AsItem).ToList();

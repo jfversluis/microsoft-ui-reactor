@@ -148,13 +148,17 @@ public abstract class DirectView : IView, IVisualTreeElement
         SetControlsAnchor(parent);
     }
 
-    /// <summary>Applies the shared settings. Returns whether anything that affects size changed.</summary>
-    internal void ApplyModifiers(ViewModifiers? previous, ViewModifiers? next)
+    /// <summary>
+    /// Applies the shared settings. Returns whether anything that affects size changed. An update can
+    /// pass <see langword="null"/> modifiers (an element without any), so mounting is explicit.
+    /// </summary>
+    internal void ApplyModifiers(ViewModifiers? previous, ViewModifiers? next, bool mounting)
     {
         var p = previous ?? ViewModifiers.Empty;
         var n = next ?? ViewModifiers.Empty;
         if (ReferenceEquals(p, n)) return;
-        if (previous is null && n.AutomationId is { } automationId) AutomationId = automationId;
+        if (mounting) { if (n.AutomationId is { } automationId) AutomationId = automationId; }
+        else Handlers.AutomationIds.WarnIfChanged(this, p.AutomationId, n.AutomationId, "View.AutomationId");
 
         var measure = false;
         measure |= Set(Margin, n.Margin ?? default, v => Margin = v, nameof(IView.Margin));
