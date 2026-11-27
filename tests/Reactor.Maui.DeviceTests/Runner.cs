@@ -69,6 +69,21 @@ public sealed class FixtureContext(Window window)
         Pages.Set(_viewHost);
     }
 
+    /// <summary>
+    /// Waits until the work Reactor has queued on the UI thread has run: a render a state change
+    /// scheduled, the reports and restores that render posted, and one more round of each. Reactor queues
+    /// through the window's dispatcher, so a barrier dispatched the same way runs after everything queued
+    /// before it. A plain delay doesn't order with that queue: on iOS and Mac Catalyst a
+    /// <c>Task.Delay</c> continuation or <c>MainThread.InvokeOnMainThreadAsync</c> goes through the run
+    /// loop, the dispatcher through the main GCD queue, and under load the first can run while a render
+    /// is still waiting in the second.
+    /// </summary>
+    public async Task Drain(int rounds = 3)
+    {
+        for (var i = 0; i < rounds; i++)
+            await window.Dispatcher.DispatchAsync(() => { });
+    }
+
     /// <summary>Waits, letting the UI thread run, until <paramref name="condition"/> holds.</summary>
     public async Task WaitFor(Func<bool> condition, string what, int timeoutMs = 5000)
     {

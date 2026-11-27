@@ -28,7 +28,9 @@ public static partial class Fixtures
             new($"ScrollView_ScrollToFromARef_ReachesThePlatform [{r.Name}]", c => ScrollToPoint(c, r.Create())),
             new($"ScrollView_ScrollBars_ReachThePlatform [{r.Name}]", c => ScrollBars(c, r.Create())),
             new($"RefreshView_UserRefresh_IsReported_AndRefusalStopsTheSpinner [{r.Name}]", c => UserRefresh(c, r.Create())),
-            new($"Entry_Selection_Characterization [{r.Name}]", c => SelectionCharacterization(c, r.Create(), r.Name)),
+            // Split by focus: together they ran 17-29 s, close to the runner's 30 s limit per fixture.
+            new($"Entry_Selection_Characterization_Unfocused [{r.Name}]", c => SelectionCharacterization(c, r.Create(), r.Name, focused: false)),
+            new($"Entry_Selection_Characterization_Focused [{r.Name}]", c => SelectionCharacterization(c, r.Create(), r.Name, focused: true)),
             new($"Entry_Selection_Sequences [{r.Name}]", c => SelectionSequences(c, r.Create(), r.Name)),
             new($"Entry_ReturnType_ReachesThePlatform [{r.Name}]", c => ReturnTypeReachesThePlatform(c, r.Create())),
             new($"ScrollView_ScrollToAnElement_Superseded [{r.Name}]", c => ScrollToSuperseded(c, r.Create(), r.Name)),
@@ -826,15 +828,18 @@ public static partial class Fixtures
         return c.Find<IEntry>();
     }
 
+    // Settled: the render a change scheduled has run, the platform's own deferred work after it has had
+    // time (400 ms), and every report Reactor posted meanwhile has run. On a CPU-loaded simulator the
+    // render once ran only after a plain delay had begun, and its selection report after the check.
     private static async Task Settled(FixtureContext c)
     {
+        await c.Drain();
         await c.Settle(400);
-        await MainThread.InvokeOnMainThreadAsync(() => { });
+        await c.Drain();
     }
 
-    private static async Task SelectionCharacterization(FixtureContext c, ElementHandlerRegistry registry, string renderer)
+    private static async Task SelectionCharacterization(FixtureContext c, ElementHandlerRegistry registry, string renderer, bool focused)
     {
-        foreach (var focused in new[] { false, true })
         {
             var props = new SelectionProps(new(), false);
             var entry = await ShowSelection(c, registry, props);
