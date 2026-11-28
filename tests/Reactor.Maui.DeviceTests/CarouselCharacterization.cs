@@ -724,7 +724,17 @@ public static partial class CarouselPlatform
         var rv = Recycler(carousel);
         var density = rv.Context!.Resources!.DisplayMetrics!.Density;
         var state = rv.ScrollState switch { 0 => "idle", 1 => "DRAGGING", 2 => "settling", var o => o.ToString() };
-        return $"native {state} offset {rv.ComputeHorizontalScrollOffset() / density:0.#}";
+        var snap = rv.GetOnFlingListener() as AndroidX.RecyclerView.Widget.SnapHelper;
+        var layout = rv.GetLayoutManager();
+        var snaps = new List<string>();
+        if (snap is not null && layout is not null)
+            for (var i = 0; i < rv.ChildCount; i++)
+            {
+                var child = rv.GetChildAt(i)!;
+                var d = snap.CalculateDistanceToFinalSnap(layout, child);
+                snaps.Add($"{layout.GetPosition(child)}:{(d is null ? "null" : string.Join("/", d))}px");
+            }
+        return $"native {state} offset {rv.ComputeHorizontalScrollOffset() / density:0.#}, snap {snap?.GetType().Name ?? "none"} [{string.Join(" ", snaps)}]";
     }
 
     public static string Centered(MauiCarouselView carousel)

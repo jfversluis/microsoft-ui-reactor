@@ -82,10 +82,19 @@ public static partial class MatrixCases
 /// <summary>The mutation evidence of the carousel's covered-by claims (spec 070 §5.13).</summary>
 internal static class CarouselMutants
 {
-    public const string Position = "pending";
-    public const string OnPositionChanged = "pending";
-    public const string Items = "pending";
-    public const string ItemKey = "pending";
-    public const string ItemTemplate = "pending";
-    public const string IsScrollAnimated = "pending";
+    public const string Position =
+        "Position written on every update (H1) and not at mount (H6), a projection while moving (C4), the restore not projecting (H5), "
+        + "an off-center landing accepted (C18), no retry cap (C17): red; on device the iOS port without its readiness gate (DV1) "
+        + "and through MAUI's ScrollTo instead of the page offset (DV2): red (spec 070 §5.13)";
+    public const string OnPositionChanged =
+        "reports from the poll while moving (C1), no wait for the answer (C2), every other rest taken for input (C3), the report "
+        + "not mapped by key (H3), a ref ScrollTo ignored (C10), a drag in the barrier window not input (C15) or projected over (C16), "
+        + "an own settle reported (C11): red; on device reports while moving (DV5): red (spec 070 §5.13)";
+    public const string Items =
+        "items published while moving (C5), synced at once without a transaction (H7), an obsolete barrier completion acting (C6) "
+        + "or not reissuing (C7): red; on device the Android barrier ignoring the item animator (DV3): red (spec 070 §5.13)";
+    public const string ItemKey = "new boxes on every publish instead of keeping them by key (H4): red (spec 070 §5.13)";
+    public const string ItemTemplate = "IsCurrent from the previous declaration (H2): red (spec 070 §5.13)";
+    public const string IsScrollAnimated =
+        "a declared change always animated (C13) and an items change's deferred projection animated (C14): red (spec 070 §5.13)";
 }

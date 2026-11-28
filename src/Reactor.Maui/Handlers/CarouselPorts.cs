@@ -59,17 +59,7 @@ internal static class CarouselPorts
             Watch(scroller);
             var moving = scroller is not null && (scroller.Tracking || scroller.Dragging || scroller.Decelerating);
             var user = scroller is not null && (scroller.Tracking || scroller.Dragging);
-            return new CarouselSample(index, Math.Abs(bestDistance) < 1 || AtEdge(scroller, bestDistance), bestDistance, moving, user);
-        }
-
-        // An item the scroller can't center (the first or last, with peek): as aligned as it gets.
-        private static bool AtEdge(UIKit.UIScrollView? scroller, double distance)
-        {
-            if (scroller is null) return false;
-            var offset = scroller.ContentOffset.X;
-            var min = -scroller.AdjustedContentInset.Left;
-            var max = scroller.ContentSize.Width - scroller.Bounds.Width + scroller.AdjustedContentInset.Right;
-            return distance > 0 ? offset >= max - 0.5 : offset <= min + 0.5;
+            return new CarouselSample(index, Math.Abs(bestDistance) < 1, bestDistance, moving, user);
         }
 
         // In the window, not hidden, and horizontally inside the carousel: UIKit keeps reusable cells around.
@@ -179,6 +169,7 @@ internal static class CarouselPorts
             rv.GetLocationInWindow(at);
             var center = at[0] + rv.Width / 2f;
             ItemBox? bestBox = null;
+            global::Android.Views.View? best = null;
             var bestDistance = double.MaxValue;
             foreach (var cell in view.Host.Cells)
             {
@@ -191,17 +182,31 @@ internal static class CarouselPorts
                 {
                     bestDistance = distance;
                     bestBox = box;
+                    best = native;
                 }
             }
-            if (bestBox is null) return null;
+            if (bestBox is null || best is null) return null;
             var index = view.Host.Items.IndexOf(bestBox);
             if (index < 0) return null;
             var state = rv.ScrollState;
-            // An item the list can't center (the first or last, with peek) is as aligned as it gets.
-            var aligned = Math.Abs(bestDistance) < 1 || !rv.CanScrollHorizontally(bestDistance > 0 ? 1 : -1);
+            var aligned = Math.Abs(bestDistance) < 1 || SnapAligned(rv, best);
             return new CarouselSample(index, aligned, bestDistance,
                 state != AndroidX.RecyclerView.Widget.RecyclerView.ScrollStateIdle,
                 state == AndroidX.RecyclerView.Widget.RecyclerView.ScrollStateDragging);
+        }
+
+        // MAUI's snap helper (a PagerSnapHelper) centers an item's decorated bounds. MAUI's carousel
+        // decorates the first and last item with peek more on the outer side, so those can't be centered:
+        // the list ends before. Aligned is where the platform rests: at its snap target, or as close to it
+        // as the list scrolls (the item's own center is then a few points off, toward the middle).
+        private static bool SnapAligned(AndroidX.RecyclerView.Widget.RecyclerView rv, global::Android.Views.View native)
+        {
+            if (rv.GetOnFlingListener() is not AndroidX.RecyclerView.Widget.SnapHelper snap || rv.GetLayoutManager() is not { } layout) return false;
+            var child = native;
+            while (child.Parent is global::Android.Views.View parent && !ReferenceEquals(parent, rv)) child = parent;
+            if (!ReferenceEquals(child.Parent, rv)) return false;
+            return snap.CalculateDistanceToFinalSnap(layout, child) is { Length: >= 1 } d
+                && (Math.Abs(d[0]) <= 1 || !rv.CanScrollHorizontally(Math.Sign(d[0])));
         }
 
         private void Watch(AndroidX.RecyclerView.Widget.RecyclerView rv)

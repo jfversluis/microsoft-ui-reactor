@@ -167,9 +167,16 @@ public static partial class Fixtures
                 Note($"loop {loop}, peek {peek?.Left ?? 0}, declared {target}: shown {ShownKey(view)} (aligned {ShownAligned(view)}, sample {view.Controller.Port?.Sample()}, scrolls {view.Controller.Projections}), the platform's centered label {centered}, {CarouselPlatform.State(view)}");
                 Equal(Pages[target], ShownKey(view), "the shown item is the declared one");
                 Equal(Pages[target], centered, "the platform centers the same item");
-                // Centered; an edge item with peek as far as MAUI's own ScrollTo centers it (a few points off).
+                // Centered; on Android an edge item with peek as far as the list scrolls (MAUI decorates its
+                // outer side more, so its view rests a few points off center, where a swipe rests too).
                 var offset = Math.Abs(view.Controller.Port!.Sample()!.Value.Offset);
-                Check(offset < (peek is not null && (target == 0 || target == Pages.Length - 1) ? 8 : 1), $"centered (off by {offset:0.#})");
+                var edge = OperatingSystem.IsAndroid() && peek is not null && !loop && (target == 0 || target == Pages.Length - 1);
+                Check(offset < (edge ? 8 : 1), $"centered (off by {offset:0.#})");
+                // That rest is final: another look at it (a MAUI event) scrolls nothing.
+                var projections = view.Controller.Projections;
+                view.Controller.OnTrigger();
+                await CarouselSettled(c, view);
+                Equal(projections, view.Controller.Projections, "a further signal at that rest projects nothing");
             }
             Equal(0, state.Reports.Count, "declared changes report nothing");
             c.Unmount();

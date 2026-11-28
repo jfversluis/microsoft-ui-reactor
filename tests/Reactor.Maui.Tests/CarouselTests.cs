@@ -174,6 +174,49 @@ public class CarouselPositionTests
     }
 
     [Fact]
+    public void ASignalBeforeTheAnswer_NeitherScrollsNorReportsAgain()
+    {
+        var h = Mount(accept: true);
+        h.Port.Shown = 3;
+        h.View.Controller.OnTrigger();
+        while (h.Port.Frames.Count > 0) h.Port.Frame();
+        Assert.Empty(h.Log); // reported, the callback posted, not yet run
+
+        // MAUI's late events at the same rest, before the app answered: no projection of the old declaration.
+        h.View.Controller.OnTrigger();
+        while (h.Port.Frames.Count > 0) h.Port.Frame();
+        Assert.Empty(h.Port.Scrolls);
+
+        h.Settle();
+        Assert.Equal(["3"], h.Log);
+        Assert.Empty(h.Port.Scrolls);
+        Assert.Equal(3, h.Port.Shown);
+    }
+
+    [Fact]
+    public void ADragBackToTheSameItem_WhileTheDeclarationChanged_IsProjectedNotReported()
+    {
+        var h = Mount();
+        h.Port.Moving = true;
+        h.Port.User = true;
+        h.Port.Shown = 1;
+        h.View.Controller.OnTrigger();
+        h.Frames(3);
+        h.SetPosition(3);
+        h.Host.Scheduler.Drain();
+        Assert.Empty(h.Port.Scrolls); // nothing written while the user moves it
+
+        // Released where it started: no input to report; the new declaration is projected.
+        h.Port.Shown = 0;
+        h.Port.Moving = false;
+        h.Port.User = false;
+        h.Settle();
+        Assert.Empty(h.Log);
+        Assert.Equal([(3, true)], h.Port.Scrolls);
+        Assert.Equal(3, h.Port.Shown);
+    }
+
+    [Fact]
     public void ARefusal_ScrollsBackAtRest_AndTheLandingIsNotReported()
     {
         var h = Mount(accept: false);
@@ -383,6 +426,38 @@ public class CarouselPositionTests
     }
 
     [Fact]
+    public void AProjectionLandingOffCenter_IsAskedAgain()
+    {
+        var h = Mount();
+        h.Port.AutoLand = false;
+        h.SetPosition(3);
+        h.Host.Scheduler.Drain();
+        // On its item, but stopped between pages (an interrupted animation).
+        h.Port.Shown = 3;
+        h.Port.Aligned = false;
+        h.Port.Offset = 30;
+        h.Port.AutoLand = true;
+        h.Settle();
+        Assert.Equal([(3, true), (3, true)], h.Port.Scrolls);
+        Assert.True(h.Port.Aligned);
+        Assert.Empty(h.Log);
+    }
+
+    [Fact]
+    public void APlatformThatNeverLands_IsAskedThreeTimes_ThenWarned()
+    {
+        using var warnings = new WarningListener("CarouselView.Position");
+        var h = Mount();
+        h.Port.AutoLand = false;
+        h.SetPosition(3);
+        h.Settle(2000);
+        Assert.Equal([(3, true), (3, true), (3, true)], h.Port.Scrolls);
+        Assert.Empty(h.Port.Frames); // stopped looking
+        Assert.Single(warnings.Warnings);
+        Assert.Empty(h.Log);
+    }
+
+    [Fact]
     public void ARestBetweenItems_AtTheDeclaredOne_IsAlignedWithoutAReport()
     {
         var h = Mount();
@@ -443,6 +518,27 @@ public class CarouselPositionTests
         host.Render(Carousel(3, true, ["z", .. Five]));
         Assert.Equal((3, false), port.Scrolls[^1]);
         Assert.Empty(log);
+    }
+
+    [Fact]
+    public void AnItemsChangesProjection_DeferredByMotionAtTheBarrier_StillJumps()
+    {
+        var h = Mount(position: 2);
+        h.SetItems(["z", .. Five]);
+        h.Host.Scheduler.Drain();
+        Assert.Equal([(2, false)], h.Port.Scrolls); // the same-turn jump
+
+        // MAUI's own correction animates when the barrier completes: projected at rest, still as a jump.
+        h.Port.AutoLand = false;
+        h.Port.Moving = true;
+        h.Port.Shown = 0;
+        h.Port.CompleteBarrier();
+        h.Frames(3);
+        h.Port.Moving = false;
+        h.Port.AutoLand = true;
+        h.Settle();
+        Assert.Equal([(2, false), (2, false)], h.Port.Scrolls);
+        Assert.Empty(h.Log);
     }
 
     // ── Items and layout transactions ────────────────────────────────────────
