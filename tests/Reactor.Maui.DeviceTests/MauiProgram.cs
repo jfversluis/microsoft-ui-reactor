@@ -1,14 +1,26 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Reactor.Maui.Direct;
 
 namespace Reactor.Maui.DeviceTests;
 
 public static class MauiProgram
 {
-    public static MauiApp CreateMauiApp() =>
-        MauiApp.CreateBuilder()
+    public static MauiApp CreateMauiApp()
+    {
+        var builder = MauiApp.CreateBuilder()
             .UseMauiApp<App>()
             .UseReactorDirectViews()
-            .Build();
+            // Spec 071 (4d-1): registered fonts, with the aliases the look fixtures use.
+            .ConfigureFonts(fonts =>
+            {
+                fonts.AddFont("OpenSans-Regular.ttf", "OpenSansRegular");
+                fonts.AddFont("OpenSans-Semibold.ttf", "OpenSansSemibold");
+            });
+        // What MAUI logs (a missing font, a binding failure), for the characterizations.
+        builder.Logging.AddProvider(CapturedLogs.Instance);
+        builder.Logging.AddFilter<CapturedLogs>(null, LogLevel.Debug);
+        return builder.Build();
+    }
 }
 
 /// <summary>Runs the device fixtures once the window is up, then exits with the result.</summary>

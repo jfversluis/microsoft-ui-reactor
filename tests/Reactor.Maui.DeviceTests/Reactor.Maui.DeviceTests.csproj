@@ -44,6 +44,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Reactor.Maui\Reactor.Maui.csproj" />
+    <!-- Spec 071 J1 candidate (c'): shadow-named projected layouts, characterization only. -->
+    <ProjectReference Include="..\Reactor.Maui.DeviceTests.Shadow\Reactor.Maui.DeviceTests.Shadow.csproj" />
   </ItemGroup>
 
   <!-- The shipped global usings (the package's buildTransitive props), so drift in that file is compiled here. -->
