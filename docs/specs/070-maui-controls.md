@@ -3420,35 +3420,38 @@ has a regression test and a mutant (§5.13).
 | `Resting` | `rest`: the published index of the last verified rest, or `Unknown` (after an items change or a new platform view) | a projection, from *Decide* | no | a deferred transaction, from *Decide* |
 | `Watching` | `input`: a finger, motion the port doesn't own, or a ref command was seen | no | at its rest | only when nothing is laid out (nothing can move under a finger) |
 | `OwnProjecting` | `target`, `scrolls`, the projection's animation | a retry, at its own rest | never | no |
-| `AwaitingAnswer` | `seq` of the posted report; whether it ran | no | no | no |
+| `AwaitingAnswer` | `seq` of the posted report; whether it ran; `input` seen while it's out | no | no | no |
 
 **Items region**: *published*; a *deferred* transaction (waiting for rest; a flag, as it can wait
 while a window is open); the *barrier window* of epoch `e`, open from a transaction to that epoch's
 completion, recording *window input*. **Guards**: `gaveUpOn` (a declaration the platform never landed
-on, not projected again until the declaration or the items change) and `jumpNext` (the next
-projection jumps: it follows an items change or a new platform view; cleared by input, a report, or a
-verified rest that needed no projection).
+on, not projected again until the declaration, the items or the platform view change, or input or a
+report is recorded) and `jumpNext` (the next projection jumps: it follows an items change or a new
+platform view; cleared by input or a verified rest that needed no projection; a report doesn't clear
+it, as one always follows input or a known rest, never a pending jump).
 
 **Input** is only what the platform shows: `UserDragging`; `Moving` unless Reactor's own scroll is
 pending (the port's `ScrollPending`: iOS and Mac Catalyst, the page scroller short of the offset the
 port set; Android, the smooth scroller, its settle, or the jump's layout; both bounded by
-`ScrollBridge.SettleBound`); a `ScrollToRequested` outside Reactor's own scroll. **A rest** is two
-still frames with no own scroll pending (no frame count stands in for "the animation hasn't started").
+`ScrollBridge.SettleBound`, and believed by the controller for at most that bound after its scroll
+started, whatever the port says: its own watchdog); a `ScrollToRequested` outside Reactor's own
+scroll. **A rest** is two still frames with no own scroll pending (no frame count stands in for "the
+animation hasn't started").
 
 | Event | Transitions |
 |---|---|
-| Commit (a render; transaction if items or layout differ) | a transaction sets *deferred*; a changed declaration clears `gaveUpOn`. `AwaitingAnswer`: only once its report ran is this the answer → `Watching` (the rest is verified again); before that, nothing. `Resting` → *Decide*. `Watching`: if nothing is laid out and a transaction is deferred, apply it. `OwnProjecting`: nothing (its rest projects the newest declaration) |
+| Commit (a render; transaction if items or layout differ) | a transaction sets *deferred*; a changed declaration clears `gaveUpOn`. `AwaitingAnswer`: only once its report ran is this the answer → `Watching`, its `input` kept (the rest is verified again from frames: a ref's animation can move it with no motion flag); before that, nothing. `Resting` → *Decide*. `Watching`: if nothing is laid out and a transaction is deferred, apply it. `OwnProjecting`: nothing (its rest projects the newest declaration) |
 | `ReportRan(seq)` (the posted report runs) | marks `seq` answered by the next commit |
 | Trigger (a MAUI event, the scroller's interaction) | `Resting` → `Watching{input: false}`; arm the poll |
 | `ScrollToRequested` outside Reactor's scroll | `Resting` → `Watching`; *input* |
-| *input* (a frame, the completion, a ref command) | `OwnProjecting` → `Watching`; `Watching.input`; in the window, *window input*; clear `jumpNext` |
-| Rest of `OwnProjecting` | window open → `Resting{target if shown is target, else Unknown}` (the completion decides); landed (shown, aligned) → `Resting{target}`, *Decide*; superseded (declaration ≠ target) → `Resting{shown}`, *Decide*; short or off center → retry with the same animation, at most three scrolls, then a warning, `gaveUpOn = target`, `Resting{shown}` |
-| Rest of `Watching` | window open → `Resting`, rest unchanged (the completion decides); *moved* (rest known: shown ≠ rest; `Unknown`: input was seen) and (a transaction deferred, or shown ≠ the declaration) → report → `AwaitingAnswer{seq}` (`rest = shown`); else `Resting{shown}`, *Decide* |
+| *input* (a frame, a moving sample in *Decide*, a ref command) | `OwnProjecting` → `Watching`; `Watching.input` or `AwaitingAnswer.input`; in the window, *window input*; clear `jumpNext` and `gaveUpOn` |
+| Rest of `OwnProjecting` | window open → `Resting{target if shown is target, else Unknown}` (the completion decides); landed (shown, aligned) → `Resting{target}`, *Decide*; superseded (declaration ≠ target) → `Resting{shown}`, *Decide*; short or off center → retry with the same animation, at most three scrolls, then a warning, `gaveUpOn = target`, `Resting{shown}`, *Decide* (a deferred transaction applies; the target isn't asked again) |
+| Rest of `Watching` | window open → `Resting`, rest unchanged (the completion decides); *moved* (rest known: shown ≠ rest; `Unknown`: input was seen) and (a transaction deferred, or shown ≠ the declaration) → report → `AwaitingAnswer{seq}` (`rest = shown`, `gaveUpOn` cleared); else `Resting{shown}`, *Decide* |
 | Nothing laid out for 600 frames | a rest on nothing: `Resting`, *Decide* (a deferred transaction applies) |
-| *Decide* (from `Resting`) | the sample moves → `Watching`, *input*; a transaction deferred → apply it; window open or nothing laid out → nothing; shown ≠ a known rest → `Watching` (verify first); shown isn't the declaration or isn't aligned, and the declaration isn't `gaveUpOn` → `OwnProjecting` (a jump if `jumpNext`, else `IsScrollAnimated`); else clear `jumpNext` |
+| *Decide* (from `Resting`) | the sample moves → `Watching`, *input*; a transaction deferred → apply it, unless the open window holds input (reported at its completion and answered first: publishing would move the user's item away); window open or nothing laid out → nothing; shown ≠ a known rest → `Watching` (verify first); shown isn't the declaration or isn't aligned, and the declaration isn't `gaveUpOn` → `OwnProjecting` (a jump if `jumpNext`, else `IsScrollAnimated`); else clear `jumpNext` |
 | Apply a transaction | publish; epoch + 1; `rest = Unknown`; a same-turn jump to the declaration (`OwnProjecting`); `jumpNext`; issue the epoch's barrier (window open; none without a native view) |
 | Barrier completion | retired, another port or owner → ignored; an obsolete epoch → reissue the current epoch's barrier if it's neither outstanding nor settled, nothing else; the current epoch → window closed; window input, or input in the sample now → `Watching{input}` (reported at rest); else, from `Resting`, `rest = Unknown` and *Decide* (whatever shows is MAUI's processing: projected, a jump) |
-| Port change (handler replacement) | the poll and the window retire; `rest = Unknown`; `jumpNext`; `Watching` (an `AwaitingAnswer` stays) |
+| Port change (handler replacement) | the poll and the window retire; `rest = Unknown`; `jumpNext`; `gaveUpOn` cleared (it was the old view's); `Watching` (an `AwaitingAnswer` stays) |
 | Unmount | retired: nothing is written, published or reported |
 
 Every probe of the review is a headless regression test that failed on `d7f8d28f` and passes now
@@ -3690,9 +3693,20 @@ skipped without them, M9); `run.sh` takes requests only from the app's PID, each
 with integers only before anything reaches a shell, and Appium is documented on the loopback address
 (H5).
 
-**Tests.** Headless: `CarouselPositionTests` (52, a stub port), `IndicatorViewTests`, the
+**The verification round on `cac03cbd`** found five more holes, each a failing-first test (red on
+`cac03cbd`'s logic, green now) with its guard's mutant:
+
+| Probe | Test | Red on `cac03cbd` | Fix | Mutant |
+|---|---|---|---|---|
+| V1 a handler swap kept the old view's give-up | `V1_AfterGivingUp_AWorkingReplacementView_ProjectsTheDeclaration` | `[]` for `[(3, false)]` | a port change clears `gaveUpOn` | red |
+| V2 the answer projected into a ref's animation with no motion flag | `V2_TheAnswer_WaitsForARefScrollWithoutMotionFlagsToRest`, `V2_InputWhileTheReportIsOut_IsKept_AcrossANewView` | `[(1, true)]` before the ref's rest | the answer goes through `Watching` and a frame-verified rest; input seen while the report is out is kept | both red |
+| V3 a give-up stranded a deferred transaction and a refusal | `V3_GivingUp_StillAppliesADeferredTransaction`, `V3_ARefusedMoveAfterGivingUp_IsRestored`, `V3_ARefusedMotionlessJumpAfterGivingUp_IsRestored`, `V3_AUserMoveOntoTheGivenUpItem_IsAligned` | the transaction pending, 0 publications; no restore | *Decide* at the give-up rest (the target guarded); input and reports clear `gaveUpOn` | all four red |
+| V4 a second transaction erased the first window's input | `V4_InputInAWindow_SurvivesASecondTransaction_AndIsReportedFirst` | `[]` for `["3"]` | no publication while the open window holds input: reported at the completion and answered first | red |
+| V5 a port pending forever kept the poll going | `V5_APortPendingForever_DoesNotKeepThePollGoing` | still polling after 5000 frames | the controller believes the port's pending for at most `ScrollBridge.SettleBound` after its scroll started (an injectable clock for the test) | red |
+
+**Tests.** Headless: `CarouselPositionTests` (61, a stub port), `IndicatorViewTests`, the
 census (the pending list empty, ceiling 0, every key claimed with mutation evidence) and the README
-snippet; all 1427 tests in `Reactor.Maui.Tests` and the 80 engine tests pass. Device: 23 carousel and
+snippet; all 1436 tests in `Reactor.Maui.Tests` and the 80 engine tests pass. Device: 23 carousel and
 indicator fixtures (the three gates, then nine carousel fixtures and `IndicatorView_Controlled` on both
 registries); the full suites pass: Mac Catalyst 239 passed and 20 skipped, the iPhone simulator 236 and
 23, the iPad simulator 246 and 13, the Android emulator 241 and 18 (skips are platform no-ops, and on
@@ -3700,7 +3714,9 @@ iOS and Mac Catalyst the two `CarouselView_Fling` fixtures without real touches)
 real touches (Appium, `REACTOR_HOST_GESTURES=1`) on the iPhone simulator, `CarouselView_Swipe`,
 `_LongHold`, `_DeclaredChange`, `_Loop` and `_Fling` pass on both registries.
 
-**Mutants.** Every transition guard of §5.4.1, headless against `CarouselPositionTests`,
+**Mutants.** Every transition guard of §5.4.1, rerun after the verification round (its new guards
+V1–V5 are in the table above, all red; G1 stays red because `M2_…` interleaves display frames between
+the unrelated flush and the report), headless against `CarouselPositionTests`,
 `IndicatorViewTests` and the README snippet test (G = controller, H = handler, D = descriptor):
 
 | Mutant | Red |
