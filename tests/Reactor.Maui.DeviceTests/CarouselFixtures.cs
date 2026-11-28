@@ -34,6 +34,7 @@ public static partial class Fixtures
             new($"CarouselView_Accessibility [{r.Name}]", c => CarouselAccessibilityFixture(c, r.Create()), 60),
             new($"CarouselView_RefScrollTo [{r.Name}]", c => CarouselRefScrollTo(c, r.Create()), 60),
             new($"CarouselView_Loop [{r.Name}]", c => CarouselLoop(c, r.Create()), 60),
+            new($"CarouselView_Fling [{r.Name}]", c => CarouselFling(c, r.Create()), 90),
             new($"CarouselView_Geometry [{r.Name}]", c => CarouselGeometry(c, r.Create()), 60),
             new($"IndicatorView_Controlled [{r.Name}]", c => IndicatorControlled(c, r.Create()), 60),
         }),
@@ -126,7 +127,9 @@ public static partial class Fixtures
         var (view, state) = await ShowCarouselApp(c, MauiHandlers.CreateRegistry());
         var port = view.Controller.Port!;
         var frames = new List<string>();
-        var longestStill = 0;
+        var offsets = new HashSet<string>();
+        var longestUnprotected = 0;
+        var uncovered = 0;
         var still = 0;
         CarouselSample? last = null;
         state.SetPosition(3);
@@ -137,17 +140,23 @@ public static partial class Fixtures
         {
             await CarouselPlatform.NextFrame();
             var now = port.Sample()!.Value;
-            frames.Add($"{now.Shown}:{now.Offset:0}{(now.Moving ? "m" : "")}");
+            var pending = port.ScrollPending;
+            frames.Add($"{now.Shown}:{now.Offset:0}{(now.Moving ? "m" : "")}{(pending ? "p" : "")}");
             landed = now.Shown == 3 && now.Aligned;
+            if (!landed) offsets.Add($"{now.Shown}:{now.Offset:0}");
+            // Motion the port doesn't cover with its pending scroll is taken for input (spec 070 §5.4).
+            if (!landed && now.Moving && !pending) uncovered++;
             var moved = now.Moving || last is not { } l || l.Shown != now.Shown || Math.Abs(l.Offset - now.Offset) > 0.5;
-            still = moved ? 0 : still + 1;
-            if (!landed) longestStill = Math.Max(longestStill, still);
+            // A still frame the port doesn't cover with its pending scroll is one the controller counts toward a rest.
+            still = moved || pending ? 0 : still + 1;
+            if (!landed) longestUnprotected = Math.Max(longestUnprotected, still);
             last = now;
         }
         Note($"frames: {string.Join(" ", frames)}");
         Check(landed, "the projection landed on item 3");
-        Check(longestStill < 12, $"no stillness long enough to be taken for a rest on the way (longest {longestStill} frames; the controller needs 12 short of its target)");
-        Check(frames.Count >= 3, "the animation took several frames (positive witness: it moved frame by frame)");
+        Check(longestUnprotected < 2, $"no stillness on the way the port doesn't cover with its pending scroll (longest {longestUnprotected} frames; two still frames make a rest)");
+        Equal(0, uncovered, "the port covers its own scroll's motion (else it would be taken for input)");
+        Check(offsets.Count >= 3, $"the animation passed through several distinct offsets before landing ({offsets.Count}; positive witness: it moved frame by frame)");
         await CarouselSettled(c, view);
         Equal(0, state.Reports.Count, "an own projection isn't reported");
     }
@@ -255,6 +264,7 @@ public static partial class Fixtures
 
     private static async Task CarouselSwipe(FixtureContext c, ElementHandlerRegistry registry)
     {
+        Note($"input: {CarouselPlatform.Input}");
         foreach (var accept in new[] { true, false })
         {
             var (view, state) = await ShowCarouselApp(c, registry, accept);
@@ -276,6 +286,7 @@ public static partial class Fixtures
             if (accept)
             {
                 Equal("p1", ShownKey(view), "the accepted item shows");
+                Check(ShownAligned(view), "and is aligned");
                 Equal("p1 *", Platform.Text(c.ById<IView>("cell-p1")), "its template has IsCurrent");
             }
             else Equal("p0", ShownKey(view), "refused: back at the declaration");
@@ -289,7 +300,9 @@ public static partial class Fixtures
         var offsets = new List<string>();
         var itemCounts = new List<int>();
         var rendersBefore = 0;
-        await CarouselPlatform.Drag(view, new Drag(-240, 400, 0), _ => { }, async () =>
+        Note($"input: {CarouselPlatform.Input}");
+        // A real hold: the finger stays down through the renders (the drag checks it's still down after them).
+        await CarouselPlatform.Drag(view, new Drag(-240, 400, 2500), _ => { }, async () =>
         {
             rendersBefore = state.Renders;
             foreach (var render in new Action[] { () => state.Tick(1), () => state.SetItems(["new", .. Pages]), () => state.SetPosition(3) })
@@ -338,7 +351,8 @@ public static partial class Fixtures
         // A declaration during a drag waits for its end, after the drag's report.
         state.Accept = false;
         var shownDuringHold = "";
-        await CarouselPlatform.Drag(view, new Drag(240, 400, 0), _ => { }, async () =>
+        Note($"input: {CarouselPlatform.Input}");
+        await CarouselPlatform.Drag(view, new Drag(240, 400, 2500), _ => { }, async () =>
         {
             state.SetPosition(4);
             await c.Drain();
@@ -431,6 +445,39 @@ public static partial class Fixtures
         Note($"loop, a swipe from the last item: reports [{string.Join(",", state.Reports)}], shown {ShownKey(view)}, centered {CarouselPlatform.Centered(view)}");
         Equal("0", string.Join(",", state.Reports), "the wrap is reported as item 0");
         Equal("p0", ShownKey(view), "item 0 shows");
+    }
+
+    /// <summary>A fling: nothing reported during the deceleration, the resting item once (spec 070 §5.8, review M9).</summary>
+    private static async Task CarouselFling(FixtureContext c, ElementHandlerRegistry registry)
+    {
+#if IOS || MACCATALYST
+        if (!CarouselPlatform.HostGestures) throw new SkipException("a fling needs real touches: run with host-gestures.py (REACTOR_HOST_GESTURES=1)");
+#endif
+        Note($"input: {CarouselPlatform.Input}");
+        foreach (var (name, drag) in new[] { ("one page", new Drag(-160, 60, 0)), ("a longer fling", new Drag(-420, 90, 0)) })
+        {
+            var (view, state) = await ShowCarouselApp(c, registry);
+            var reportsWhileMoving = new List<string>();
+            var motionFrames = 0;
+            await CarouselPlatform.Drag(view, drag, _ => { }, null);
+            // The deceleration after the lift: looked at every frame until it stops.
+            for (var i = 0; i < 600 && view.Controller.Port?.Sample() is { Moving: true }; i++)
+            {
+                motionFrames++;
+                await c.Drain(1);
+                reportsWhileMoving.AddRange(state.Reports);
+                await CarouselPlatform.NextFrame();
+            }
+            await CarouselSettled(c, view);
+            var centered = CarouselPlatform.Centered(view).Replace(" *", "", StringComparison.Ordinal);
+            Note($"{name}: frames moving after the lift {motionFrames}, reports while moving [{string.Join(",", reportsWhileMoving)}], reports [{string.Join(",", state.Reports)}], shown {ShownKey(view)}, centered {centered}");
+            Check(motionFrames > 0, $"{name}: it decelerated after the lift (positive witness)");
+            Equal(0, reportsWhileMoving.Count, $"{name}: nothing reported while it decelerates");
+            Equal(1, state.Reports.Count, $"{name}: the resting item, once");
+            Check(state.Reports[0] != "0", $"{name}: it moved");
+            Equal(Pages[int.Parse(state.Reports[0], System.Globalization.CultureInfo.InvariantCulture)], centered, $"{name}: the report is the centered item");
+            c.Unmount();
+        }
     }
 
     private static async Task CarouselGeometry(FixtureContext c, ElementHandlerRegistry registry)

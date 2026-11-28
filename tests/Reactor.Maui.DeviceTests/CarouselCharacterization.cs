@@ -677,8 +677,10 @@ public static partial class CarouselPlatform
         {
             await Task.Delay(drag.MoveMs + 150);
             mark($"hold: native tracking {s.Tracking}");
+            if (!s.Tracking) throw new CheckFailedException($"the host's finger lifted before the hold's work (hold {drag.HoldMs} ms): that work wouldn't run under a held finger");
             await duringHold();
             mark($"hold work done: native tracking {s.Tracking}");
+            if (!s.Tracking) throw new CheckFailedException($"the host's finger lifted during the hold's work (hold {drag.HoldMs} ms)");
         }
         var samples = new List<string>();
         while (s.Tracking)
@@ -819,7 +821,11 @@ public static partial class CarouselPlatform
         if (duringHold is not null)
         {
             await Task.Delay(600);
+            if (rv.ScrollState != AndroidX.RecyclerView.Widget.RecyclerView.ScrollStateDragging)
+                throw new CheckFailedException($"the host's finger lifted before the hold's work (hold {drag.HoldMs} ms)");
             await duringHold();
+            if (rv.ScrollState != AndroidX.RecyclerView.Widget.RecyclerView.ScrollStateDragging)
+                throw new CheckFailedException($"the host's finger lifted during the hold's work (hold {drag.HoldMs} ms)");
         }
         while (rv.ScrollState == AndroidX.RecyclerView.Widget.RecyclerView.ScrollStateDragging) await Task.Delay(5);
         mark("drag ended (host input)");

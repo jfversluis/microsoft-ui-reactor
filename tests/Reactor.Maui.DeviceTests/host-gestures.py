@@ -6,7 +6,8 @@ An app can't inject real touches into itself on iOS, so fixtures that need one l
 the touch. This script follows the run's log and performs each drag through an Appium XCUITest
 session (`mobile: dragFromToWithVelocity`, which presses, drags at a velocity and holds before lifting).
 
-    appium --port 4723 &                       # with the xcuitest driver installed
+    appium --address 127.0.0.1 --port 4723 &   # with the xcuitest driver installed; loopback only:
+                                               # an Appium server drives the simulator for whoever reaches it
     python3 tests/Reactor.Maui.DeviceTests/host-gestures.py <udid> <ios-version> &
     REACTOR_HOST_GESTURES=1 REACTOR_DEVICE_TEST_FILTER=Characterize_Carousel \
       tests/Reactor.Maui.DeviceTests/run.sh ios <udid>
@@ -21,10 +22,11 @@ import time
 import urllib.error
 import urllib.request
 
-BASE = os.environ.get('APPIUM_URL', 'http://localhost:4723')
+BASE = os.environ.get('APPIUM_URL', 'http://127.0.0.1:4723')
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG = os.path.join(HERE, '..', '..', 'artifacts', 'device-tests', 'ios.log')
-PATTERN = re.compile(r'REACTOR-GESTURE (\d+) (-?\d+) (-?\d+) (-?\d+) (\d+) (\d+)')
+# The whole request, integers only, at the end of its log line.
+PATTERN = re.compile(r'REACTOR-GESTURE (\d{1,6}) (-?\d{1,5}) (-?\d{1,5}) (-?\d{1,5}) (\d{1,5}) (\d{1,5})$', re.MULTILINE)
 
 
 def call(method, path, body=None, timeout=1200):
