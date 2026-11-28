@@ -9,9 +9,8 @@ Phase 4c closes the controls rows of spec 068's inventory. It lands in four gate
 | 4c-3 | Shapes, gradient brushes, ContentView, image source equality, tests for every remaining 🧪 control and layout, and the §1 audit of every ✅ row of spec 068 |
 | 4c-4 | CarouselView and IndicatorView (moved out of 4c-2 in its design review) |
 
-This spec details 4c-1 (§2), 4c-2 (§3) and 4c-3 (§4, three PRs: 4c-3a, 4c-3b and 4c-3c, the last split off
-4c-3b in its design review, §4.14.2). §5 is
-written when 4c-4 starts. The bar for each item is spec 068 §1.
+This spec details 4c-1 (§2), 4c-2 (§3), 4c-3 (§4, three PRs: 4c-3a, 4c-3b and 4c-3c, the last split off
+4c-3b in its design review, §4.14.2) and 4c-4 (§5). The bar for each item is spec 068 §1.
 
 ## 1. Scope
 
@@ -3182,25 +3181,623 @@ test runner and fixtures only; no product code was involved):
 
 ## 5. 4c-4: CarouselView and IndicatorView
 
-To be designed when 4c-4 starts. Moved out of 4c-2 by its design review (round 1), which found the
-round-0 design (a position reported once at rest, compared with the declaration, plus a conditional
-in-flight flag) unsound. The design must meet these requirements, each from a finding:
+4c-4 makes the carousel's position a controlled value that is never written or reported during a
+drag, and adds IndicatorView. It was moved out of 4c-2 by that design's first review, whose findings
+are this phase's requirements:
 
-- **Never write or report during a drag.** The round-0 design still wrote under the user's finger:
-  `CarouselViewHandler.Apply` reasserts the declared position on any render during a drag, MAUI's iOS
-  `ScrollToPosition` (`CarouselViewController2`) has no drag guard, and the settle bound flushed
-  regardless of the drag. Writes and reports wait for the end of a drag, whatever renders meanwhile.
-- **No provenance guessing.** The in-flight flag guessed whether a change came from Reactor; it would
-  have swallowed accessibility scrolls and `ScrollTo` through a ref. MAUI's
-  `MauiCarouselRecyclerView` (`UpdateFromPosition`, `UpdatePosition`) and `CarouselViewController2`
-  expose no operation identity, so the design reads platform state, never infers the cause.
-- **Characterize accessibility actions and ref commands** (VoiceOver and TalkBack scrolling,
-  `ScrollTo` through a ref) along with swipes, flings, programmatic writes, items changes, `Loop` and
-  iOS 26's debounced position writes, before the echo design is fixed.
-- **A long-hold test**: the user holds a drag while an unrelated render runs; nothing is written to
-  the carousel and nothing is reported until the drag ends, and then exactly once.
-- **`ItemState.IsCurrent`** joins `IsSelected` (§3.3), replacing the `CurrentItem`, `PreviousItem` and
-  `NextItem` visual states.
-- **IndicatorView** stays a separate controlled element linked to the carousel through state, with
-  MAUI's names; its `IndicatorTemplate` is a proposed exclusion (render a row of elements from the
-  count and position instead).
+- **Never write or report during a drag**, whatever renders meanwhile; writes and reports wait for
+  the end of the motion.
+- **No provenance guessing**: MAUI exposes no operation identity (`MauiCarouselRecyclerView`,
+  `CarouselViewController2`), so the design reads platform state and never infers a cause.
+- **Characterize first**: swipes, flings, Reactor's writes, accessibility actions, `ScrollTo`
+  through a ref, items changes, `Loop`, `PeekAreaInsets` and iOS 26's debounced position writes.
+- **A long-hold test**: an unrelated render during a held drag writes nothing and reports nothing;
+  the release reports exactly once.
+- **`ItemState.IsCurrent`** joins `IsSelected` (§3.3), replacing the `CurrentItem`, `PreviousItem`
+  and `NextItem` visual states.
+- **IndicatorView** is a separate controlled element linked to the carousel through app state.
+
+### 5.1 Characterization (device, `CarouselCharacterization.cs`)
+
+Plain MAUI 11.0.0 (`4e6582f`), a 300×200 carousel of five labels. Devices: Mac Catalyst 26.7, the
+iPhone simulator (iOS 27.0), the iPad simulator (iOS 27.2) and the Android 17 emulator. The fixtures
+log every `PositionChanged`, `CurrentItemChanged` and `IsDragging` change with the time, whether a
+write of the fixture's was running ("in-write"), the platform's scroll state and MAUI's
+`Position`. They are on demand (`REACTOR_DEVICE_TEST_FILTER=Characterize_Carousel`), not in the full
+suite.
+
+**Input.** An app can't inject real touches into itself on iOS, so the iPhone and iPad drags are
+real XCUITest touches: the fixture logs `REACTOR-GESTURE`, and `host-gestures.py` performs it
+through Appium (`mobile: dragFromToWithVelocity`: press, drag at a velocity, hold, lift). On Android
+the fixtures dispatch `MotionEvent`s to the `RecyclerView` (its own touch handling, velocity tracker
+and snap helper); the long hold was repeated with real touches from the shell (`run.sh` answers
+`REACTOR-GESTURE` with `adb shell input motionevent`) and matched. **Mac Catalyst has no real input**:
+posting pointer or trackpad events needs an Accessibility permission this environment doesn't have
+(a `CGEvent` scroll posted to the process changed nothing), so its drag is simulated by driving the
+page scroller's pan recognizer through its states: `Dragging` becomes true, `Tracking` doesn't, and
+the offset doesn't follow. Catalyst rows below that depend on a finger say so.
+
+| | Mac Catalyst | iPhone, iPad | Android |
+|---|---|---|---|
+| Where the pages scroll | UIKit's private orthogonal section scroller inside MAUI's collection view (`_UICollectionViewOrthogonalScrollView`, paging) | the same | the `RecyclerView` (`LinearLayoutManager`, MAUI's `SingleSnapHelper`) |
+| Readable motion state | the scroller's `Dragging`, `Decelerating` (simulated drag only) | `Tracking` (finger down), `Dragging` (stays true through the deceleration), `Decelerating`; a **programmatic animated scroll sets none of them** (only the offset moves) | `ScrollState`: dragging, settling (flings, programmatic and accessibility scrolls), idle |
+| MAUI's `IsDragging`, `IsScrolling` | `IsDragging` never true: MAUI's delegate isn't the orthogonal scroller's, so its `DraggingStarted` never runs; `IsScrolling` stays true after scrolls with `Loop` | the same | `IsDragging` follows the drag; `IsScrolling` turns false while still settling. Neither is usable |
+| A swipe or fling | — | `PositionChanged` only when the offset lands exactly on a page: at the end of the deceleration, after the finger lifted; a fast fling through several pages reports each page it lands on. None during a drag in any run (a drag that passes an exact page offset would report one) | `PositionChanged` whenever the centered item changes: **during the drag** (a slow drag past the middle reported 1→2 while dragging, then 2→1 when it snapped back) and during settling |
+| A drag released without velocity | — | snaps to a page | after a long hold it **rests between pages** (offset 192 of 300, idle, no snap: the snap helper only acts on a fling), in-process and with real touches |
+| `Loop`, wrapping from the last item | — | one change, 4→0 | the same |
+| `PeekAreaInsets` (40) | — | the same rules; neighbors partly visible | reports earlier: the center crosses into the next item sooner |
+| A `Position` write | event in-write; the scroll starts about 100 ms later (MAUI's iOS 26 debounce in `UpdateFromPosition`); `CurrentItem` changes after the scroll | the same | event in-write; scroll at once |
+| Two writes in one turn (3, then 4) | ends at 4 | the same | the second is dropped while the first animates: ends at 3, with a **late** `PositionChanged` 4→3 outside any write |
+| A write while a scroll settles (0, then 2 30 ms later) | ends at 2 | the same | ends at 0 (dropped by MAUI's `IsScrolling` guard), late 2→0 |
+| An out-of-range write (9 of 5) | kept virtually, no scroll | the same | **throws** `IndexOutOfRangeException` inside the setter, `Position` left at 9 |
+| A write during a held drag | (simulated) a different value scrolls at once; the drag's end leaves it there | a different value **scrolls under the finger** at once (no drag guard), and stays after the lift; MAUI's `Position` didn't change during the drag, so rewriting the old value is an equal write | `Position` changed during the drag (0→1), so rewriting the drag's start (0) is a write: the virtual value changes, the scroll is skipped (`IsDragging` guard), and after the lift the platform shows item 1 with `Position` 0 **for good**; a different value (3): the same disagreement |
+| `ScrollTo` through a ref | animated: reported at landing, outside; jump: in-write | the same | reported late; **`ScrollTo(item)` scrolls but never updates `Position`** (no event at all); `ScrollTo` then a `Position` write in one turn: `ScrollTo` wins, with a late report |
+| Accessibility | `accessibilityScroll` (left, right, next) on the collection view and on the scroller: not handled (`false`, nothing moves); VoiceOver's scroll-to-visible on a partly visible neighbor (`_accessibilityScrollToVisible`, peek 40): an **instant jump**, `PositionChanged` outside any write, no motion state | the same | `ACTION_SCROLL_FORWARD`/`BACKWARD` on the `RecyclerView`: one page, settling, reported during the settle; `SCROLL_LEFT`/`RIGHT`: not handled; `SHOW_ON_SCREEN` on a peeking neighbor: `true`, nothing moves |
+| Items change, MAUI's default `KeepItemsInView` | corrections **in-write**, to item 0 (MAUI's scroll mode) when removing the current item, removing an earlier item, inserting before it, or shrinking below the position; a move keeps the item; replacing `ItemsSource`: in-write 4→0, then late 0→4 and 4→1 | the same | corrections **late** (20–40 ms, MAUI's `Dispatch`), to item 0 when removing the current or last item, inserting before it, appending, shrinking or clearing; a move follows the moved item; removing an earlier item: no event, `Position` stale (3) while the right item shows |
+| Items change and the declared position in one turn (Reactor's commit shape: a `Position` write, or `ScrollTo`, with `KeepItemsInView` or `KeepScrollOffset`) | the declared item shows in all 24 cases | the same | none of the four is right in all six cases: MAUI's late correction overrides a `Position` write (4 of 6 wrong); a same-turn `ScrollTo` lands one item off after removals (2 of 6); `KeepScrollOffset` gets a move wrong, and **two removals in one turn crash the app** (MAUI's dispatched `SetCurrentItem` throws `ArgumentOutOfRangeException` on the UI thread) |
+| Items change, `ScrollTo` posted after it (Android) | — | — | posted at once or 50 ms later: one item off after removals; **150 ms later (after the `RecyclerView`'s item animations): right in all seven cases**. A same-turn `ScrollTo` makes MAUI skip its deferred correction (its `_scrollToCounter` check), which otherwise shows item 0 for a frame |
+| A programmatic animated scroll | no motion flags; offset moves for about 300 ms (a `Position` write starts after the 100 ms debounce) | the same | settling, then idle |
+| IndicatorView | a write: event in-write; a tap (`UIPageControl` sets the page and sends `ValueChanged`): event outside, inside the platform's action; `Count` below `Position`: the virtual value stays, the control shows the last page; an out-of-range write is kept virtually | the same | the same; an indicator's click: event inside the click; `Count` below `Position`: no indicator selected |
+
+**What the measurements make distinguishable.** Motion and rest (the platform's scroll state, and on
+iOS the offset frame to frame); a notification raised inside Reactor's own write (the echo scope);
+where the platform's centered item is. **What they don't:** the cause of a jump without motion. A
+VoiceOver scroll-to-visible, MAUI's late correction after an items change and a ref's
+`ScrollTo(animate: false)` look the same: an idle platform showing another item, with a
+`PositionChanged` outside any write. MAUI's `Position` and its events can't be the reported value
+either: they change during Android drags, arrive late and wrong after items changes, lose writes, and
+miss `ScrollTo(item)`.
+
+### 5.2 What WinUI has (the source of truth for names)
+
+WinUI Reactor has `FlipView(selectedIndex, onSelectedIndexChanged, items)` (and a templated
+`FlipView<T>(items, key, viewBuilder)`) and `PipsPager(numberOfPages, selectedPageIndex,
+onSelectedPageIndexChanged)`. Neither is MAUI's control: `FlipView` is a selector with a selected
+item and arrow buttons, `PipsPager` a pager with its own previous and next buttons. The renderer's
+naming rule (§3.2: element and control names are MAUI's, properties keep MAUI's names, and WinUI's
+name wins only where MAUI has no API of its own) gives MAUI's names here: MAUI has both controls and
+their properties (`CarouselView.Position`, `IndicatorView.Count`, `Position`), which are also the
+names the census froze and the ports use (decision 1). Their WinUI counterparts, recorded in spec
+068's notes: `FlipView` (`SelectedIndex`, `OnSelectedIndexChanged`) and `PipsPager`
+(`NumberOfPages`, `SelectedPageIndex`, `OnSelectedPageIndexChanged`).
+
+### 5.3 API
+
+```csharp
+public readonly record struct ItemState(bool IsSelected)
+{
+    /// <summary>The item is the carousel's declared position (never the one under a moving finger).</summary>
+    public bool IsCurrent { get; init; }
+}
+
+public sealed record CarouselViewElement(
+    IReadOnlyList<object?> Items,
+    Func<object?, string> ItemKey,
+    Func<object?, ItemState, Element?> ItemTemplate,
+    int Position,
+    Action<int>? OnPositionChanged = null) : ViewElement
+{
+    public bool Loop { get; init; }
+    public Thickness? PeekAreaInsets { get; init; }
+    public double ItemSpacing { get; init; }
+    public bool IsScrollAnimated { get; init; } = true;   // MAUI's name: whether a declared change animates
+}
+
+public sealed record IndicatorViewElement(int Count, int Position, Action<int>? OnPositionChanged = null) : ViewElement
+{
+    public Color? IndicatorColor { get; init; }
+    public Color? SelectedIndicatorColor { get; init; }
+    public double? IndicatorSize { get; init; }
+    public IndicatorShape? IndicatorsShape { get; init; }   // MAUI's Controls enum (review 7)
+    public int? MaximumVisible { get; init; }
+    public bool HideSingle { get; init; } = true;
+}
+
+// Factories: the item-only template and the state template; the indicator.
+public static CarouselViewElement CarouselView<T>(IReadOnlyList<T> items, Func<T, string> key, Func<T, Element?> itemTemplate, int position, Action<int>? onPositionChanged = null);
+public static CarouselViewElement CarouselView<T>(IReadOnlyList<T> items, Func<T, string> key, Func<T, ItemState, Element?> itemTemplate, int position, Action<int>? onPositionChanged = null);
+public static IndicatorViewElement IndicatorView(int count, int position, Action<int>? onPositionChanged = null);
+```
+
+An onboarding pager, the carousel and its dots linked through one state:
+
+```csharp
+var (page, setPage) = UseState(0);
+return VStack(16,
+    CarouselView(Steps, s => s.Id, (s, state) =>
+        StepCard(s).Opacity(state.IsCurrent ? 1 : 0.6), page, setPage)
+        with { PeekAreaInsets = new Thickness(24, 0), ItemSpacing = 8 },
+    IndicatorView(Steps.Count, page, setPage) with { SelectedIndicatorColor = Colors.Orange },
+    Button(page == Steps.Count - 1 ? "Done" : "Next", () => setPage(Math.Min(page + 1, Steps.Count - 1))));
+```
+
+The element's `ItemTemplate` becomes `Func<object?, ItemState, Element?>`, as `CollectionView`'s did
+(§3.3): a primary-constructor change; the item-only factory adapts. MAUI's `CarouselView.IndicatorView`
+link isn't used: it binds the two views inside MAUI, two-way, around the controlled contract.
+
+### 5.4 The controlled position
+
+**The platform's resting item is the truth, and MAUI's `Position` is written only at mount.** Every
+term below is read from the platform:
+
+- **Shown**: the index of the realized cell whose center is nearest the carousel's center, measured
+  on the cells' platform views (`ReactorCell`'s handler view, in window coordinates) and mapped to
+  the item through the cell's box. With `Loop` MAUI realizes duplicate cells; each maps to its item.
+- **Moving**: iOS and Mac Catalyst: the page scroller's `Tracking`, `Dragging` or `Decelerating`, or
+  its offset changed since the previous frame (a programmatic animation sets no flag). Android:
+  `ScrollState` isn't idle. **At rest**: not moving on two consecutive frames.
+- **Aligned**: the shown cell's center is within one point of the carousel's center (as built, on
+  Android: where the platform's snap helper rests it, §5.13 deviation 3).
+- **D**, the declaration: `Position` clamped to `0…Count−1`; none for an empty list.
+
+Rules (revised after the design review of `56750e0e`; each change names its finding):
+
+1. **Mount.** `Position` (clamped) is written before the handler exists; the platform starts there
+   (measured on every platform). It isn't written again: a later write is debounced on iOS 26 (a
+   100 ms window in which a user's drag would be scrolled under the finger), dropped on Android
+   during a scroll, and throws on Android out of range. **MAUI's `Position` is therefore not
+   authoritative** after mount (review 9): it lags Reactor's projections, misses Android's
+   `ScrollTo(item)`, and goes stale after items changes; the callback (and the shown item it reports)
+   is the resting index.
+2. **Writes only at rest, through `ScrollTo`, and own projections are tracked** (review 2). A commit
+   projects the declaration: if the carousel is at rest, no barrier is pending, and the shown item
+   isn't D or isn't aligned, Reactor calls `ScrollTo(D, Center, IsScrollAnimated)` inside its echo
+   scope and records D as its **own projection's target**. If it is moving, nothing is written: the
+   projection waits for rest, after rule 4's check. An unrelated render during a drag therefore
+   writes nothing. While an own projection is in flight, a later declaration supersedes it: the
+   newest D is projected (from rest, or at once if the carousel is resting mid-projection), and the
+   settle of the superseded one, wherever it stops, is never reported. An own projection ends at a
+   verified rest; a user drag observed during it (iOS `Tracking` or `Dragging`, Android dragging)
+   ends it as the user's, and that rest is reported.
+3. **Items and layout transactions** (review 1, 3). A commit that changes the item structure (a
+   key added, removed or moved, or an item replaced) or the layout (`Loop`, `PeekAreaInsets`,
+   `ItemSpacing`), each of which MAUI answers by scrolling (iOS's collection-update completion
+   forces a scroll, `CarouselViewController2` 359–395; a loop change re-scrolls), is a transaction:
+   - **While the carousel moves, the whole transaction waits**: nothing is published to MAUI (the
+     native items list and layout keep the previous element's), so nothing moves under the finger.
+     Cells keep rendering their items (a re-render publishes nothing). At rest the latest live
+     element's transaction is applied.
+   - **Applied at rest**, it starts an epoch: the items sync (in the echo scope), the layout writes,
+     a same-turn `ScrollTo(D, animate: false)` (on Android MAUI then skips its deferred
+     `KeepItemsInView` correction, its `_scrollToCounter` check, so no frame shows item 0), and the
+     epoch's barrier: iOS and Mac Catalyst, `PerformBatchUpdates(null, completion)` on the
+     collection view; Android, a dispatch posted after MAUI's own, then the `RecyclerView`'s item
+     animator finished (`ItemAnimator.IsRunning(listener)`) and no layout pending.
+   - **Barrier ownership.** Only the current epoch's completion acts: it projects the latest live
+     declaration (a jump) unless user motion or a ref command intervened, and releases rule 4's
+     checks. An obsolete completion neither projects nor releases; it reissues the current epoch's
+     barrier if that one isn't outstanding. A position-only commit during a pending barrier records
+     its D and waits behind it; a new transaction during it starts a new epoch (and its barrier).
+     Handler replacement and unmount retire every epoch (the port's owner is checked).
+   - **The input-priority limitation** (review 6, accepted). Between a transaction and its barrier,
+     a jump without motion can't be told from MAUI's processing of the change by state alone: a
+     VoiceOver scroll-to-visible in that window (on Android, the item animations, a few hundred
+     milliseconds) is overwritten by the projection, not reported. Motion in the window (a drag, a
+     settle) and **identifiable ref commands** are not overwritten: a `ScrollToRequested` raised
+     outside Reactor's own scroll (MAUI's `ItemsView.ScrollTo`, `ItemsView.cs` 223–245, 294–296) cancels
+     the pending projection and is reported at rest. Recorded in spec 068 and the README.
+4. **Reports only at rest, from the platform.** Triggers: MAUI's `PositionChanged` and
+   `CurrentItemChanged` raised outside Reactor's echo scope, `ItemsView.Scrolled`,
+   `ScrollToRequested` outside Reactor's scope, Android's scroll-state changes, and iOS's page
+   scroller's pan recognizer (a target added to it). A trigger arms a **frame poll** (review 5):
+   `CADisplayLink` on iOS and Mac Catalyst, `Choreographer` on Android. The poll samples every
+   display frame and declares **rest** only after two consecutive distinct frames with no motion
+   flag and the same offset; it stays armed through own projections and until that verified rest
+   (the private scroller reports a position only at exact page offsets, so an interrupted scroll
+   can stop between pages with no MAUI event; only the poll sees it). At rest, unless a barrier is
+   pending or the rest ends an own projection (rule 2), the shown item S is compared with D: if they
+   differ, and S wasn't already reported for this rest, `OnPositionChanged(S)` is called once through
+   `Live` and then `RestoreAfterEvent` (refused: rule 2 scrolls back to D at rest; accepted: nothing
+   written). MAUI's event argument is never the reported value; whoever moved the carousel is
+   neither known nor guessed. Where the cause can't be told, the design reports (rule 3's window
+   excepted).
+5. **Reactor's own projections aren't reported**: their settle is recognized by rule 2's target,
+   not by comparing with D alone, so a superseded projection resting short of its target isn't
+   mistaken for input. Their in-write notifications are echoes.
+6. **Alignment after every rest** (review 4). After the rest check, if the shown cell isn't aligned
+   (Android's release without velocity rests between pages), Reactor aligns it to D with an
+   animated `ScrollTo`, also when S is D and no callback is due.
+7. **Unmount and handler replacement** retire the poll, the epochs and the pending projection (a
+   generation, the port's owner, and `Live`); nothing is reported or written after them.
+8. **Ref commands are input.** `ref.Current.ScrollTo(...)` (identified by `ScrollToRequested`) and a
+   `Position` written through the ref are reported at rest like a swipe.
+9. **`IsCurrent`** is the declaration: true for the item at D. A changed D re-renders the realized
+   cells in place (§3.3's mechanism, no remount); during a drag it doesn't follow the finger.
+
+#### 5.4.1 The state machine (after the review of `d7f8d28f`)
+
+The review of the first implementation found holes where the rules above were held as scattered
+flags (a stale own target after a barrier, motion in the barrier window overwritten, an interrupted
+projection's rest not reported while a transaction waited, a transaction deferred forever while
+nothing was laid out, an unrelated commit answering a report). `CarouselPositionController` is now an
+explicit state machine in two orthogonal regions, with every event's transitions below; each guard
+has a regression test and a mutant (§5.13).
+
+**Motion region** (`CarouselMotion`):
+
+| State | Data | May write | May report | May publish |
+|---|---|---|---|---|
+| `Resting` | `rest`: the published index of the last verified rest, or `Unknown` (after an items change or a new platform view) | a projection, from *Decide* | no | a deferred transaction, from *Decide* |
+| `Watching` | `input`: a finger, motion the port doesn't own, or a ref command was seen | no | at its rest | only when nothing is laid out (nothing can move under a finger) |
+| `OwnProjecting` | `target`, `scrolls`, the projection's animation | a retry, at its own rest | never | no |
+| `AwaitingAnswer` | `seq` of the posted report; whether it ran; `input` seen while it's out | no | no | no |
+
+**Items region**: *published*; a *deferred* transaction (waiting for rest; a flag, as it can wait
+while a window is open); the *barrier window* of epoch `e`, open from a transaction to that epoch's
+completion, recording *window input*. **Guards**: `gaveUpOn` (a declaration the platform never landed
+on, not projected again until the declaration, the items or the platform view change, or input or a
+report is recorded) and `jumpNext` (the next projection jumps: it follows an items change or a new
+platform view; cleared by input or a verified rest that needed no projection; a report doesn't clear
+it, as one always follows input or a known rest, never a pending jump).
+
+**Input** is only what the platform shows: `UserDragging`; `Moving` unless Reactor's own scroll is
+pending (the port's `ScrollPending`: iOS and Mac Catalyst, the page scroller short of the offset the
+port set; Android, the smooth scroller, its settle, or the jump's layout; both bounded by
+`ScrollBridge.SettleBound`, and believed by the controller for at most that bound after its scroll
+started, whatever the port says: its own watchdog); a `ScrollToRequested` outside Reactor's own
+scroll. **A rest** is two still frames with no own scroll pending (no frame count stands in for "the
+animation hasn't started").
+
+| Event | Transitions |
+|---|---|
+| Commit (a render; transaction if items or layout differ) | a transaction sets *deferred*; a changed declaration clears `gaveUpOn`. `AwaitingAnswer`: only once its report ran is this the answer → `Watching`, its `input` kept (the rest is verified again from frames: a ref's animation can move it with no motion flag); before that, nothing. `Resting` → *Decide*. `Watching`: if nothing is laid out and a transaction is deferred, apply it. `OwnProjecting`: nothing (its rest projects the newest declaration) |
+| `ReportRan(seq)` (the posted report runs) | marks `seq` answered by the next commit |
+| Trigger (a MAUI event, the scroller's interaction) | `Resting` → `Watching{input: false}`; arm the poll |
+| `ScrollToRequested` outside Reactor's scroll | `Resting` → `Watching`; *input* |
+| *input* (a frame, a moving sample in *Decide*, a ref command) | `OwnProjecting` → `Watching`; `Watching.input` or `AwaitingAnswer.input`; in the window, *window input*; clear `jumpNext` and `gaveUpOn` |
+| Rest of `OwnProjecting` | window open → `Resting{target if shown is target, else Unknown}` (the completion decides); landed (shown, aligned) → `Resting{target}`, *Decide*; superseded (declaration ≠ target) → `Resting{shown}`, *Decide*; short or off center → retry with the same animation, at most three scrolls, then a warning, `gaveUpOn = target`, `Resting{shown}`, *Decide* (a deferred transaction applies; the target isn't asked again) |
+| Rest of `Watching` | window open → `Resting`, rest unchanged (the completion decides); *moved* (rest known: shown ≠ rest; `Unknown`: input was seen) and (a transaction deferred, or shown ≠ the declaration) → report → `AwaitingAnswer{seq}` (`rest = shown`, `gaveUpOn` cleared); else `Resting{shown}`, *Decide* |
+| Nothing laid out for 600 frames | a rest on nothing: `Resting`, *Decide* (a deferred transaction applies) |
+| *Decide* (from `Resting`) | the sample moves → `Watching`, *input*; a transaction deferred → apply it, unless the open window holds input (reported at its completion and answered first: publishing would move the user's item away); window open or nothing laid out → nothing; shown ≠ a known rest → `Watching` (verify first); shown isn't the declaration or isn't aligned, and the declaration isn't `gaveUpOn` → `OwnProjecting` (a jump if `jumpNext`, else `IsScrollAnimated`); else clear `jumpNext` |
+| Apply a transaction | publish; epoch + 1; `rest = Unknown`; a same-turn jump to the declaration (`OwnProjecting`); `jumpNext`; issue the epoch's barrier (window open; none without a native view) |
+| Barrier completion | retired, another port or owner → ignored; an obsolete epoch → reissue the current epoch's barrier if it's neither outstanding nor settled, nothing else; the current epoch → window closed; window input, or input in the sample now → `Watching{input}` (reported at rest); else, from `Resting`, `rest = Unknown` and *Decide* (whatever shows is MAUI's processing: projected, a jump) |
+| Port change (handler replacement) | the poll and the window retire; `rest = Unknown`; `jumpNext`; `gaveUpOn` cleared (it was the old view's); `Watching` (an `AwaitingAnswer` stays) |
+| Unmount | retired: nothing is written, published or reported |
+
+Every probe of the review is a headless regression test that failed on `d7f8d28f` and passes now
+(§5.13 lists them with their red results); the per-guard mutants are in §5.13.
+
+Against spec 067 §14: Reactor's writes aren't reported (rules 2, 5); refused input is restored, at
+rest (rules 2, 4); nothing is reported after unmount (rule 7); and nothing is written, published or
+reported during a drag (rules 2, 3, 4).
+
+### 5.5 IndicatorView
+
+A Controls view on both registries (the direct registry falls back, as for `CollectionView`), through
+a `ControlDescriptor`: its `Position` is a controlled value whose writes run in the echo scope
+(`WriteSuppressed`; a write's event is in-write, a tap's is inside the platform's action: §5.1). The written position is clamped to
+`0…Count−1` (0 for an empty count): MAUI accepts any value virtually while each platform shows
+something different. `IndicatorColor`, `SelectedIndicatorColor`, `IndicatorSize`, `IndicatorsShape`,
+`MaximumVisible` and `HideSingle` are plain values. `IndicatorTemplate` is excluded: render a row of
+elements from the count and position instead (spec 068 records the exclusion).
+
+### 5.6 Both registries
+
+Both elements are Controls views on both registries; the direct registry's fallback wraps them as it
+wraps `CollectionView`. Cells host direct item trees as in 4c-2 (`ReactorCell`).
+
+### 5.7 Census keys and their evidence
+
+4c-4 empties the pending list (ceiling 0): the eight `Phase4c4` keys and every new key get claims
+(spec 070 §4.14–§4.17's conventions: matrix cases, the controlled-value runner, covered-by claims
+with facets and their own mutant).
+
+| Keys | Evidence |
+|---|---|
+| `CarouselViewElement.Position`, `OnPositionChanged` | covered-by the carousel's controlled tests (§5.8): written once at mount, clamped; a declared change projected through `ScrollTo` at rest and not reported; input reported once at rest and not while moving; refused, restored at rest; accepted, nothing written; nothing after unmount; a callback swapped between renders reaches the new one. The runner can't express rest, so this is a claim, with its mutants |
+| `Items`, `ItemKey` | covered-by the carousel host's keyed sync (reorder keeps boxes, removal unmounts the cell tree) and the items-change projection tests |
+| `ItemTemplate` | covered-by the item-state tests (`IsCurrent` from the declaration, in place, recycling) |
+| `Loop`, `PeekAreaInsets`, `ItemSpacing` | matrix property cases (set, updated with one write, an equal render with none, cleared); geometry on device |
+| `IsScrollAnimated` (new) | covered-by: a declared change projects animated or not by the flag; items-change projections always jump |
+| `IndicatorViewElement.Count`, the colors, `IndicatorSize`, `IndicatorsShape`, `MaximumVisible`, `HideSingle` (new) | matrix property cases |
+| `IndicatorViewElement.Position`, `OnPositionChanged` (new) | a `ControlledCase` (the runner), plus a clamp test |
+
+### 5.8 Tests
+
+Each oracle names the mutation that must turn it red. The carousel's headless tests drive a stub
+platform port (moving, shown, aligned, `ScrollTo` calls recorded, barrier completed by hand), as 4c-2's
+selection verifier does; the port's real implementations are proven on device.
+
+**Headless (`tests/Reactor.Maui.Tests`):**
+
+| Test | Oracle | Mutation |
+|---|---|---|
+| Items during a hold (review 1) | moving; a render inserts and removes items and changes D: nothing published (the native items list unchanged, counted writes 0), no `ScrollTo`; release and rest: the items land, then one jump to D, nothing reported | publish items while moving |
+| Superseded projection (review 2) | D 0→3 projects; while it animates D becomes 4; the first settles at 3: no callback (an accepting callback is present), the newest projection issued, ends at 4 | report a settle that differs from D |
+| Barrier ownership (review 3) | overlapping transactions: the first completion (obsolete) projects nothing and keeps checks suppressed, the current one projects once; a position-only commit during the barrier projects only after it; a drag during the window cancels the projection and is reported; a handler swap retires the outstanding barrier | release or project on an obsolete completion; project position-only commits at once |
+| Alignment (review 4) | rest with S = D unaligned: zero callbacks, one animated `ScrollTo(D)` | align only after a report |
+| Fractional stop (review 5) | an own projection interrupted between pages with no MAUI event: the poll still reaches rest, the stop is handled (realigned) | arm the poll only on MAUI events |
+| Ref command in the window (review 6) | a `ScrollToRequested` outside Reactor's scope during a pending barrier: the projection is cancelled and the ref's item reported at rest; a jump with no request in the same window is overwritten (the documented limitation) | ignore `ScrollToRequested` |
+| Rest-only reports | moving with S = 2 and three triggers: nothing reported; rest: `[2]` once; more triggers at the same rest: nothing more (positive witness: the triggers ran checks, counted) | report from MAUI's event; no once-per-rest guard |
+| No write while moving | a changed declaration while moving issues no `ScrollTo`; at rest the check runs first, then the projection follows the app's decision (accepted: no `ScrollTo`; refused: one) | write while moving; project before the check |
+| Long hold | moving; three unrelated parent renders: no `ScrollTo`, no report; the release and rest: exactly one report | drop the moving check from the projection |
+| Refusal | at rest S = 2, D = 0, the app refuses: one `ScrollTo(0, animated)`; landing at 0 reports nothing | restore by writing `Position`; report on landing |
+| Acceptance and `IsCurrent` | the app accepts 2: no `ScrollTo`; cells re-render with `IsCurrent` on item 2 without remounting (mount count 1) | key the cell tree by `IsCurrent` |
+| Own projection | a declared change 0→3: one `ScrollTo(3)`; a MAUI-like `PositionChanged` outside the scope while it animates; rest at 3: no report | forward MAUI's event argument |
+| A jump without motion | at rest, S jumps 0→1 with a trigger (VoiceOver's path): `[1]` | require motion before reporting |
+| Rest between pages | S = 1 unaligned: `[1]`; accepted: one animated `ScrollTo(1)` to align | compare the index only |
+| Items change | the commit issues a same-turn `ScrollTo(D, jump)`; triggers before the barrier report nothing; at the barrier a shown item that isn't D gets one more jump; a drag in the window cancels the projection and is reported at rest. The seven §5.1 items cases (remove the current, an earlier, insert before, shrink, move, append, replace) are device-only (`Gate_CarouselView_ItemsBarrier`, `CarouselView_ItemsChange`): headlessly the stub has no MAUI to correct the position | project without the barrier; report in the window; skip the same-turn `ScrollTo` |
+| Clamp, empty, mount | `Position` written before the handler, clamped; never written after (the view's `Position` property set count stays 1); D beyond the count projects to the last item; an empty list projects nothing | write `Position` on update |
+| Unmount | a pending check, barrier or poll after unmount: nothing reported, no `ScrollTo` | invoke through `Current`; no generation |
+| Callback swap | the report reaches the current render's callback | capture the first callback |
+| Item state | `IsCurrent` for D's item only; `IsSelected` false; a cell rebound to another item renders its state, with and without `ReuseItemTrees` | cache the state per cell |
+| IndicatorView | the controlled runner (mounted unreported, a declared change unreported, an equal render with no write, input reported once, refused restored, accepted kept, nothing after unmount); a position beyond `Count` writes the last index | write the declared value unclamped |
+| Census | the pending list is empty and its ceiling 0; every new key claimed | — |
+
+**Device (`tests/Reactor.Maui.DeviceTests`), Mac Catalyst, iOS (iPhone and iPad) and Android,
+`[controls]` and `[direct]`.** Android drags dispatch `MotionEvent`s to the `RecyclerView` (its real
+touch pipeline). iOS and Mac Catalyst drags in the suite are simulated (the pan recognizer driven
+through its states, the offset stepped), because an app can't touch itself; with
+`REACTOR_HOST_GESTURES=1` and `host-gestures.py` the iOS fixtures use real touches instead, and the
+gate runs them that way.
+
+| Fixture | Oracle |
+|---|---|
+| `CarouselView_Swipe` | a drag to the next item: nothing reported while moving (positive witness on Android: MAUI raised `PositionChanged` during the drag), `[1]` once at rest; accepted: item 1 shows and its template has `IsCurrent`; refused: back at 0 at rest, nothing more |
+| `CarouselView_LongHold` | a held drag; three renders during the hold (counted): one unrelated, one inserting and removing items, one changing the declaration: the scroller's offset unchanged by them, the native item count unchanged, nothing reported; the release: exactly one report, then the items and the declared position land |
+| `CarouselView_DeclaredChange` | 0→3: the platform shows 3, nothing reported; a declared change during a drag is applied at rest, after that drag's report |
+| `CarouselView_ItemsChange` | the seven cases with the app's re-declared index: the declared item shows after the barrier, nothing reported, and (Android) no sampled frame shows item 0 where plain MAUI did (§5.1) |
+| `CarouselView_Accessibility` | Android `ACTION_SCROLL_FORWARD`: `[1]` once; iOS and Mac Catalyst scroll-to-visible on a peeking neighbor: `[1]` once |
+| `CarouselView_RefScrollTo` | `ScrollTo(3)` through the ref: `[3]` once; refused: back at rest |
+| `CarouselView_Loop` | a swipe from the last item: `[0]` |
+| `CarouselView_Geometry` | `PeekAreaInsets` and `ItemSpacing`: cell frames and neighbors' visible widths |
+| `IndicatorView_Controlled` | a write shows on the platform unreported; a tap (iOS `ValueChanged`, Android click) reported once; refused, restored; a position beyond `Count` shows the last |
+
+### 5.9 Gate
+
+Hard premises, characterized first in the implementation; if one fails on a device, stop and report:
+
+1. **The Android barrier**: after MAUI's dispatch and the item animator's finish, a jump lands on the
+   declared item in all seven items cases (measured so far only with a 150 ms delay).
+2. **The iOS and Mac Catalyst barrier** completes after MAUI's item handling (in-write today, §5.1).
+3. **Rest detection sees every motion** (gate waits are frame-based: two distinct display frames without motion, and they fail while still moving, review 8): real drags (iPhone and iPad through Appium), flings,
+   programmatic animations (no flags on iOS: the frame comparison), TalkBack's settle; and a check
+   never reports while moving (Android's positive witness).
+4. **Shown** from cell geometry is the visually centered item with `Loop` and peek, on every platform.
+
+Then: full device suites on all four devices, the Release build of `Reactor.Maui.slnx` with no
+warnings, the mutants above, and spec 068's rows.
+
+### 5.10 Decisions to review
+
+1. **MAUI's names** (`Position`, `Count`), not WinUI's `FlipView`/`PipsPager` (§5.2).
+2. **`Position` is written only at mount, and isn't authoritative after it**; projections go through
+   the port (iOS and Mac Catalyst: the page scroller's offset; Android: MAUI's `ScrollTo`). A ref
+   reading `ref.Current.Position` sees MAUI's value, which can lag or stay stale (Android's
+   `ScrollTo(item)` never updates it); the callback reports the item that rests.
+3. **Reports come from the platform's resting item, not MAUI's events**: no provenance at all; the
+   cost is that an unexpected MAUI correction reaches the app as a change (it reports rather than
+   swallows).
+4. **The items-change window** (rule 3), accepted by the review as an input-priority limitation: a
+   jump without motion between a transaction and its barrier is overwritten by the projection.
+   Motion and ref commands in the window are never overwritten.
+5. **Index, not key.** The position is an index (MAUI's `Position`, WinUI's `SelectedIndex`); after
+   an items change the app re-declares it. A key-based position is an open question.
+6. **Aligning a rest between pages** after the report (rule 6).
+7. **`IsScrollAnimated`** (MAUI's name) animates declared changes; items-change projections jump.
+8. **IndicatorView clamps** its written position.
+9. **`IndicatorTemplate` excluded.**
+10. **Real touches are local**: the suite's iOS drags are simulated; the gate runs real ones.
+
+### 5.11 Open questions
+
+- A key-based position (`CurrentKey`) alongside, or instead of, the index?
+- A declared change during a user's drag (an auto-advance timer) is applied at rest after the
+  drag's report: should the app's state, or the user, win by default? The design leaves it to the
+  app's callback.
+- Real VoiceOver and TalkBack aren't automated here: the private scroll-to-visible call and the
+  accessibility actions stand in for them.
+- Mac Catalyst's real pointer and trackpad input is uncharacterized (no event-posting permission).
+- MAUI issues to file: two removals in one turn crash under `KeepScrollOffset` (Android); `ScrollTo`
+  lands one item off during item animations (Android); `ScrollTo(item)` doesn't update `Position`
+  (Android); a slow release rests between pages (Android); `IsDragging` never set on iOS.
+
+### 5.12 Out of scope
+
+Vertical carousels (an `ItemsLayout` orientation), `IsSwipeEnabled`, `IsBounceEnabled`,
+`ItemsUpdatingScrollMode`, `CurrentItem` as an element property, `IndicatorTemplate`, MAUI's
+`CarouselView.IndicatorView` link, Windows (4g).
+
+### 5.13 As built (4c-4)
+
+**Code.** `CarouselPositionController` (`Handlers/CarouselPosition.cs`) is the state machine of
+§5.4.1 against an `ICarouselPort` (`Sample()` → shown, aligned, offset, moving, user dragging;
+`ScrollTo`; `ScrollPending`; `Barrier`; `NextFrame`; `Watch`). `CarouselPorts.cs` has the UIKit port
+(iOS and Mac Catalyst: the cells' platform views against the collection view's center, the private
+page scroller's flags, a pan recognizer target, `CADisplayLink`, the barrier through
+`UIKitCollections`, shared with the selection verifier: `PerformBatchUpdates(null, completion)`) and
+the Android port (the `RecyclerView`'s children and scroll state, a scroll listener, `Choreographer`,
+a dispatch then the item animator's `IsRunning(listener)` and no layout pending).
+`CarouselViewHandler` (`ItemsHandlers.cs`) publishes items and layout, maps a reported published
+index to the element's by key, and posts the report through `HandlerContext.PostReport(restore:
+true)`, marking it delivered (`ReportRan(seq)`) when the post runs. Where no port exists
+(`CarouselPorts.IsSupported` is false: Windows until 4g) the handler falls back to MAUI's own
+`Position`: written on change in the echo scope, reported from `PositionChanged` outside it, restored
+after the callback, with a one-time `DiagnosticLog` warning. `IndicatorView` is a `ControlDescriptor`
+(`Count` and `HideSingle` one-way, the position controlled, written in the echo scope and clamped). The
+API is §5.3's: `CarouselView(items, key, template, position, onPositionChanged)` with a one- or
+two-argument template (`ItemState.IsCurrent`), `Loop`, `PeekAreaInsets`, `ItemSpacing`,
+`IsScrollAnimated`; `IndicatorView(count, position, onPositionChanged)` with `IndicatorColor`,
+`SelectedIndicatorColor`, `IndicatorSize`, `IndicatorsShape` (`IndicatorShape?`), `MaximumVisible`,
+`HideSingle`.
+
+**Deviations from §5.4's rules, found on device or in review:**
+
+1. **iOS and Mac Catalyst: the port isn't ready until MAUI's initial positioning** (`CurrentItem`
+   set). MAUI's `UpdateInitialPosition` runs once per attach about 100 ms after the first layout and
+   scrolls to its own `Position`, undoing an earlier projection (DV1). Android positions synchronously
+   when the handler connects (`MauiCarouselRecyclerView.SetUpNewElement`), so its port has no such
+   gate (it had one, whose mutant survived: removed, review L5).
+2. **iOS and Mac Catalyst project through the page scroller's offset**, not MAUI's `ScrollTo`:
+   with an `ItemSpacing` and no peek, MAUI's `ScrollTo` does nothing (a `Position` write still works).
+   The offset is the current one plus the index difference times the page pitch (content width plus
+   spacing over the item count), clamped to the scroller's range; MAUI's `ScrollTo` is the fallback
+   when the scroller isn't found (DV2).
+3. **Aligned on Android is the platform's resting alignment.** MAUI's snap helper (a
+   `PagerSnapHelper`) centers an item's decorated bounds, and the first and last items with peek are
+   decorated more on their outer side, so the list ends before they center: their views rest about
+   4 dp off center, where a swipe rests too. Aligned is "the snap helper's distance is within a pixel,
+   or the list can't scroll toward it" (DV6, DV7). On iOS and Mac Catalyst MAUI's insets center edge
+   items exactly.
+4. **A user's move during a deferred transaction is reported first** (mapped to the element's items
+   by key); the answer's commit applies the transaction. Rule 3 applies the transaction at rest first;
+   reporting first keeps the user's item when the app accepts it (`CarouselView_LongHold`: `[2]`, then
+   the new items, the accepted item shown).
+5. **An own projection that rests short or off center is asked again** with the same animation, up to
+   three scrolls, then a `DiagnosticLog` warning (`CarouselView.Position`), and that declaration isn't
+   projected again until the declaration or the items change (review M4). Whether the own scroll is
+   still on its way is the port's to say (`ScrollPending`, review M5), not a frame count: iOS and Mac
+   Catalyst, short of the offset the port set; Android, the layout manager's smooth scroller, the
+   settle it hands its remaining distance to (measured: the scroller stops itself once the target is
+   laid out while the list still settles), or the jump's pending layout; both bounded by
+   `ScrollBridge.SettleBound`. `Gate_CarouselView_RestDetection` asserts the premise: no frame of an
+   own scroll's motion, and no still stretch on its way, is left uncovered.
+6. **Without a port** the position falls back to MAUI's (above; review M1), without the drag safety.
+
+**Characterization** (§5.1, `CarouselCharacterization.cs`, on demand): Mac Catalyst 26.7, an iPhone
+simulator (iOS 27.0), an iPad simulator (iOS 27.2), the Android API 37 emulator. Every §5.1 row was
+measured; iOS drags in the gate used real touches through Appium (`host-gestures.py`).
+
+**Gates** (`Gate_CarouselView_ItemsBarrier`, `_RestDetection`, `_ShownGeometry`) pass on all four
+devices: the seven items cases land on the declared item behind the barrier with no frame showing
+item 0 (Android) and nothing reported; rest detection sees a programmatic animation pass through
+several distinct offsets, the port covering all of its motion and stillness on the way; the shown item
+is the platform's centered one with `Loop` and peek, and a further signal at that rest projects nothing.
+
+**The review of `d7f8d28f`** (seven Claude dimensions and gpt-6.1-sol) restructured the controller
+into §5.4.1's state machine. Each probe is a headless regression test; "red on `d7f8d28f`" was run
+against that commit's controller before the restructure:
+
+| Probe | Test | Red on `d7f8d28f` |
+|---|---|---|
+| H1 a barrier completing after the jump rested left a stale own target | `H1_AnAccessibilityJump_AfterTheBarrierCompletedAtRest_IsReported` | yes: `[]` for `["2"]` |
+| H2 a settle without a finger in the window was overwritten | `H2_AnAccessibilitySettleInTheBarrierWindow_IsReported` | yes: `[]` for `["1"]` |
+| H3 a drag interrupting an own projection, a transaction deferred | `H3_ADragInterruptingAnOwnProjection_WithADeferredItemsChange_IsReportedFirst` | yes: `[]` for `["2"]` |
+| H4 items arriving while nothing is laid out | `H4_ItemsArrivingWhileNothingIsLaidOut_ArePublished` (and `H4_ATransactionDeferredByMotion_AppliesWhenTheViewIsNoLongerLaidOut`) | yes: never published |
+| H7 a drag interrupting an own projection | `H7_ADragInterruptingAnOwnProjection_IsReported_AndNotProjectedOver` | no (a coverage gap; its guard's mutant G31 is red) |
+| M1 Windows inert | `M1_WithoutAPort_PositionIsWritten_AndPositionChangedReported` | yes: `Position` stayed 1 |
+| M2 an unrelated flush answered a report | `M2_AnUnrelatedRenderQueuedBeforeTheReport_DoesNotAnswerIt` | yes: a bounce to the old declaration |
+| M3 a stale position reported after a portless transaction | `M3_ItemsPublishedBeforeThePort_AreProjectedNotReported` | yes: `["0"]` |
+| M4 a trigger after giving up restarted the scrolls | `M4_AfterGivingUp_ATriggerScrollsNothing_UntilANewDeclaration` | yes: 6 scrolls for 3 |
+| M5 a projection not yet started taken for a rest | `M5_AProjectionThatHasntStartedMoving_IsNotTakenForARest` | yes: 3 scrolls for 1 |
+| M6 own and ref `ScrollToRequested` | `M6_AnOwnProjectionsScrollToRequested_IsNotInput`, `M6_ARefScrollTo_CancelsAnOwnProjectionInFlight` | no (coverage; G32, G31, G33 red) |
+| M7 an accepted rest between pages | `M7_AnAcceptedRestBetweenPages_IsAligned`; device `CarouselView_Swipe` checks alignment | no (coverage) |
+| M8 a vacuous handler-replacement test | `AHandlerReplacement_RetiresTheOldBarrier` (the old view shows another item when its completion arrives; both ports' scrolls compared) | no (coverage; G26, G27 red with `AHandlerReplacement_ProjectsTheDeclaration_AsAJump_NotReported`) |
+| L1 `jumpNext` outliving its items change | `L1_ARefusalAfterAnItemsChange_AnimatesBack` | yes: the refusal jumped |
+
+Ten were red on `d7f8d28f` and all pass now. Device: suite drags hold for real (2.5 s) and the host
+drags fail if the finger lifted before or during the hold's work (H6); each drag fixture notes whether
+its input was real or simulated; `CarouselView_Fling` (one page and a longer fling: nothing reported
+while decelerating, one report, the centered item; Android in-process, iOS with real touches,
+skipped without them, M9); `run.sh` takes requests only from the app's PID, each line matched whole
+with integers only before anything reaches a shell, and Appium is documented on the loopback address
+(H5).
+
+**The verification round on `cac03cbd`** found five more holes, each a failing-first test (red on
+`cac03cbd`'s logic, green now) with its guard's mutant:
+
+| Probe | Test | Red on `cac03cbd` | Fix | Mutant |
+|---|---|---|---|---|
+| V1 a handler swap kept the old view's give-up | `V1_AfterGivingUp_AWorkingReplacementView_ProjectsTheDeclaration` | `[]` for `[(3, false)]` | a port change clears `gaveUpOn` | red |
+| V2 the answer projected into a ref's animation with no motion flag | `V2_TheAnswer_WaitsForARefScrollWithoutMotionFlagsToRest`, `V2_InputWhileTheReportIsOut_IsKept_AcrossANewView` | `[(1, true)]` before the ref's rest | the answer goes through `Watching` and a frame-verified rest; input seen while the report is out is kept | both red |
+| V3 a give-up stranded a deferred transaction and a refusal | `V3_GivingUp_StillAppliesADeferredTransaction`, `V3_ARefusedMoveAfterGivingUp_IsRestored`, `V3_ARefusedMotionlessJumpAfterGivingUp_IsRestored`, `V3_AUserMoveOntoTheGivenUpItem_IsAligned` | the transaction pending, 0 publications; no restore | *Decide* at the give-up rest (the target guarded); input and reports clear `gaveUpOn` | all four red |
+| V4 a second transaction erased the first window's input | `V4_InputInAWindow_SurvivesASecondTransaction_AndIsReportedFirst` | `[]` for `["3"]` | no publication while the open window holds input: reported at the completion and answered first | red |
+| V5 a port pending forever kept the poll going | `V5_APortPendingForever_DoesNotKeepThePollGoing` | still polling after 5000 frames | the controller believes the port's pending for at most `ScrollBridge.SettleBound` after its scroll started (an injectable clock for the test) | red |
+
+**Tests.** Headless: `CarouselPositionTests` (61, a stub port), `IndicatorViewTests`, the
+census (the pending list empty, ceiling 0, every key claimed with mutation evidence) and the README
+snippet; all 1436 tests in `Reactor.Maui.Tests` and the 80 engine tests pass. Device: 23 carousel and
+indicator fixtures (the three gates, then nine carousel fixtures and `IndicatorView_Controlled` on both
+registries); the full suites pass: Mac Catalyst 239 passed and 20 skipped, the iPhone simulator 236 and
+23, the iPad simulator 246 and 13, the Android emulator 241 and 18 (skips are platform no-ops, and on
+iOS and Mac Catalyst the two `CarouselView_Fling` fixtures without real touches), none failed. With
+real touches (Appium, `REACTOR_HOST_GESTURES=1`) on the iPhone simulator, `CarouselView_Swipe`,
+`_LongHold`, `_DeclaredChange`, `_Loop` and `_Fling` pass on both registries.
+
+**Mutants.** Every transition guard of §5.4.1, rerun after the verification round (its new guards
+V1–V5 are in the table above, all red; G1 stays red because `M2_…` interleaves display frames between
+the unrelated flush and the report), headless against `CarouselPositionTests`,
+`IndicatorViewTests` and the README snippet test (G = controller, H = handler, D = descriptor):
+
+| Mutant | Red |
+|---|---|
+| G1 an unrelated commit answers the report | `M2_AnUnrelatedRenderQueuedBeforeTheReport_DoesNotAnswerIt` |
+| G2 no publication while nothing is laid out | `H4_ItemsArrivingWhileNothingIsLaidOut_ArePublished` |
+| G3 the idle poll stops without a rest | `H4_ATransactionDeferredByMotion_AppliesWhenTheViewIsNoLongerLaidOut` |
+| G4 a new declaration keeps the give-up | `M4_AfterGivingUp_ATriggerScrollsNothing_UntilANewDeclaration` |
+| G5 an own rest in the window decides | `AnOwnJumpRestingShortInsideTheWindow_WaitsForTheCompletion` |
+| G6 a superseded own rest retries the old target | `ASupersededProjection_StoppingShortOfItsOldTarget_ProjectsTheNewest` |
+| G7 no scroll cap | 3 tests, among them `APlatformThatLandsButNeverAligns_IsAskedThreeTimes_ThenWarned` |
+| G8 giving up doesn't record the target | `M4_AfterGivingUp_ATriggerScrollsNothing_UntilANewDeclaration` |
+| G9 a watched rest in the window decides | `AnInputRestInsideTheWindow_IsReportedAtTheCompletion` |
+| G10 an unknown rest is always a move | 3 tests, among them `AHandlerReplacement_ProjectsTheDeclaration_AsAJump_NotReported` |
+| G11 an unknown rest is never a move | `L1_ARefusalAfterAnItemsChange_AnimatesBack` |
+| G12 a deferred move compared by index | `AMoveToTheDeclaredIndexOfTheNewItems_DuringAHold_IsStillReported` |
+| G13 a report doesn't record its rest | 6 tests, among them `ADeclaredChangeWhileAFingerMovesIt_BeforeAnyEvent_WritesNothing` |
+| G14 Decide ignores motion | `ADeclaredChangeWhileAFingerMovesIt_BeforeAnyEvent_WritesNothing` |
+| G15 Decide projects over an unverified change | `AJumpWithoutAnEvent_IsVerifiedBeforeADeclaredChangeIsProjected` |
+| G16 Decide ignores the give-up | `M4_AfterGivingUp_ATriggerScrollsNothing_UntilANewDeclaration` |
+| G17 jumpNext outlives a rest that needed nothing | 14 tests, among them `ADeclaredChangeAfterAnItemsChange_Animates` |
+| G19 no same-turn jump | 4 tests, among them `AnItemsChangesProjection_StillOnItsWayAtTheBarrier_RetriesAsAJump` |
+| G20 an obsolete completion acts | `AnObsoleteCompletion_ReissuesTheCurrentBarrier_WhenNoneIsOutstanding`, `Barriers_BelongToTheirEpoch` |
+| G21 an obsolete completion never reissues | `AnObsoleteCompletion_ReissuesTheCurrentBarrier_WhenNoneIsOutstanding` |
+| G22 an obsolete completion always reissues | `AnObsoleteCompletionAfterTheCurrent_ReopensNothing` |
+| G24 the completion ignores window input | `AnInputRestInsideTheWindow_IsReportedAtTheCompletion` |
+| G25 the completion keeps the window's rest | `AMotionlessJumpInTheWindow_AfterTheJumpRested_IsOverwritten` |
+| G26 a port change keeps the rest | 3 tests, among them `AHandlerReplacement_ProjectsTheDeclaration_AsAJump_NotReported` |
+| G27 a port change animates its projection | `AHandlerReplacement_ProjectsTheDeclaration_AsAJump_NotReported` |
+| G28 motion isn't input | `H2_AnAccessibilitySettleInTheBarrierWindow_IsReported` |
+| G29 own motion is input | `ASupersededProjection_SettlesUnreported_AndTheNewestIsProjected`, `ASupersededProjection_StoppingShortOfItsOldTarget_ProjectsTheNewest` |
+| G30 a rest while the own scroll is pending | `M5_AProjectionThatHasntStartedMoving_IsNotTakenForARest` |
+| G31 input doesn't take over an own projection | 3 tests, among them `H3_ADragInterruptingAnOwnProjection_WithADeferredItemsChange_IsReportedFirst` |
+| G32 own ScrollToRequested is input | `M6_AnOwnProjectionsScrollToRequested_IsNotInput` |
+| G33 a ref ScrollTo isn't input | `ARefCommandDuringTheWindow_IsReported_AMotionlessJumpIsOverwritten`, `M6_ARefScrollTo_CancelsAnOwnProjectionInFlight` |
+| G34 ReportRan for any sequence | survives: equivalent (one report is in flight at a time and posts run in order, so a delivery is always the current one; the sequence number stays as the report's identity) |
+| G35 every scroll counts as the first | 3 tests, among them `APlatformThatLandsButNeverAligns_IsAskedThreeTimes_ThenWarned` |
+| G36 a retry animates by the flag | `AHandlerReplacement_ProjectsTheDeclaration_AsAJump_NotReported` |
+| G37 input keeps jumpNext | `L1_ARefusalAfterAnItemsChange_AnimatesBack` |
+| G38 the answer projects nothing | 3 tests, among them `ADeclaredChangeWhileAFingerMovesIt_BeforeAnyEvent_WritesNothing` |
+| G39 an own landing off center accepted | `APlatformThatLandsButNeverAligns_IsAskedThreeTimes_ThenWarned` |
+| H1 Position written on update | `Mount_WritesThePositionClamped_AndLaterDeclarationsNeverWritePosition` |
+| H2 IsCurrent from the previous declaration | `AnAcceptance_WritesNothing_AndMovesIsCurrentWithoutRemounting`, `TheCarouselSnippet_LinksTheIndicatorThroughState` |
+| H3 report not mapped by key | 3 tests, among them `AMoveDuringAHoldWithAnItemsChange_IsReportedFirst_MappedByKey` |
+| H4 keys not kept (new boxes) | 42 tests, among them `ADeclaredChangeAfterAnItemsChange_Animates` |
+| H5 the restore doesn't commit | 3 tests, among them `ADeclaredChangeWhileAFingerMovesIt_BeforeAnyEvent_WritesNothing` |
+| H6 Position not written at mount | `M1_WithoutAPort_PositionIsWritten_AndPositionChangedReported`, `Mount_WritesThePositionClamped_AndLaterDeclarationsNeverWritePosition` |
+| H7 no transaction (sync now) | 22 tests, among them `ADeclaredChangeAfterAnItemsChange_Animates` |
+| H8 the delivered report isn't marked | 7 tests, among them `ADeclaredChangeWhileAFingerMovesIt_BeforeAnyEvent_WritesNothing` |
+| H9 no portless fallback | `M1_WithoutAPort_PositionIsWritten_AndPositionChangedReported` |
+| H10 the fallback reports its own writes | 5 tests, among them `AHandlerReplacement_ProjectsTheDeclaration_AsAJump_NotReported` |
+| D1 indicator position not clamped | `ThePosition_IsClampedToTheCount` |
+
+Device: DV1 the iOS readiness gate removed: the three gates and `CarouselView_Geometry` red (iPhone);
+DV2 MAUI's `ScrollTo` instead of the page offset: `Gate_CarouselView_ShownGeometry` red (iPhone); DV3
+the Android barrier ignoring the item animator: `Gate_CarouselView_ItemsBarrier` and both
+`CarouselView_ItemsChange` red; DV5 reports while moving: both `CarouselView_Swipe` and
+`CarouselView_LongHold` red (Android); DV6 Android edge items required to center exactly and DV7 the
+snap target without the list's end: `Gate_CarouselView_ShownGeometry` red (a further signal at rest
+re-aligned); DV8 the Android port never pending: `Gate_CarouselView_RestDetection` red (17 frames of its own
+motion uncovered, which the controller would take for input); DV9 Android's settle uncovered: the same
+gate red (16 frames); DV10 the iOS port never pending: the same gate red through the port's contract
+check (pending while its scroll runs). On iOS and Mac Catalyst the programmatic animation moves from
+its first frame, so in the measured cases no stillness on the way needed covering; the pending signal
+guards a delayed start. (The first round's DV4, the Android readiness gate, went with the gate.)
+
+**Bugs found while building it**, each now covered: the Android edge test took its direction from
+the view's center (never true; hidden by a one-retry acceptance, at the cost of a re-alignment on
+every later signal); the iOS initial positioning undoing projections; MAUI's iOS `ScrollTo` doing
+nothing with spacing and no peek; the VoiceOver-scroll fixture depending on an accessibility runtime
+an earlier XCUITest session had loaded (the fixture now enables it, `_AXSSetAutomationEnabled`, as UI
+test frameworks do); Android's own smooth scroll settling after its smooth scroller stopped (it would
+have been taken for input); `run.sh` exiting under `pipefail` while the app's process didn't exist yet.
+
+**MAUI issues to file** (11.0.0, `4e6582f`): Android, two removals in one turn crash under
+`KeepScrollOffset` (`SetCurrentItem` out of range); Android, `ScrollTo` during item animations lands
+one item off; Android, `ScrollTo(item)` doesn't update `Position`; Android, removing an earlier item
+leaves `Position` stale; Android, writing `Position` out of range throws; Android, a `Position` write
+during a held drag leaves the virtual and native positions disagreeing for good; Android, a slow
+release rests between pages; iOS, `IsDragging` is never set and `IsScrolling` is unreliable (the pages
+scroll in a private scroller); iOS, `ScrollTo` does nothing with an `ItemSpacing` and no peek; iOS,
+`UpdateInitialPosition` scrolls to `Position` about 100 ms after the first layout, over an earlier
+scroll. (MAUI's `Loop` defaults to `true`; Reactor's element defaults to `false` and writes it at
+mount.)

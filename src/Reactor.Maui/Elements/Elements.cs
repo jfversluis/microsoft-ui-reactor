@@ -375,11 +375,18 @@ public enum ItemsArrangement
 }
 
 /// <summary>
-/// The state an item template can render (spec 070 §3.3). <see cref="IsSelected"/> is the declared
-/// selection: <c>SelectionMode.None</c> selects nothing; <c>Single</c> compares the item's key with
-/// <c>SelectedKey</c>; <c>Multiple</c> looks it up in <c>SelectedKeys</c>.
+/// The state an item template can render (spec 070 §3.3, §5.4). <see cref="IsSelected"/> is a
+/// <c>CollectionView</c>'s declared selection: <c>SelectionMode.None</c> selects nothing; <c>Single</c>
+/// compares the item's key with <c>SelectedKey</c>; <c>Multiple</c> looks it up in <c>SelectedKeys</c>.
 /// </summary>
-public readonly record struct ItemState(bool IsSelected);
+public readonly record struct ItemState(bool IsSelected)
+{
+    /// <summary>
+    /// The item is a <c>CarouselView</c>'s declared <c>Position</c>: the app's state, never the item under
+    /// a moving finger. Always <see langword="false"/> in a <c>CollectionView</c>.
+    /// </summary>
+    public bool IsCurrent { get; init; }
+}
 
 /// <summary>A group of a grouped <c>CollectionView</c>: its key, the app's group object and its items.</summary>
 public sealed record ItemGroup(string Key, object? Group, IReadOnlyList<object?> Items);
@@ -443,17 +450,45 @@ public sealed record CollectionViewElement(
     public Func<object?, Element?>? GroupFooterTemplate { get; init; }
 }
 
-/// <summary>A swipeable carousel of items, rendered like <see cref="CollectionViewElement"/>. Controlled by <see cref="Position"/>.</summary>
+/// <summary>
+/// A swipeable carousel of items, rendered like <see cref="CollectionViewElement"/> (spec 070 §5).
+/// <see cref="Position"/> is controlled: it is written to the platform only while the carousel rests,
+/// and <see cref="OnPositionChanged"/> reports the item the platform comes to rest on when it differs,
+/// once, never during a drag. Create it with the generic <c>CarouselView&lt;T&gt;</c> factory.
+/// </summary>
 public sealed record CarouselViewElement(
     IReadOnlyList<object?> Items,
     Func<object?, string> ItemKey,
-    Func<object?, Element?> ItemTemplate,
+    Func<object?, ItemState, Element?> ItemTemplate,
     int Position,
     Action<int>? OnPositionChanged = null) : ViewElement
 {
     public bool Loop { get; init; }
     public Thickness? PeekAreaInsets { get; init; }
     public double ItemSpacing { get; init; }
+
+    /// <summary>Whether a declared position change scrolls animated (MAUI's name). Items changes always jump.</summary>
+    public bool IsScrollAnimated { get; init; } = true;
+}
+
+/// <summary>
+/// A row of page indicators (spec 070 §5.5). <see cref="Position"/> is controlled: a tap on an indicator
+/// is reported through <see cref="OnPositionChanged"/>; link it to a carousel through app state.
+/// </summary>
+public sealed record IndicatorViewElement(int Count, int Position, Action<int>? OnPositionChanged = null) : ViewElement
+{
+    public Color? IndicatorColor { get; init; }
+    public Color? SelectedIndicatorColor { get; init; }
+    public double? IndicatorSize { get; init; }
+
+    /// <summary>The indicators' shape: MAUI's <c>IndicatorShape</c>.</summary>
+    public IndicatorShape? IndicatorsShape { get; init; }
+
+    /// <summary>How many indicators show at most; <see langword="null"/> is MAUI's default (all).</summary>
+    public int? MaximumVisible { get; init; }
+
+    /// <summary>Hides the row when there is a single page (MAUI's default).</summary>
+    public bool HideSingle { get; init; } = true;
 }
 
 /// <summary>Adapts a typed list to the <c>object?</c> list the collection elements store, without copying.</summary>

@@ -113,6 +113,16 @@ Conventions for contributors:
   `Render` isn't reloaded; `StreamImage(key, open)` gives a stream image a key. A path whose
   `RenderTransform` goes away, however it's cleared (the element, a style, a parent's resources, a ref),
   is redrawn untransformed (MAUI's path handlers keep the old transform otherwise).
+  Carousel and indicators (spec 070 §5): `CarouselView`'s position is a controlled value that is never
+  written or reported while the user moves the carousel: input is reported once the carousel rests,
+  from the item the platform shows; a refused move scrolls back at rest; a declared change scrolls
+  there (animated by `IsScrollAnimated`), and an items or layout change waits for rest, then jumps to
+  the declared item behind MAUI's own update. Templates can take the item's `ItemState`, whose new
+  `IsCurrent` is the declared position. `IndicatorView(count, position, …)` is new, with its position
+  controlled too; link it to a carousel through app state. The `CarouselView` element's template is
+  now `Func<object?, ItemState, Element?>` (the factory with a one-argument template is unchanged).
+  Windows has no carousel port yet: there the position falls back to MAUI's `Position` and
+  `PositionChanged`, as before.
   Built with `Reactor.Maui.slnx` and tested in `.github/workflows/maui.yml`, including a
   device tier that runs on the real platform controls. It doesn't change the WinUI packages.
 

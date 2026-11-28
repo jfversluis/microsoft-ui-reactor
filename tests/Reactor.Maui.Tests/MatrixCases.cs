@@ -26,9 +26,9 @@ public static partial class MatrixCases
 
     public static readonly IReadOnlyList<PropertyCase> Properties =
         [.. ShapeCases(), .. ContainerCases(), .. ImageCases(), .. TextCases(), .. ControlCases(), .. LayoutCases(), .. RichTextCases(),
-         .. PageCases(), .. ShellCases(), .. SwipeAndCollectionCases()];
+         .. PageCases(), .. ShellCases(), .. SwipeAndCollectionCases(), .. CarouselCases()];
 
-    public static readonly IReadOnlyList<ControlledCase> Controlled = [.. ControlledCases(), .. PageControlled()];
+    public static readonly IReadOnlyList<ControlledCase> Controlled = [.. ControlledCases(), .. PageControlled(), .. CarouselControlled()];
 
     public static readonly IReadOnlyList<EventCase> Events =
     [
@@ -54,6 +54,7 @@ public static partial class MatrixCases
             "content not cleared on null (M23) and a remount on every update (M24): red (spec 070 §4.13)"),
         .. ControlCovered(),
         .. PageCovered(),
+        .. CarouselCovered(),
     ];
 
     public static readonly IReadOnlyList<ExcludedClaim> Excluded = [];

@@ -473,7 +473,8 @@ public class ElementCensusTests
         Assert.Equal(CensusBaseline.Phase4c4Hash, Hash(CensusBaseline.Phase4c4));
 
         // Its size is the ceiling, lowered with each removal.
-        Assert.Equal(CensusBaseline.Ceiling, CensusBaseline.Pending.Length);
+        Assert.True(CensusBaseline.Pending.Length == CensusBaseline.Ceiling,
+            $"the pending list holds {CensusBaseline.Pending.Length} entries; its ceiling is {CensusBaseline.Ceiling}");
         var violations = PendingViolations(CensusBaseline.Pending);
         Assert.True(violations.Count == 0, "Pending entries that can't be pending:\n" + string.Join("\n", violations));
 

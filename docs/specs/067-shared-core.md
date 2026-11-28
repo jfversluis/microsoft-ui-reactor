@@ -779,6 +779,14 @@ write returns), `CollectionView` selection, `RefreshView.IsRefreshing`, tabs and
 readback, and several controlled properties on one control (the slider's range and value are written
 together, but only the value is controlled).
 
+`CarouselView`'s position was characterized in 4c-4 (spec 070 §5.1), and it is the late echo this
+section anticipated: iOS 26 debounces a `Position` write (its event about 100 ms later), Android drops
+a write during a settle and reports a reverse change late, and neither tells a user's move from a
+correction of MAUI's. Neither echo mechanism fits, so none was extracted: Reactor writes `Position`
+only at mount, projects later declarations by scrolling (iOS and Mac Catalyst: the page scroller's
+offset; Android: MAUI's `ScrollTo`), and reports from the platform's resting item instead of from
+events (spec 070 §5.4).
+
 **What this means for sharing.** WinUI needs its value-diff arm and suppress counter because some
 WinUI controls raise their change event after the write returns (`RichEditBox`, `AutoSuggestBox`),
 and because a write can raise several events. None of the controls above does either: a scope around

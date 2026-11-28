@@ -127,7 +127,7 @@ and refine them with modifiers. Elements are immutable records, so `with` works 
 | Input | `Button`, `ImageButton`, `Entry`, `Editor`, `SearchBar`, `CheckBox`, `Switch`, `Slider`, `Stepper`, `Picker`, `DatePicker`, `TimePicker`, `RadioButton` |
 | Formatted text | `Label(Run(…), Hyperlink(…))` |
 | Layout | `VStack`, `HStack`, `Grid`, `FlexLayout`, `AbsoluteLayout`, `ScrollView`, `Border`, `ContentView`, `RefreshView`, `SwipeView` |
-| Lists | `CollectionView`, `CarouselView` (virtualized; each item is its own tree) |
+| Lists | `CollectionView`, `CarouselView` (virtualized; each item is its own tree), `IndicatorView` |
 | Pages and navigation | `Page`, `NavigationHost`, `NavigationStack`, `Tabs`, `Flyout`, `Shell` (`TabBar`, `FlyoutItem`, `ShellTab`, `ShellContent`, `ShellMenuItem`) |
 | Composition | `Component<T>()`, `Component<T, TProps>(props)`, `Group`, `Empty`, `Memo`, `ErrorBoundary`, `Context.Provide` |
 
@@ -683,6 +683,48 @@ in the cell's own components, rather than into the platform.
 **Scrolling from code.** Through a ref, MAUI's `ScrollTo(index, …)` works as is. To scroll to an
 item by key, in any group, use `ScrollToKey` (MAUI's `ScrollTo(item, …)` can't take your item,
 because the list holds its own boxes): `list.Current?.ScrollToKey(specialId)`.
+
+## Carousels
+
+```csharp
+var (page, setPage) = UseState(0);
+return VStack(8,
+    CarouselView(photos, p => p.Id, (p, state) =>
+        Label(p.Title).FontSize(state.IsCurrent ? 24 : 18), page, setPage)
+        with { PeekAreaInsets = new Thickness(40, 0), ItemSpacing = 8 },
+    IndicatorView(photos.Count, page, setPage));
+```
+
+The position is controlled, and the platform's resting item is the truth. Nothing is written or
+reported while the user moves the carousel, whatever renders meanwhile. Once it rests on another
+item, that index is reported, once; refuse it and the carousel scrolls back. A declared change
+scrolls there once the carousel rests (animated unless `IsScrollAnimated = false`). An items or layout
+change (`Loop`, `PeekAreaInsets`, `ItemSpacing`) also waits for rest, then jumps to the declared item
+behind MAUI's own update, so re-declare the index the app wants to show. `ItemState.IsCurrent` is
+the declared position, so the current item renders the app's choice, not the finger's.
+
+Swipes, `ScrollTo` through a ref, and accessibility scrolls are all reported the same way. One
+limitation: in the moment between an items change and MAUI finishing it, a jump without motion
+(a screen reader's scroll-to-visible) can't be told from MAUI's own correction, and is overwritten.
+A drag or a ref's `ScrollTo` in that moment is reported. Don't read the position back from MAUI's
+`Position` property: MAUI doesn't keep it current (Android's `ScrollTo(item)` doesn't update it);
+the callback reports the item that shows.
+
+`IndicatorView(count, position, onPositionChanged)` is a controlled value of its own: link it to a
+carousel through app state, as above. Its position is clamped to the count. `IndicatorTemplate`
+isn't supported; to draw custom indicators, render a row of elements from the count and position.
+
+Also worth knowing:
+
+- **`Loop` defaults to `false`**, unlike MAUI's `CarouselView` (where it's `true`).
+- **Horizontal only**: vertical carousels aren't supported.
+- **A ref's `ScrollTo` on iOS and Mac Catalyst** does nothing when the carousel has an `ItemSpacing`
+  and no `PeekAreaInsets` (MAUI's own behavior). Declare the position instead: Reactor scrolls the
+  carousel itself.
+- **VoiceOver's page swipe** (three fingers) doesn't move MAUI's carousel on iOS; moving to a
+  neighbor that peeks does, and is reported like a swipe.
+- **Windows** has no carousel port yet (phase 4g): there the position is written to MAUI's
+  `Position` and reported from `PositionChanged`, without the guarantees above for a drag.
 
 ## Swipe actions
 

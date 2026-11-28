@@ -5,7 +5,8 @@
 #   tests/Reactor.Maui.DeviceTests/run.sh ios [simulator-udid]      (default: the booted simulator)
 #   tests/Reactor.Maui.DeviceTests/run.sh android [adb-serial]      (default: the only device)
 #
-# REACTOR_DEVICE_TEST_FILTER=<substring>[|<substring>...] runs only matching fixtures.
+# REACTOR_DEVICE_TEST_FILTER=<substring>[|<substring>...] runs only matching fixtures (and on-demand ones it names).
+# REACTOR_HOST_GESTURES=1 (iOS) tells fixtures that host-gestures.py is performing their REACTOR-GESTURE drags.
 # On Android, a fixture that logs REACTOR-KEY-BACK gets a real back key (adb shell input keyevent 4):
 # an app can't inject key events into itself.
 # The TAP report is written to artifacts/device-tests/<platform>.tap.
@@ -54,7 +55,7 @@ case "$platform" in
     dotnet build "$project" -f net11.0-ios -r "iossimulator-$arch" -c Debug
     app="$(ls -d "$here"/bin/Debug/net11.0-ios/iossimulator-"$arch"/*.app | head -1)"
     xcrun simctl install "$device" "$app"
-    SIMCTL_CHILD_REACTOR_DEVICE_TEST_FILTER="${REACTOR_DEVICE_TEST_FILTER:-}" \
+    SIMCTL_CHILD_REACTOR_DEVICE_TEST_FILTER="${REACTOR_DEVICE_TEST_FILTER:-}" SIMCTL_CHILD_REACTOR_HOST_GESTURES="${REACTOR_HOST_GESTURES:-}" \
       with_timeout xcrun simctl launch --console-pty --terminate-running-process "$device" "$app_id" > "$out/ios.log" 2>&1 || true
     extract_tap < "$out/ios.log" > "$tap"
     ;;
@@ -72,6 +73,8 @@ case "$platform" in
     apk="$here/bin/Debug/net11.0-android/$rid/$app_id-Signed.apk"
     "${adb_cmd[@]}" install -r "$apk"
     activity="$("${adb_cmd[@]}" shell cmd package resolve-activity --brief "$app_id" | tail -1 | tr -d '\r')"
+    # A process left from an earlier run would answer pidof below.
+    "${adb_cmd[@]}" shell am force-stop "$app_id"
     "${adb_cmd[@]}" logcat -c
     # adb shell re-parses the command on the device, so the filter goes in single quotes (it may
     # contain | or [ ]); fixture names never contain one, so a filter with ' is rejected.
@@ -79,6 +82,22 @@ case "$platform" in
     "${adb_cmd[@]}" shell am start -n "$activity" ${REACTOR_DEVICE_TEST_FILTER:+-e REACTOR_DEVICE_TEST_FILTER "'$REACTOR_DEVICE_TEST_FILTER'"} > /dev/null
     launched=$SECONDS
     deadline=$((SECONDS + timeout_seconds))
+    # Requests are taken only from the app's own process: logcat is scoped to its PID, and each request
+    # line must match its exact shape (integers only) before any of it reaches the shell.
+    app_pid=""
+    for _ in $(seq 1 100); do
+      app_pid="$("${adb_cmd[@]}" shell pidof -s "$app_id" 2>/dev/null | tr -d '\r' || true)"
+      [[ "$app_pid" =~ ^[0-9]+$ ]] && break
+      app_pid=""
+      sleep 0.1
+    done
+    if [[ -z "$app_pid" ]]; then echo "The app's process didn't start." >&2; exit 1; fi
+    request='^I/DOTNET[[:space:]]*\([[:space:]]*[0-9]+\):[[:space:]]'
+    gesture_re="${request}REACTOR-GESTURE ([0-9]{1,6}) (-?[0-9]{1,5}) (-?[0-9]{1,5}) (-?[0-9]{1,5}) ([0-9]{1,5}) ([0-9]{1,5})\$"
+    key_back_re="${request}REACTOR-KEY-BACK [0-9]{1,6}\$"
+    to_front_re="${request}REACTOR-BRING-TO-FRONT\$"
+    # A decimal integer the regex already matched (an optional minus and digits), without octal surprises.
+    int_of() { local v="$1" sign=1; [[ "$v" == -* ]] && { sign=-1; v="${v#-}"; }; echo $((sign * 10#$v)); }
     # Fixtures that need a real back key (an app can't inject one into itself) log REACTOR-KEY-BACK;
     # each one gets one key event to the focused window. The runner logs REACTOR-BRING-TO-FRONT when a
     # fixture left the app in the background; the shell can bring it back, which the app itself can't.
@@ -88,7 +107,7 @@ case "$platform" in
     fifo="$out/android-logcat.fifo"
     rm -f "$fifo"
     mkfifo "$fifo"
-    "${adb_cmd[@]}" logcat -v brief -s DOTNET:I > "$fifo" &
+    "${adb_cmd[@]}" logcat --pid="$app_pid" -v brief -s DOTNET:I > "$fifo" &
     logcat_pid=$!
     trap 'kill "$logcat_pid" 2>/dev/null || true; rm -f "$fifo"' EXIT
     exec 3< "$fifo"
@@ -98,17 +117,29 @@ case "$platform" in
         kill -0 "$logcat_pid" 2>/dev/null || { echo "adb logcat stopped." >&2; break; }
         continue
       fi
-      case "$line" in
-        *"$done_marker"*) break ;;
-        *REACTOR-KEY-BACK*) "${adb_cmd[@]}" shell input keyevent 4 ;;
-        *REACTOR-BRING-TO-FRONT*) "${adb_cmd[@]}" shell am start -n "$activity" > /dev/null ;;
-      esac
+      line="${line%$'\r'}"
+      if [[ "$line" == *"$done_marker"* ]]; then
+        break
+      elif [[ "$line" =~ $key_back_re ]]; then
+        "${adb_cmd[@]}" shell input keyevent 4
+      elif [[ "$line" =~ $to_front_re ]]; then
+        "${adb_cmd[@]}" shell am start -n "$activity" > /dev/null
+      elif [[ "$line" =~ $gesture_re ]]; then
+        # A real touch drag from the shell: REACTOR-GESTURE <id> <x> <y> <dx> <moveMs> <holdMs> (screen pixels).
+        gx=$(int_of "${BASH_REMATCH[2]}"); gy=$(int_of "${BASH_REMATCH[3]}"); gdx=$(int_of "${BASH_REMATCH[4]}")
+        ghold=$(int_of "${BASH_REMATCH[6]}")
+        steps=4; script="input motionevent DOWN $gx $gy"
+        for ((i = 1; i <= steps; i++)); do script+="; input motionevent MOVE $((gx + gdx * i / steps)) $gy"; done
+        (( ghold > 0 )) && script+="; sleep $((ghold / 1000)).$(printf '%03d' $((ghold % 1000)))"
+        script+="; input motionevent UP $((gx + gdx)) $gy"
+        "${adb_cmd[@]}" shell "$script" > /dev/null 2>&1 &
+      fi
     done
     exec 3<&-
     kill "$logcat_pid" 2>/dev/null || true
     wait "$logcat_pid" 2>/dev/null || true
     rm -f "$fifo"
-    "${adb_cmd[@]}" logcat -d -s DOTNET:I > "$out/android.log"
+    "${adb_cmd[@]}" logcat -d --pid="$app_pid" -s DOTNET:I > "$out/android.log"
     extract_tap < "$out/android.log" > "$tap"
     ;;
   *)

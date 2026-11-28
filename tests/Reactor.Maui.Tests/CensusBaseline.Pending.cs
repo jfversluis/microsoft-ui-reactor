@@ -7,17 +7,7 @@ namespace Microsoft.UI.Reactor.Maui.Tests;
 public static partial class CensusBaseline
 {
     /// <summary>The list's size: lowered with every entry removed, never raised.</summary>
-    public const int Ceiling = 8;
+    public const int Ceiling = 0;
 
-    public static readonly (string Key, string Phase)[] Pending =
-    [
-        ("CarouselViewElement.ItemKey", "4c-4"),
-        ("CarouselViewElement.ItemSpacing", "4c-4"),
-        ("CarouselViewElement.ItemTemplate", "4c-4"),
-        ("CarouselViewElement.Items", "4c-4"),
-        ("CarouselViewElement.Loop", "4c-4"),
-        ("CarouselViewElement.OnPositionChanged", "4c-4"),
-        ("CarouselViewElement.PeekAreaInsets", "4c-4"),
-        ("CarouselViewElement.Position", "4c-4"),
-    ];
+    public static readonly (string Key, string Phase)[] Pending = [];
 }

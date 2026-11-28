@@ -2,6 +2,7 @@ using MauiActivityIndicator = Microsoft.Maui.Controls.ActivityIndicator;
 using MauiBoxView = Microsoft.Maui.Controls.BoxView;
 using MauiCheckBox = Microsoft.Maui.Controls.CheckBox;
 using MauiEditor = Microsoft.Maui.Controls.Editor;
+using MauiIndicatorView = Microsoft.Maui.Controls.IndicatorView;
 using MauiProgressBar = Microsoft.Maui.Controls.ProgressBar;
 using MauiSearchBar = Microsoft.Maui.Controls.SearchBar;
 using MauiSwitch = Microsoft.Maui.Controls.Switch;
@@ -31,6 +32,30 @@ internal static class ControlDescriptors
             .OneWay(static e => e.Progress, static (v, progress) => v.Progress = progress)
             .Property(MauiProgressBar.ProgressColorProperty, static e => e.ProgressColor);
     }
+
+    /// <summary>
+    /// Page indicators (spec 070 §5.5): the position is controlled, clamped to the count (MAUI accepts any
+    /// value, and each platform shows something different beyond it). A write's change event is raised
+    /// inside the write; a tap's inside the platform's action (measured, §5.1).
+    /// </summary>
+    public static ControlDescriptor<IndicatorViewElement, MauiIndicatorView> IndicatorView() =>
+        ControlDescriptor.Create<IndicatorViewElement, MauiIndicatorView>()
+            .OneWay(static e => Math.Max(0, e.Count), static (v, count) => v.Count = count)
+            .Property(MauiIndicatorView.IndicatorColorProperty, static e => e.IndicatorColor)
+            .Property(MauiIndicatorView.SelectedIndicatorColorProperty, static e => e.SelectedIndicatorColor)
+            .Property(MauiIndicatorView.IndicatorSizeProperty, static e => e.IndicatorSize)
+            .Property(MauiIndicatorView.IndicatorsShapeProperty, static e => e.IndicatorsShape)
+            .Property(MauiIndicatorView.MaximumVisibleProperty, static e => e.MaximumVisible)
+            .OneWay(static e => e.HideSingle, static (v, hide) => v.HideSingle = hide)
+            .Controlled(
+                static e => e.Count <= 0 ? 0 : Math.Clamp(e.Position, 0, e.Count - 1),
+                static (v, position) => v.Position = position,
+                static (v, report) => v.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(MauiIndicatorView.Position)) report(v.Position);
+                },
+                static e => e.OnPositionChanged,
+                static v => v.Position);
 
     public static ControlDescriptor<CheckBoxElement, MauiCheckBox> CheckBox() =>
         ControlDescriptor.Create<CheckBoxElement, MauiCheckBox>()

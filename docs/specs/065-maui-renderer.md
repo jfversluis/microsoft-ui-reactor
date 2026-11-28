@@ -207,7 +207,16 @@ Design choices that differ from today's WinUI Reactor, and why:
   `IsEchoing`), so a programmatic write's change event is not reported as user input.
   `IsEchoing` is also true once the element is unmounted. Every controlled form control raises its
   change event synchronously inside the write, so a scope around the write is enough for them
-  (spec 067 §14 lists the controls not characterized yet).
+  (spec 067 §14 lists the controls not characterized yet). A control whose events don't tell who
+  moved it needs more: the carousel's position (spec 070 §5) takes the platform's resting item as the
+  truth, read on every display frame from the cells' platform views once a MAUI event or interaction
+  arms the poll; it reports and writes only at a verified rest, projects declarations by scrolling
+  (iOS and Mac Catalyst: the page scroller's offset; Android: MAUI's `ScrollTo`; MAUI's `Position` is
+  written only at mount), and publishes items and layout changes at rest behind a barrier on MAUI's
+  own update. It is an explicit state machine (spec 070 §5.4.1); the platform specifics live behind a
+  small port (`ICarouselPort`, which also says when its own scroll is pending), so the controller is
+  tested headlessly against a stub. Without a port (Windows until 4g) it falls back to MAUI's
+  `Position` and `PositionChanged`.
 - **Typed navigation is WinUI's API over the shared model** (spec 069). `UseNavigation` and
   `NavigationHandle<TRoute>` keep the core's `NavigationStack`; `NavigationHost` is a built-in
   component that declares the back stack and current route as a `NavigationStack` (one key per
@@ -422,6 +431,10 @@ and the direct-renderer todos page were checked on the iPhone simulator.
 
 ## 7. Open issues
 
+- **MAUI carousel defects** (11.0.0) that Reactor works around or avoids are listed in spec 070 §5.13
+  (an Android crash with `KeepScrollOffset`, `ScrollTo` landing one off during item animations, a
+  stale or throwing `Position`, iOS `ScrollTo` doing nothing with spacing and no peek, and others); to
+  be filed upstream.
 - **Windows is untested.** The packages target `net11.0-windows10.0.19041.0`, but this work was done
   on macOS; nothing has been built or run on Windows yet.
 - **Implicit styles don't reach direct views.** An app's `Styles.xaml` styles Controls views only.

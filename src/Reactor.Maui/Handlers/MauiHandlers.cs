@@ -45,6 +45,7 @@ public static class MauiHandlers
         .Register(new SwipeViewHandler())
         .Register(new CollectionViewHandler())
         .Register(new CarouselViewHandler())
+        .Register(ControlDescriptors.IndicatorView())
         .Register(new PageHandler())
         .Register(new NavigationStackHandler())
         .Register(new TabsHandler())
