@@ -7,7 +7,7 @@ using MauiRadioButton = Microsoft.Maui.Controls.RadioButton;
 
 namespace Microsoft.UI.Reactor.Maui.Tests;
 
-// The README's list, swipe, radio, picker and formatted-text snippets (spec 070 §3), compiled and rendered.
+// The README's list, carousel, swipe, radio, picker and formatted-text snippets (spec 070 §3, §5), compiled and rendered.
 
 public sealed record ReadmeProduct(string Id, string Name);
 
@@ -103,8 +103,45 @@ public sealed class ReadmeTotal : Component<List<string>>
     }
 }
 
+public sealed record ReadmePhoto(string Id, string Title);
+
+public sealed class ReadmePhotos : Component
+{
+    public override Element Render()
+    {
+        ReadmePhoto[] photos = [new("1", "Dunes"), new("2", "Fjord"), new("3", "Mesa")];
+        var (page, setPage) = UseState(0);
+        return VStack(8,
+            CarouselView(photos, p => p.Id, (p, state) =>
+                Label(p.Title).FontSize(state.IsCurrent ? 24 : 18), page, setPage)
+                with { PeekAreaInsets = new Thickness(40, 0), ItemSpacing = 8 },
+            IndicatorView(photos.Length, page, setPage));
+    }
+}
+
 public class ReadmeItemsSnippetTests
 {
+    [Fact]
+    public void TheCarouselSnippet_LinksTheIndicatorThroughState()
+    {
+        var host = new TestHost(MauiHandlers.CreateRegistry()).Render(Component<ReadmePhotos>());
+        var stack = host.View<VerticalStackLayout>();
+        var carousel = (ReactorCarouselView)stack.Children[0];
+        var indicator = (IndicatorView)stack.Children[1];
+        var first = Cells.Bind(carousel.ItemTemplate, carousel.Host.Items[0]);
+        var third = Cells.Bind(carousel.ItemTemplate, carousel.Host.Items[2]);
+        static double Size(ContentView cell) => ((MauiLabel)cell.Content).FontSize;
+        Assert.Equal((24d, 18d), (Size(first), Size(third)));
+        Assert.Equal((3, 0), (indicator.Count, indicator.Position));
+
+        // A tap on the third indicator: reported, accepted, the carousel's declared item follows.
+        indicator.Position = 2;
+        host.Scheduler.Drain();
+        Assert.Equal((18d, 24d), (Size(first), Size(third)));
+        Assert.Equal(2, indicator.Position);
+        Assert.Equal(new Thickness(40, 0), carousel.PeekAreaInsets);
+    }
+
     [Fact]
     public void TheMenuSnippet_DrawsTheDeclaredSelection()
     {

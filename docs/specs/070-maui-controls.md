@@ -9,9 +9,8 @@ Phase 4c closes the controls rows of spec 068's inventory. It lands in four gate
 | 4c-3 | Shapes, gradient brushes, ContentView, image source equality, tests for every remaining 🧪 control and layout, and the §1 audit of every ✅ row of spec 068 |
 | 4c-4 | CarouselView and IndicatorView (moved out of 4c-2 in its design review) |
 
-This spec details 4c-1 (§2), 4c-2 (§3) and 4c-3 (§4, three PRs: 4c-3a, 4c-3b and 4c-3c, the last split off
-4c-3b in its design review, §4.14.2). §5 is
-written when 4c-4 starts. The bar for each item is spec 068 §1.
+This spec details 4c-1 (§2), 4c-2 (§3), 4c-3 (§4, three PRs: 4c-3a, 4c-3b and 4c-3c, the last split off
+4c-3b in its design review, §4.14.2) and 4c-4 (§5). The bar for each item is spec 068 §1.
 
 ## 1. Scope
 
@@ -3323,7 +3322,8 @@ term below is read from the platform:
 - **Moving**: iOS and Mac Catalyst: the page scroller's `Tracking`, `Dragging` or `Decelerating`, or
   its offset changed since the previous frame (a programmatic animation sets no flag). Android:
   `ScrollState` isn't idle. **At rest**: not moving on two consecutive frames.
-- **Aligned**: the shown cell's center is within one point of the carousel's center.
+- **Aligned**: the shown cell's center is within one point of the carousel's center (as built, on
+  Android: where the platform's snap helper rests it, §5.13 deviation 3).
 - **D**, the declaration: `Position` clamped to `0…Count−1`; none for an empty list.
 
 Rules (revised after the design review of `56750e0e`; each change names its finding):
@@ -3541,4 +3541,113 @@ Vertical carousels (an `ItemsLayout` orientation), `IsSwipeEnabled`, `IsBounceEn
 
 ### 5.13 As built (4c-4)
 
-To be written with the implementation.
+**Code.** `CarouselPositionController` (`Handlers/CarouselPosition.cs`) holds rules 1–9 against an
+`ICarouselPort` (`Sample()` → shown, aligned, offset, moving, user dragging; `ScrollTo`; `Barrier`;
+`NextFrame`; `Watch`). `CarouselPorts.cs` has the UIKit port (iOS and Mac Catalyst: the cells'
+platform views against the collection view's center, the private page scroller's flags, a pan
+recognizer target, `CADisplayLink`, `PerformBatchUpdates(null, completion)`) and the Android port (the
+`RecyclerView`'s children and scroll state, a scroll listener, `Choreographer`, a dispatch then the
+item animator's `IsRunning(listener)` and no layout pending). `CarouselViewHandler` (`ItemsHandlers.cs`)
+publishes items and layout, maps a reported published index to the element's by key, and posts the
+report through `HandlerContext.PostReport(restore: true)`. `IndicatorView` is a `ControlDescriptor`
+(`Count` and `HideSingle` one-way, the position controlled with value-diff echo and clamped). The API
+is §5.3's: `CarouselView(items, key, template, position, onPositionChanged)` with a one- or
+two-argument template (`ItemState.IsCurrent`), `Loop`, `PeekAreaInsets`, `ItemSpacing`,
+`IsScrollAnimated`; `IndicatorView(count, position, onPositionChanged)` with `IndicatorColor`,
+`SelectedIndicatorColor`, `IndicatorSize`, `IndicatorsShape` (`IndicatorShape?`), `MaximumVisible`,
+`HideSingle`.
+
+**Deviations from §5.4, found on device or in review of the code:**
+
+1. **The port isn't ready until MAUI's initial positioning** (`CurrentItem` set). On iOS MAUI's
+   `UpdateInitialPosition` runs once per attach about 100 ms after the first layout and scrolls to its
+   own `Position`, undoing an earlier projection (`Gate_CarouselView_*` failed without it: DV1). On
+   Android the gate isn't load-bearing (DV4 survives) and is kept for symmetry.
+2. **iOS and Mac Catalyst project through the page scroller's offset**, not MAUI's `ScrollTo`:
+   with an `ItemSpacing` and no peek, MAUI's `ScrollTo` does nothing (a `Position` write still works).
+   The offset is the current one plus the index difference times the page pitch (content width plus
+   spacing over the item count), clamped to the scroller's range; MAUI's `ScrollTo` is the fallback
+   when the scroller isn't found (DV2).
+3. **Aligned on Android is the platform's resting alignment.** MAUI's snap helper (a
+   `PagerSnapHelper`) centers an item's decorated bounds, and the first and last items with peek are
+   decorated more on their outer side, so the list ends before they center: their views rest about
+   4 dp off center, where a swipe rests too. Aligned is "the snap helper's distance is within a pixel,
+   or the list can't scroll toward it" (DV6, DV7). On iOS and Mac Catalyst MAUI's insets center edge
+   items exactly; an edge test there was dead code (its mutant survived) and was removed.
+4. **A user's move during a deferred transaction is reported first** (mapped to the element's items
+   by key); the answer's commit applies the transaction. §5.4 rule 3 applies the transaction at rest
+   first; reporting first keeps the user's item when the app accepts it, which applying first would
+   move under the user (`CarouselView_LongHold`: `[2]`, then the new items, the accepted item shown).
+5. **An own projection that lands short or off center is asked again**, up to three scrolls, then a
+   `DiagnosticLog` warning (`CarouselView.Position`) and no more until the next commit. A rest short of
+   an own target needs twelve still frames (an animation that hasn't started looks still).
+
+**Characterization** (§5.1, `CarouselCharacterization.cs`, on demand): Mac Catalyst 26.7, an iPhone
+simulator (iOS 27.0), an iPad simulator (iOS 27.2), the Android API 37 emulator. Every §5.1 row was
+measured; iOS drags in the gate used real touches through Appium (`host-gestures.py`).
+
+**Gates** (`Gate_CarouselView_ItemsBarrier`, `_RestDetection`, `_ShownGeometry`) pass on all four
+devices: the seven items cases land on the declared item behind the barrier with no frame showing
+item 0 (Android) and nothing reported; rest detection sees a programmatic animation frame by frame
+with no false rest; the shown item is the platform's centered one with `Loop` and peek, and a further
+signal at that rest projects nothing.
+
+**Tests.** Headless: `CarouselPositionTests` (27, a stub port), `IndicatorViewTests`, the census
+(the pending list empty, ceiling 0, every key claimed with mutation evidence) and the README snippet;
+all 1401 tests in `Reactor.Maui.Tests` and the 80 engine tests pass. Device: 21 carousel and indicator fixtures (the three gates, then eight carousel fixtures and `IndicatorView_Controlled` on both registries); the full suites pass: Mac Catalyst 239 passed and 18 skipped, the iPhone simulator 236 and 21, the iPad simulator 246 and 11, the Android emulator 239 and 18 (skips are platform no-ops), none failed.
+
+**Mutants.** Headless, against `CarouselPositionTests` and `IndicatorViewTests` (C = controller,
+H = handler, D = descriptor); each red unless noted:
+
+| Mutant | Red |
+|---|---|
+| C1 report from the poll while moving | 12 tests, among them `Input_IsReportedOnceAtRest_NeverWhileMoving` |
+| C2 no wait for the app's answer | `ASignalBeforeTheAnswer_NeitherScrollsNorReportsAgain` |
+| C3 every rest elsewhere taken for input | `ADragBackToTheSameItem_WhileTheDeclarationChanged_IsProjectedNotReported` |
+| C4 project while moving | `ALongHold_…`, `ASupersededProjection_…` |
+| C5 publish items while moving | `ItemsAndADeclarationDuringAHold_WaitForRest`, `AMoveDuringAHoldWithAnItemsChange_…` |
+| C6 an obsolete completion acts | `Barriers_BelongToTheirEpoch`, `AnObsoleteCompletion_…` |
+| C7 an obsolete completion doesn't reissue | `AnObsoleteCompletion_ReissuesTheCurrentBarrier_WhenNoneIsOutstanding` |
+| C8 align only after a report | `ARestBetweenItems_AtTheDeclaredOne_IsAlignedWithoutAReport` |
+| C9 poll only on platform events | `AProjectionStoppedShort_WithNoPlatformEvent_IsHandledByThePoll` |
+| C10 ignore `ScrollToRequested` | `ARefCommandDuringTheWindow_…` |
+| C11 report an own settle | `ASupersededProjection_…`, `AProjectionStoppedShort_…`, `IsScrollAnimated_…` |
+| C12 keep the generation on a handler swap | survives: equivalent (every barrier and frame callback also checks the port's identity, and ports are never reused) |
+| C13 ignore `IsScrollAnimated` | `IsScrollAnimated_DecidesADeclaredChange_ItemsChangesAlwaysJump` |
+| C14 animate an items change's deferred projection | `AnItemsChangesProjection_DeferredByMotionAtTheBarrier_StillJumps` |
+| C15 a drag in the barrier window isn't input | `ADragDuringTheWindow_…` |
+| C16 project over input in the window | `ADragDuringTheWindow_…`, `ARefCommandDuringTheWindow_…` |
+| C17 no retry cap | `APlatformThatNeverLands_IsAskedThreeTimes_ThenWarned` |
+| C18 accept an off-center own landing | `AProjectionLandingOffCenter_IsAskedAgain` |
+| H1 write `Position` on update / H6 not at mount | `Mount_WritesThePositionClamped_AndLaterDeclarationsNeverWritePosition` |
+| H2 `IsCurrent` from the previous declaration | `AnAcceptance_WritesNothing_AndMovesIsCurrentWithoutRemounting` |
+| H3 report the published index unmapped | `AMoveDuringAHoldWithAnItemsChange_IsReportedFirst_MappedByKey` |
+| H4 new boxes on every publish | 18 tests |
+| H5 the restore doesn't project | `ARefusal_ScrollsBackAtRest_AndTheLandingIsNotReported` |
+| H7 no transaction (sync at once) | 9 tests |
+| D1 the indicator's position unclamped | `ThePosition_IsClampedToTheCount` |
+
+Device (the fixtures named, on the platform named): DV1 the iOS readiness gate removed: the three
+gates and `CarouselView_Geometry` red (iPhone); DV2 MAUI's `ScrollTo` instead of the page offset:
+`Gate_CarouselView_ShownGeometry` red (iPhone); DV3 the Android barrier ignoring the item animator:
+`Gate_CarouselView_ItemsBarrier` and both `CarouselView_ItemsChange` red; DV4 the Android readiness
+gate removed: survives (deviation 1); DV5 reports while moving: both `CarouselView_Swipe` and
+`CarouselView_LongHold` red (Android); DV6 Android edge items required to center exactly and DV7 the
+snap target without the list's end: `Gate_CarouselView_ShownGeometry` red (a further signal at rest
+re-aligned).
+
+**Bugs found while building it**, each now covered: the Android edge test took its direction from
+the view's center (never true; hidden by a one-retry acceptance, at the cost of a re-alignment on
+every later signal); the iOS initial positioning undoing projections; MAUI's iOS `ScrollTo` doing
+nothing with spacing and no peek; the VoiceOver-scroll fixture depending on an accessibility runtime
+an earlier XCUITest session had loaded (the fixture now enables it, `_AXSSetAutomationEnabled`, as UI
+test frameworks do).
+
+**MAUI issues to file** (11.0.0, `4e6582f`): Android, two removals in one turn crash under
+`KeepScrollOffset` (`SetCurrentItem` out of range); Android, `ScrollTo` during item animations lands
+one item off; Android, `ScrollTo(item)` doesn't update `Position`; Android, a slow release rests
+between pages; iOS, `IsDragging` is never set and `IsScrolling` is unreliable (the pages scroll in a
+private scroller); iOS, `ScrollTo` does nothing with an `ItemSpacing` and no peek; iOS,
+`UpdateInitialPosition` scrolls to `Position` about 100 ms after the first layout, over an earlier
+scroll. (MAUI's `Loop` defaults to `true`; Reactor's element defaults to `false` and writes it at
+mount.)

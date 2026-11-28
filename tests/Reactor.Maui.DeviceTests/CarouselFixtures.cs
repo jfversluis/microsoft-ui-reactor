@@ -270,6 +270,8 @@ public static partial class Fixtures
             await CarouselSettled(c, view);
             Note($"{(accept ? "accepted" : "refused")}: reports while moving [{string.Join(",", reportsWhileMoving)}], MAUI events while moving {mauiEventsWhileMoving}, reports [{string.Join(",", state.Reports)}], shown {ShownKey(view)}");
             Equal(0, reportsWhileMoving.Count, "nothing is reported while moving");
+            // Android reports Position during a drag: the check above had something to refuse.
+            if (OperatingSystem.IsAndroid()) Check(mauiEventsWhileMoving >= 1, "MAUI raised PositionChanged while moving (positive witness)");
             Equal("1", string.Join(",", state.Reports), "the resting item, once");
             if (accept)
             {

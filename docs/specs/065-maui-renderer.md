@@ -207,7 +207,13 @@ Design choices that differ from today's WinUI Reactor, and why:
   `IsEchoing`), so a programmatic write's change event is not reported as user input.
   `IsEchoing` is also true once the element is unmounted. Every controlled form control raises its
   change event synchronously inside the write, so a scope around the write is enough for them
-  (spec 067 §14 lists the controls not characterized yet).
+  (spec 067 §14 lists the controls not characterized yet). A control whose events don't tell who
+  moved it needs more: the carousel's position (spec 070 §5) takes the platform's resting item as the
+  truth, read on every display frame from the cells' platform views once a MAUI event or interaction
+  arms the poll; it reports and writes only at a verified rest, projects declarations through
+  `ScrollTo` (MAUI's `Position` is written only at mount), and publishes items and layout changes at
+  rest behind a barrier on MAUI's own update. The platform specifics live behind a small port
+  (`ICarouselPort`), so the controller is tested headlessly against a stub.
 - **Typed navigation is WinUI's API over the shared model** (spec 069). `UseNavigation` and
   `NavigationHandle<TRoute>` keep the core's `NavigationStack`; `NavigationHost` is a built-in
   component that declares the back stack and current route as a `NavigationStack` (one key per

@@ -684,6 +684,36 @@ in the cell's own components, rather than into the platform.
 item by key, in any group, use `ScrollToKey` (MAUI's `ScrollTo(item, …)` can't take your item,
 because the list holds its own boxes): `list.Current?.ScrollToKey(specialId)`.
 
+## Carousels
+
+```csharp
+var (page, setPage) = UseState(0);
+return VStack(8,
+    CarouselView(photos, p => p.Id, (p, state) =>
+        Label(p.Title).FontSize(state.IsCurrent ? 24 : 18), page, setPage)
+        with { PeekAreaInsets = new Thickness(40, 0), ItemSpacing = 8 },
+    IndicatorView(photos.Count, page, setPage));
+```
+
+The position is controlled, and the platform's resting item is the truth. Nothing is written or
+reported while the user moves the carousel, whatever renders meanwhile. Once it rests on another
+item, that index is reported, once; refuse it and the carousel scrolls back. A declared change
+scrolls there once the carousel rests (animated unless `IsScrollAnimated = false`). An items or layout
+change (`Loop`, `PeekAreaInsets`, `ItemSpacing`) also waits for rest, then jumps to the declared item
+behind MAUI's own update, so re-declare the index the app wants to show. `ItemState.IsCurrent` is
+the declared position, so the current item renders the app's choice, not the finger's.
+
+Swipes, `ScrollTo` through a ref, and accessibility scrolls are all reported the same way. One
+limitation: in the moment between an items change and MAUI finishing it, a jump without motion
+(a screen reader's scroll-to-visible) can't be told from MAUI's own correction, and is overwritten.
+A drag or a ref's `ScrollTo` in that moment is reported. Don't read the position back from MAUI's
+`Position` property: MAUI doesn't keep it current (Android's `ScrollTo(item)` doesn't update it);
+the callback reports the item that shows.
+
+`IndicatorView(count, position, onPositionChanged)` is a controlled value of its own: link it to a
+carousel through app state, as above. Its position is clamped to the count. `IndicatorTemplate`
+isn't supported; to draw custom indicators, render a row of elements from the count and position.
+
 ## Swipe actions
 
 ```csharp
