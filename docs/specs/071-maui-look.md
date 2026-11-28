@@ -5,9 +5,9 @@ remaining 🧪 modifiers: a theme value applied without rendering, styling for d
 fonts, animations, flow direction, `AutomationProperties`, and tests for every untested modifier. It
 stacks on 4c (spec 070), whose head is `1a8d88c6`.
 
-§1 is the outline of the whole phase. §2 is 4d-1's design: characterized on devices, revised after three
-design reviews (`bc46b5ea`: D1–D12; `f72f44ae`: E1–E10; `f63bbb5f`: F1–F6, cited where they apply), not
-yet built.
+§1 is the outline of the whole phase. §2 is 4d-1's design: characterized on devices, revised after four
+design reviews (`bc46b5ea`: D1–D12; `f72f44ae`: E1–E10; `f63bbb5f`: F1–F6; `938621cb`: G1–G4, cited where
+they apply), not yet built.
 4d-2 and 4d-3 get their own sections when their characterization is done.
 
 ## 1. The phase
@@ -104,9 +104,10 @@ changed: re-entrant theme sets, the Disabled state's precedence, Android's stale
 instrumentation in round one (§2.1.1–§2.1.4); where a Controls view's value comes from, Android's resolver
 inside the change, and divergence, threads and settling in round two (§2.1.5–§2.1.7). A third round, on
 `f63bbb5f`, raised F1–F6; the repair hook's ownership and generation and MAUI's own enabling were
-characterized on Android (and the latter on Mac Catalyst) first (§2.1.8).
+characterized on Android (and the latter on Mac Catalyst) first (§2.1.8). A fourth, on `938621cb`, raised
+G1–G4; non-detaching insertion and the enabling layers were characterized on all four devices (§2.1.9).
 
-### 2.1 Characterization (device, `LookCharacterization.cs`, `LookReviewCharacterization.cs`, `LookRound2Characterization.cs`, `LookRound3Characterization.cs`)
+### 2.1 Characterization (device, `LookCharacterization.cs`, `LookReviewCharacterization.cs`, `LookRound2Characterization.cs`, `LookRound3Characterization.cs`, `LookRound4Characterization.cs`)
 
 The baseline is plain MAUI 11.0.0 (`4e6582f`), then the same trees through Reactor on both registries.
 Devices: Mac Catalyst 26.7, the iPhone simulator (iOS 27.0), the iPad simulator (iOS 27.2) and the
@@ -406,9 +407,58 @@ direct on the direct registry.
 **A MAUI defect found on the way.** A Controls layout on the direct registry (a layout with a Controls-only
 setting) whose children are a direct view followed by a Controls view doesn't mount: MAUI's
 `Layout.Insert(index, child)` passes the *view* index to `InsertLogicalChild` (`Layout.cs` 245–260), which
-counts only `Element`s, and throws `ArgumentOutOfRangeException`. Any Controls layout with a direct child
-before a Controls child hits it, on every platform. It is independent of 4d but blocks its tests; §2.11 fixes
-it.
+counts only `Element`s. When the view index exceeds the number of `Element` children it throws
+`ArgumentOutOfRangeException`; otherwise it inserts the logical child at the wrong logical position (§2.1.9).
+Every platform. Filed upstream as [dotnet/maui#40758](https://github.com/dotnet/maui/issues/40758). §2.11
+works around it without detaching siblings.
+
+#### 2.1.9 Inserting without detaching, and the enabling layers (review round 4, G1, G3, G4)
+
+**Insertion candidates (G1), `Characterize_Look_MixedInsert [S0–S3]`, all four devices.** A Controls
+`VerticalStackLayout` holding a direct label, a **focused `Entry` with a selection (2+3) and the soft keyboard
+up**, another direct label and a Controls label; a Controls label inserted at index 1. Native and logical
+order, the entry's focus, selection and IME, its `Loaded`/`Unloaded`/`Focused`/`Unfocused`/`ParentChanged`/
+`HandlerChanging` events, native and handler identity, Android's attach and layout child counters, frames.
+
+| Candidate | Result (all four devices unless noted) |
+|---|---|
+| S0: MAUI's `Insert` as is | here no throw (the index, 1, doesn't exceed the one `Element` child), but **the logical order is wrong** (`entry, inserted, c3` while the views are `d0, inserted, entry, …`); with no `Element` before it, it throws (§2.1.8) |
+| S1: the views after the index removed and re-added | correct order, but **the entry loses focus, the soft keyboard and first-responder status** (`Unfocused`, `Unloaded`, two `Loaded` and two `ParentChanged`; Android: detached and re-attached, 3 children removed and 4 added); cost grows with the suffix |
+| **S2: logical stand-ins** for direct children (a logical-only `VisualElement` per direct child, added and removed with the public `AddLogicalChild`/`InsertLogicalChild`/`RemoveLogicalChild` at the same position) | correct native **and** logical order; **the entry keeps focus, selection, the keyboard and first-responder status**; no events but the entry's existing `Loaded`; same native view and handler; Android: 0 children removed, 1 added, the entry neither detached nor re-attached; frames identical to S0's |
+| S3: each direct child wrapped in a Controls `Grid` | the same as S2 for the entry and order; frames identical in a stack; but one extra Controls view per direct child (cost below), and grid and flex placement would have to move to the wrapper |
+
+Accessibility focus wasn't measured directly (no screen reader is automated here); S2 performs no native
+removal or detach on any sibling (Android's counters: 0 removed, 0 detached), which is the path that clears
+it. Reactor component state and effects aren't touched by any candidate: all four only rearrange native
+children of one layout, with no node change. On iOS a platform-owned trailing `UIView` sits in the layout's
+subviews while the entry is first responder; it vanishes in S1 because the entry loses focus.
+
+**Cost (G1, G4), `Characterize_Look_MixedInsertCost`.** One Controls label inserted at index 1 of a Controls
+layout holding one direct label and 300 Controls labels (median of rounds 2–4), and mounting 300 direct
+labels into a Controls layout until first layout:
+
+| | Mac Catalyst | iPhone | iPad | Android |
+|---|---|---|---|---|
+| One insertion, S1 | 166 ms | 141 ms | 152 ms | 6.4 ms (300 children removed, 301 added) |
+| One insertion, S2 | 4.5 ms | 5.6 ms | 5.3 ms | 2.7 ms (0 removed, 1 added) |
+| Mounting 300 direct labels, bare | 259 ms | 290 ms | 298 ms | 85 ms |
+| Mounting with stand-ins (S2) | 291 ms | 298 ms | 318 ms | 64 ms |
+| Mounting in wrappers (S3) | 467 ms | 518 ms | 553 ms | 107 ms |
+
+S2 costs the same as bare within noise; S3 costs 60–90% more on Apple's platforms.
+
+**The enabling layers (G3), `Characterize_Look_EnablingLayers`, all four devices, the same on each.**
+
+| Sequence | Result |
+|---|---|
+| (A) Plain MAUI: a parent disabled, the app writes its child's local `IsEnabled = false`, the parent re-enabled | the child stays disabled (the app's value) |
+| (B) The same with Reactor's inherited `false` written on the child's manual layer and cleared on re-enable (F2's design) | **the child is enabled: the app's value is gone**, because `SetValue` and `ClearValue` share the manual layer (`ManualValueSetter`) |
+| (C) An owned adapter: a logical-only `VisualElement` whose `IsEnabled` Reactor writes, with the Controls button as **its logical child** (`AddLogicalChild`), the button placed visually in a direct layout | the adapter disabled: the button disabled (MAUI's `IsEnabledCore`), one `IsEnabled` event; the app's local `false`, then the adapter re-enabled: **the button stays disabled (the app's value kept)**; the app clears it: enabled; an implicit style and an `AppThemeBinding` reach the button through the adapter (text yellow, background red → blue on a theme change) |
+| (C') The same adapter as the button's `Parent` only, not its logical child (Reactor's anchoring today) | the adapter disabled: **the button stays enabled**: MAUI propagates `IsEnabled` to logical (visual-tree) children only (`VisualElement.cs` 1966–1976), so `Parent` alone carries resources but not enabling |
+
+So MAUI already inherits enabling between Controls views through `IsEnabledCore` and logical children; Reactor
+needs to cover only direct views (which it owns) and Controls views whose MAUI chain doesn't reach the
+source, and an adapter in that chain does it without writing the child's manual layer.
 
 ### 2.2 What WinUI has, and why the MAUI value isn't `ThemeRef` (review D1)
 
@@ -714,49 +764,53 @@ static LabelElement Headline(this LabelElement l) => l.FontSize(32).FontFamily("
    implicit XAML style for the Controls type it stands for, Reactor warns once per type per app.
 9. **Keyed XAML styles are functions** (§2.4).
 
-### 2.8 The Disabled state, own and effective `IsEnabled` (review D7, E4)
+### 2.8 The Disabled state, own and effective `IsEnabled` (review D7, E4, F2, G3)
 
 MAUI (§2.1.3): a `Disabled` state's setters beat local values; `IsEnabled` is inherited, and a descendant's
 own `IsEnabled = true` can't override a disabled ancestor. Reactor matches both, on both registries.
 
-1. **Own enabled.** A host's own `IsEnabled` is resolved like any look property, before inheritance and
-   before the Disabled variant: the declaration's literal, else its binding, else the style's literal, else
-   the style's binding, else **MAUI's own enabling** (rule 1a), else enabled. A Disabled variant can't set `IsEnabled`: an `IsEnabled` in a
-   `disabled` element is ignored and reported once per style entry (it would make the state depend on
-   itself).
-1a. **MAUI's own enabling (review F2).** When Reactor leaves a Controls host's own `IsEnabled` unset, an
-   underlying MAUI source (a XAML style, a local write from `.Set`, a XAML parent outside Reactor) can still
-   disable it (§2.1.8). Reactor reads it back as the view's `IsEnabled` **with Reactor's own write cleared**: it
-   clears its inherited override first, then reads, so its own override never feeds back as the source
-   (`IsSet` can't tell, §2.1.8). The value includes MAUI's inheritance from the view's MAUI parent, which only
-   matters when that parent is outside Reactor's effective computation; a Reactor ancestor's state is
-   already in rule 2. While Reactor's override is in place (an ancestor disabled), the source isn't read: the
-   host is effectively disabled anyway.
-   **Observing it.** Reactor subscribes to the Controls host's `PropertyChanged(IsEnabled)` and, for a change
-   raised outside Reactor's own writes (a scope flag, like the echo scope), re-reads the source and, if the
-   own state changed, runs a Disabled pass over the host's descendants (§2.1.8: the event fires on a source
-   change, both ways). Changes inside Reactor's writes are ignored. Direct hosts have no MAUI source.
-2. **Effective enabled.** Own enabled AND the nearest host ancestor's effective enabled. The ancestry is
-   Reactor's host-node tree, through components and through child roots made with `CreateChildRoot` (cells
-   inherit the list's state), not through page roots. Each host node stores its effective state.
-3. **Every write is effective.** The applied element carries the effective state, so every mount, ordinary
-   update, controlled restore and patch writes it: `DirectView.ApplyModifiers` reads the applied modifiers'
-   `IsEnabled` (no longer the declaration's `n.IsEnabled ?? true`). A child's own state update, or a
-   controlled restore, while its parent stays disabled writes disabled.
-4. **What is written.** When an ancestor is disabled: `false`. Otherwise the own value: `true` or `false` when
-   own is present, and **unset when own is unset**: on a Controls view that is `ClearValue`, so a re-enabled
-   parent never replaces an underlying XAML `IsEnabled = false` with a manual `true` (§2.1.5's sources stay
-   intact), and MAUI's own inheritance applies on the Controls registry. On a direct view, unset is enabled.
-5. **The variant.** An effectively disabled host applies its style's `disabled` element: for the properties
+Reactor never writes an inherited `IsEnabled` onto a Controls view's manual layer (review G3): that layer is
+shared with the app's own writes, and clearing it on re-enable erases the app's value (§2.1.9 (B)). Instead,
+the host tree is treated as segments, and each boundary is bridged by MAUI's own inheritance:
+
+1. **Own enabled.** A host's own `IsEnabled`: the declaration's literal, else its binding, else the style's
+   literal, else the style's binding, else unset. A Disabled variant can't set `IsEnabled`: one there is
+   ignored and reported once per style entry. On a Controls view the own value, when present, is written as
+   a local value like any declared property; when unset, Reactor writes nothing (no `ClearValue` of a value
+   it didn't write).
+2. **Controls → Controls.** A Controls host below a Controls host is its logical child, so MAUI's
+   `IsEnabledCore` inherits; Reactor writes nothing inherited.
+3. **Direct → Controls: the owned adapter.** Each direct layout that has Controls children owns one
+   **enabling adapter**: a logical-only `VisualElement`, never in a view list, whose logical parent is the
+   enclosing direct layout's adapter, else the direct tree's Controls anchor. The direct layout's Controls
+   children are the adapter's logical children (§2.1.9 (C)), so their `Parent` is the adapter: implicit styles,
+   resources, `AppThemeBinding`s and enabling all reach them through it. Reactor writes only the adapter's
+   `IsEnabled`: the direct layout's effective state. This replaces today's `Parent`-only anchoring, which
+   carries resources but not enabling (§2.1.9 (C')).
+4. **Controls → direct: the stand-in.** Each direct child of a Controls layout has a logical stand-in at its
+   position in that layout's logical children (§2.11). The stand-in inherits the layout's enabling from MAUI
+   (XAML styles, app writes, MAUI parents outside Reactor), and Reactor observes it: the stand-in's
+   `IsEnabled`, read and watched through `PropertyChanged`, is the direct subtree's MAUI input. No read-back
+   after clearing is needed, and Reactor's own writes can't feed back: Reactor never writes a stand-in.
+5. **Direct → direct.** Reactor computes and writes: effective = own AND the parent's effective AND, at a
+   segment's top, the stand-in's or anchor's MAUI input. Reactor owns direct views, so it writes the effective
+   value on every mount, ordinary update, controlled restore and patch (`DirectView.ApplyModifiers` reads the
+   applied modifiers' value, no longer `n.IsEnabled ?? true`).
+6. **Effective state for the Disabled variant.** A direct host's effective state is rule 5's. A Controls
+   host's is MAUI's `IsEnabled` (which includes its own value, the app's writes, XAML styles and the inherited
+   state through rules 2 and 3), read after Reactor's own writes and watched through `PropertyChanged`. The
+   ancestry crosses components and child roots made with `CreateChildRoot` (cells inherit the list's
+   state), not page roots.
+7. **The variant.** An effectively disabled host applies its style's `disabled` element: for the properties
    it sets, above the declaration's literals (MAUI's precedence), then the normal rules.
-6. **Propagation.** A change of a host's effective state runs a Disabled pass over its host descendants
-   (beneath skipped components too): their stored effective state, the written `IsEnabled` (direct views and
-   anchored Controls views, whose MAUI parent doesn't carry the direct layout's state), and look patches for
-   variants. A descendant whose variant needs a capability its view lacks is routed through the ordinary path
-   (§2.11).
-7. **Themes while disabled.** A theme pass resolves the variant's bindings for disabled hosts.
-8. **The direct registry's `IsEnabled` defect** (§2.1.3, §2.1.8) is fixed by rules 1a, 3 and 6: a XAML-disabled
-   Controls layout now disables its direct descendants too, after parent toggles and unrelated renders.
+8. **Propagation.** A change of a direct host's effective state, of an adapter's input, or of a watched MAUI
+   value raised outside Reactor's own writes runs a Disabled pass over the affected hosts (beneath skipped
+   components too): direct views' written `IsEnabled`, adapters' `IsEnabled`, and look patches for variants.
+   A host whose variant needs a capability its view lacks is replaced (§2.11).
+9. **Themes while disabled.** A theme pass resolves the variant's bindings for disabled hosts.
+10. **What this fixes.** The direct registry's missing inheritance (§2.1.3), the XAML-disabled Controls layout
+    over direct children (§2.1.8), and the coincident app write (§2.1.9 (B)): Reactor's enabling now behaves
+    like plain MAUI's in that sequence, without an ordinary update re-running `Configure` to hide a loss.
 
 ### 2.9 Android's theme-derived defaults (review D11, E1, E2)
 
@@ -843,22 +897,38 @@ such a host silently. **Routing (review F4):** each host records the backend it 
 Controls). A style or Disabled pass computes the host's new eligibility envelope (rule above, for the new
 style entry and state) and compares it with the recorded backend, applying `HybridHandler`'s rule in both
 directions (an envelope that no longer needs Controls returns to the direct view, as removing a declared
-Controls-only property would). On a mismatch the engine **replaces the host in place**: it unmounts the old
-native and its subtree and mounts the same node again from **the same declared element** (`node.Element` and
-`Live` keep the declaration's instance; the projected element is passed only to the handler), into the same
-slot of the parent's native children. It does not use ordinary `Update`: that returns early on a
-reference-equal declaration, and passing it the projected element would make `Live` the projection. The consequences are the
+Controls-only property would). On a mismatch the engine **replaces the host with a fresh mount lifetime**
+(review G2): it unmounts the old host node (marked unmounted for good, its handler contexts retired, its
+subtree's components unmounted) and mounts **a new host node** at the same position in the parent's node
+children and the same slot of the parent's native children, from **the same declared element instance**
+(the new node's `Live` is the declaration; the projected element goes only to the handler). The old node is
+never re-marked as mounted: `HandlerContext.Live`, `IsMounted` and posted reports guard on the node's
+`Unmounted`, so reviving it would revive retired contexts. Ordinary `Update` isn't used: it returns early on
+a reference-equal declaration, and passing it the projected element would make `Live` the projection. The consequences are the
 same as declaring it: a new native view, the host's subtree remounted (its components' state reset, effects
 cleaned up and run again, refs rebound to the new views); components above it keep their state. This happens
 beneath skipped components too (the pass reaches the host without rendering its owners), and the same rule
 applies when a parent's disabling activates a Controls-only variant.
 
-**A prerequisite fix: inserting into a Controls layout with direct children** (§2.1.8). MAUI's `Layout.Insert`
-throws when a direct view precedes the inserted Controls view. Reactor's Controls layout children strategy
-inserts a Controls view at a view index whose logical index differs (any direct view before it) by appending
-instead: it removes the views after the index, adds the new view, and re-adds the removed ones (`Add` keeps
-logical and view order aligned); layouts with only Controls children keep `Insert`. Tested with direct and
-Controls children in every order, insertions and keyed moves, on both registries.
+**A prerequisite fix: inserting into a Controls layout with direct children** (review G1, G4; §2.1.8,
+§2.1.9; [dotnet/maui#40758](https://github.com/dotnet/maui/issues/40758)). Reactor keeps a Controls
+layout's logical children aligned with its views: each direct child gets a **logical stand-in** (a
+logical-only `VisualElement`, never a view) at the same position, through MAUI's public
+`AddLogicalChild`, `InsertLogicalChild` and `RemoveLogicalChild`. `Layout.Insert` then always finds a valid,
+correct logical index. The rules:
+
+- **No sibling is touched.** An insertion is one `Layout.Insert` (one native add); a removal is one
+  `Layout.RemoveAt` plus, for a direct child, its stand-in's removal; a keyed move is the moved child's
+  removal and insertion only. Unaffected siblings are never removed, re-added or detached (§2.1.9: S1's
+  suffix re-adding is rejected because it detaches them, dropping focus, selection and the keyboard).
+- **One operation per affected position per sync.** `SyncList`'s remove-then-insert per position already
+  touches each moved or inserted child once; the stand-in edit rides along in the same step. A batch of
+  insertions is N native adds; a reverse of N is at most N−1 moves, as for an all-Controls layout.
+- **Stand-ins serve twice.** They carry the layout's enabling to direct subtrees (§2.8 rule 4), and they
+  re-implement `IVisualTreeElement` to present their direct view, so visual-tree tools see direct children of
+  Controls layouts (spec 065 §7's open issue) in the right order.
+- **Layouts with only Controls children** have no stand-ins and behave as today.
+- When MAUI fixes #40758 the stand-ins stay: they are also §2.8's enabling bridge.
 
 ### 2.12 Census and the styleable inventory (review D8, E3)
 
@@ -948,11 +1018,12 @@ observations made after the action (a frame index or sequence number taken at th
 | Per-type fall-through | outer `{Label, Button}`, inner `{Label}`: buttons use the outer; inner `Remove<Label>()`: labels use the outer | inner hides outer |
 | Membership reaches every host | Empty → a literal `Label` style → Empty, beneath a skipped component: the labels (no bindings, variants or defaults) take the style and return to their declaration; zero renders (positive: the same instance writes nothing) | restyle only theme-enrolled hosts |
 | Root boundaries | a cell uses the list's scope; a standalone `ReactorPage` without `WithStyles` uses none | inherit across standalone roots |
-| MAUI's own enabling (F2) | a Controls `Button` disabled by its XAML style (stub source false), `ElementStyles` normal teal / disabled gray: the gray variant; the stub source turning true outside Reactor's scope: one Disabled pass, teal (positive); a `PropertyChanged(IsEnabled)` raised by Reactor's own write: no pass | own from Reactor's declaration and style only; ignore outside changes; react to own writes |
-| No feedback (F2) | a host whose ancestor was disabled (Reactor's override `false` written) is re-enabled: the override is cleared before the source is read, so the host ends enabled when its source is unset (positive: a source false keeps it disabled) | read the source before clearing |
-| A XAML-disabled layout over direct views (F2) | a Controls layout disabled by its style (stub), with direct descendants: they are written disabled; still after a Reactor parent disable → re-enable and after an unrelated child render | direct descendants from Reactor state only |
-| Own vs effective enabled | a child's state update while its parent stays disabled: written disabled; a controlled restore under a disabled parent: written disabled; an own-disabled value cleared under a disabled parent, then the parent re-enabled: enabled; an explicit child `IsEnabled(true)` stays disabled under the parent | write own; `n.IsEnabled ?? true` on direct views |
-| An anchored XAML-disabled child | a Controls child whose XAML style sets `IsEnabled = false`, under a direct layout disabled then re-enabled: `ClearValue` on re-enable, the child stays disabled (positive: a child without the style is enabled) | write `true` on re-enable |
+| MAUI's own enabling (F2) | a Controls `Button` disabled by its XAML style (stub `IsEnabled` false), `ElementStyles` normal teal / disabled gray: the gray variant; the stub turning true outside Reactor's writes: one Disabled pass, teal (positive); a `PropertyChanged(IsEnabled)` raised by Reactor's own write: no pass | effective from Reactor's declaration and style only; ignore outside changes; react to own writes |
+| The coincident app write (G3) | a Controls child under a Reactor-disabled parent (Controls → Controls, and Direct → Controls through the adapter): the app writes the child's local `false` (`.Set` run once, then no ordinary update), the parent re-enabled: the child stays disabled, as in plain MAUI (§2.1.9 (A)); Reactor's manual-layer write count on the child is 0 (positive: a declared `.IsEnabled(false)` writes once) | write the inherited state on the child's manual layer and clear it |
+| The adapter (G3) | a direct layout disabled → its Controls children disabled through the adapter (MAUI's `IsEnabledCore`), with zero writes to the children; re-enabled → enabled; their implicit styles and `AppThemeBinding`s still resolve through the adapter; nested direct layouts chain adapters | anchor by `Parent` only (no inheritance); write the children |
+| The stand-in as input (F2, G3) | a Controls layout disabled by its XAML style (stub) over direct descendants: they are written disabled, including after a Reactor parent disable → re-enable and an unrelated child render; the stand-in changing outside Reactor re-propagates both ways (positive: a stand-in left enabled leaves them enabled) | direct descendants from Reactor state only; poll instead of watching |
+| Own vs effective enabled (direct) | a direct child's state update while its parent stays disabled: written disabled; a controlled restore under a disabled parent: written disabled; an own-disabled value cleared under a disabled parent, then the parent re-enabled: enabled; an explicit child `IsEnabled(true)` stays disabled under the parent | write own; `n.IsEnabled ?? true` on direct views |
+| A XAML-disabled anchored child | a Controls child whose XAML style sets `IsEnabled = false`, under a direct layout disabled then re-enabled: Reactor writes nothing to the child, which stays disabled (positive: a child without the style is enabled) | write or clear the child's value |
 | `IsEnabled` in a variant | ignored, one report | apply it |
 | Disabled precedence | an effectively disabled button: the variant's background above the declared literal; enabled: the literal | literal over variant |
 | Propagation | disabling a parent patches descendants' variants below a skipped component and in cells; re-enabling restores | own state only |
@@ -961,7 +1032,10 @@ observations made after the action (a frame index or sequence number taken at th
 | Eligibility union | a binding needing Controls only in Dark, and one only in Light; a Disabled variant needing Controls: a Controls view from mount; switches and disabling keep native identity, a child's hook state, its effect (no cleanup) and its ref | decide on the current theme or state |
 | Late capability, routed | a style replacement adding a gradient to a mounted direct button, beneath a skipped component; a parent disabling activating a Controls-only variant that arrived after mount: the host is replaced through `CanUpdate` (new native identity, the host's subtree remounted: child state reset, cleanup ran, ref rebound), owners above keep state, zero renders of the skipped owner (positive: a patchable change keeps identity) | patch silently; re-render the owner |
 | Routing in place (F4) | the same declared instance across renders: a later style entry needing Controls replaces the direct host (new native identity, the subtree remounted, the slot unchanged among its siblings, `Live` the same declared instance); removing the entry replaces it back with a direct view; then ordinary renders keep identity, theme toggles and Disabled toggles keep identity and write patches only | route through ordinary `Update` (returns early on the equal declaration); pass the projected element as `Live`; lose the slot |
-| Mixed insert (prerequisite) | a Controls layout's children in every order of direct and Controls views, inserted, removed and moved by key: the native order matches, nothing throws | `Layout.Insert` at the view index |
+| Fresh mount lifetime (G2) | keep the old node's handler context and native control; replace the backend direct → Controls and back: an event raised on the old control reaches no callback, a report queued by the old context before the replacement is dropped when drained, and the old node stays `Unmounted`; positive: the new node's event reaches the current callback once | re-mark the old node mounted; reuse its context |
+| Mixed insert (G1) | a Controls layout's children in every order of direct and Controls views, inserted, removed and moved by key: the native order and the logical order (stand-ins included) match, nothing throws, and **no unaffected sibling is removed or re-added** (native child-operation counter) | `Layout.Insert` at the view index; re-add the suffix |
+| Batched operations (G4) | a direct prefix and a long Controls suffix: N insertions are N native adds; a keyed move is one remove and one add of the moved child; a reverse of N is at most N−1 moves; each affected position is touched at most once per sync (counter per position) | touch a position twice; re-add siblings |
+| Visual tree | a Controls layout's `GetVisualChildren` lists its direct children through their stand-ins, in view order | stand-ins invisible to the visual tree |
 | Inventory | every element property classified | — |
 
 **Headless: Android defaults (stub platform) and fonts.**
@@ -997,8 +1071,10 @@ observations made after the action (a frame index or sequence number taken at th
 | `Spacing_Presence [controls|direct]` | a style's spacing on an unset stack (geometry), an explicit 0 kept, style removal back to 0 |
 | `Disabled_Inherited [controls|direct]` | a disabled parent: children disabled natively and showing the variant, including an anchored Controls child and an explicit-enabled child; a child state update under it stays disabled; re-enabled: back; a XAML-disabled anchored child stays disabled |
 | `Android_RepairHook [controls|direct]` (Android) | §2.1.8's cases (a), (b), (c) with the real hook: the current generation's default after release, never the retained list, nothing after unmount; corrective writes counted apart from mapper invocations |
-| `Disabled_MauiSource [controls|direct]` | a XAML-disabled Controls button shows the `ElementStyles` Disabled variant; a XAML-disabled Controls layout disables its direct descendants (native), also after a Reactor parent disable → re-enable and an unrelated child render; the source changed outside Reactor re-propagates both ways |
-| `Layout_MixedInsert [direct]` | a Controls layout with a direct child before a Controls child mounts, and survives insertions and moves (it threw before) |
+| `Disabled_MauiSource [controls|direct]` | a XAML-disabled Controls button shows the `ElementStyles` Disabled variant; a XAML-disabled Controls layout disables its direct descendants (native, through the stand-ins), also after a Reactor parent disable → re-enable and an unrelated child render; the source changed outside Reactor re-propagates both ways |
+| `Layout_MixedInsert [direct]` | a Controls layout with a direct child before a Controls child mounts, and survives insertions and moves (it threw before); a focused `Entry` after the insertion point keeps focus, selection, the keyboard and first-responder status, gets no `Unloaded`/`ParentChanged`, and (Android) is never detached; native and handler identity unchanged |
+| `Enabling_CoincidentWrite [controls|direct]` | §2.1.9's (A) sequence through Reactor on both registries, Controls → Controls and through the adapter: the app's local `false` survives the parent's re-enable, as in plain MAUI |
+| `Replacement_Lifetime [direct]` | a late style forcing Controls and its removal: the old native's events reach nothing after each replacement; the new one's work |
 | `Android_Defaults [controls|direct]` (Android; Apple as reference) | after app- and system-started changes: owned properties show the in-event references (enabled and disabled), cleared colors too; implicit styles, explicit styles and themed setters keep their values; a Reactor override cleared to a XAML style shows the style; a `Disabled`-only setter unapplied shows the reference; with the opt-out, MAUI's stale behavior (the positive control) |
 | `Fonts_Registered`, `Fonts_Evidence` | spellings render the face (width equals plain MAUI's, differs from default); missing families: definite on iOS, suspected on Android 14+; the system aliases not reported; Reactor adds no MAUI warnings (log capture count) |
 
@@ -1037,6 +1113,13 @@ Hard premises, characterized first in the implementation; if one fails on a devi
    - **A theme switch** of the styled tree: lands in MAUI's frame; its time within 1.2× MAUI's own
      `AppThemeBinding` switch over the same views (§2.1's cost probe).
    - **Android's resolver cold:** at most 5 ms added to the first switch's pass, 1 ms warm, per window.
+7. **Mixed layouts (G4).** A mixed-layout benchmark on all four devices, both registries, run and gated like
+   premise 6 (paired, noise-calibrated, injected-overhead and baseline-vs-baseline controls): a direct prefix
+   and a 500-view Controls suffix; batch insertions (50 at scattered positions); keyed moves (50); a reverse of
+   500. Against the same edits on an all-Controls layout: native child operations equal (counted), each
+   affected position touched at most once per sync, no unaffected sibling removed or detached, and render,
+   layout and allocations within tolerance; mounting with stand-ins within tolerance of mounting without them
+   (§2.1.9 measured S2 ≈ bare).
 
 Then: full device suites on all four devices with the look fixtures; the Release build of `Reactor.Maui.slnx`
 with no warnings; the mutants above; spec 068's rows (the theme value ✅, styling direct views ✅, fonts ✅ for
@@ -1057,11 +1140,12 @@ Android defaults' limits).
    dispatcher**, synchronously when that is the announcing thread (E10); **an atomic `(theme, generation)`
    snapshot**, notifications that only wake, and generations that never regress (F3).
 7. **Eligibility from the union** of normal and Disabled variants and all theme branches (D6, E5); a later
-   capability change replaces the host in place from the same declaration, with the consequences of
-   declaring it, in both directions (F4).
-8. **MAUI's Disabled precedence and inheritance** (D7); **own and effective enabled** computed apart, every
-   write effective, unset own written as unset (E4); **MAUI's own enabling** read back with Reactor's override
-   cleared and observed outside Reactor's writes (F2).
+   capability change replaces the host with **a fresh node** at the same slot from the same declared
+   instance, with the consequences of declaring it, in both directions (F4, G2).
+8. **MAUI's Disabled precedence and inheritance** (D7); **own and effective enabled** computed apart (E4);
+   **enabling bridged by MAUI's own inheritance** (F2, G3): Reactor never writes an inherited value on a
+   Controls view's manual layer; owned adapters carry a direct layout's state to its Controls children, and
+   stand-ins carry a Controls layout's state (XAML, app writes) to its direct children.
 9. **The direct registry gets inherited `IsEnabled`**, fixing §2.1.3's defect in 4d-1.
 10. **The common-look census and the inventory in 4d-1** (D8); **spacing presence** by a private bit behind the
     existing `double` (E3): no binary or source break; an internal clear for style merging (F5).
@@ -1074,8 +1158,11 @@ Android defaults' limits).
     invocation (D11, E1, E2, F1).
 14. **Reports**, once each: XAML styles ignored by direct views, theme divergence, font evidence, traits, an
     `IsEnabled` in a Disabled variant.
-15. **Work around MAUI's `Layout.Insert`** for Controls layouts with direct children (§2.1.8, §2.11), a
-    prerequisite fix independent of 4d.
+15. **Logical stand-ins** for direct children of Controls layouts (G1, G4): MAUI's `Layout.Insert` works
+    without detaching any sibling, logical and visual-tree order are right, and the stand-ins double as the
+    enabling input. Rejected: re-adding the suffix (it detaches siblings: focus, selection and keyboard lost;
+    O(n)), and Controls wrappers (60–90% slower mounts on Apple's platforms, placement moves to the wrapper).
+    Upstream: [dotnet/maui#40758](https://github.com/dotnet/maui/issues/40758).
 
 ### 2.16 Open questions
 
@@ -1088,7 +1175,9 @@ Android defaults' limits).
 - The presence bit for the excluded non-nullable properties (item spacings, `HideSingle`, …).
 - Mac Catalyst's platform-started theme change and forced-theme behavior (uncharacterized, §2.1).
 - A window on a thread other than the main thread (Windows, 4g) is designed (§2.6 rule 6) but untested here.
-- MAUI issues to file:
+- Accessibility focus across an insertion isn't measured directly (no automated screen reader); S2 performs no
+  native removal or detach on siblings, which is the path that clears it (§2.1.9).
+- MAUI issues (one filed, the rest to file):
   - a `UserAppTheme` set during a theme change is suppressed and leaves MAUI inconsistent, with split
     bindings (§2.1.1, §2.1.7);
   - iOS applies a stale platform theme when returning to Unspecified after the system changed while forced
@@ -1096,8 +1185,8 @@ Android defaults' limits).
   - Android keeps inflation-time defaults and restores them from a cache after a theme change (§2.1.4,
     §2.1.6);
   - an implicit style removed from `Application.Resources` stays applied;
-  - `Layout.Insert` passes the view index to `InsertLogicalChild`, throwing when non-`Element` children precede
-    it (§2.1.8);
+  - filed: [dotnet/maui#40758](https://github.com/dotnet/maui/issues/40758), `Layout.Insert` passes the view
+    index to `InsertLogicalChild`, throwing or misordering when non-`Element` children precede it (§2.1.8);
   - iOS ignores `Bold` and `Italic` on a single-face registered family silently.
 
 ### 2.17 Out of scope
