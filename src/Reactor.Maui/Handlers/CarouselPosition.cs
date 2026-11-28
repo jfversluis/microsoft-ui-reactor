@@ -21,8 +21,15 @@ internal interface ICarouselPort
     /// <summary>Reads the platform; <see langword="null"/> while no item cell is laid out.</summary>
     CarouselSample? Sample();
 
-    /// <summary>Scrolls through MAUI's <c>ItemsView.ScrollTo</c>, centered.</summary>
+    /// <summary>Scrolls to an item, centered (iOS and Mac Catalyst: the page scroller's offset; Android: MAUI's <c>ItemsView.ScrollTo</c>).</summary>
     void ScrollTo(int index, bool animate);
+
+    /// <summary>
+    /// The platform says the port's last <see cref="ScrollTo"/> is still on its way: started and not
+    /// finished, or not yet started. Bounded in time by the port (it turns false after a bound above
+    /// the platform's longest scroll animation), so a scroll that never runs can't hold it forever.
+    /// </summary>
+    bool ScrollPending { get; }
 
     /// <summary>Runs <paramref name="completion"/> once MAUI's and the platform's work for the items changes
     /// published so far has finished; <see langword="false"/> when it can't (no native view yet).</summary>
@@ -35,62 +42,95 @@ internal interface ICarouselPort
     void Watch(Action onInteraction);
 }
 
+/// <summary>The motion region of the carousel's state machine (spec 070 §5.4).</summary>
+internal enum CarouselMotion
+{
+    /// <summary>At a verified rest (or nothing seen yet); nothing polls.</summary>
+    Resting,
+
+    /// <summary>A signal arrived: the poll watches for the next verified rest; nothing is written.</summary>
+    Watching,
+
+    /// <summary>Reactor's own <c>ScrollTo</c> is in flight; its rest is never reported.</summary>
+    OwnProjecting,
+
+    /// <summary>A report is on its way to the app; nothing is projected or published until its answer.</summary>
+    AwaitingAnswer,
+}
+
 /// <summary>
-/// The controlled position of a carousel (spec 070 §5.4). The platform's resting item is the truth:
-/// Reactor writes only at rest (through <c>ScrollTo</c>), publishes items and layout changes only at
-/// rest, and reports the item the platform rests on when it differs from the declaration. Nothing is
-/// inferred about who moved the carousel; Reactor's own projections are recognized by their target.
+/// The controlled position of a carousel (spec 070 §5.4), an explicit state machine in two regions.
+/// <para>
+/// <b>Motion</b> (<see cref="CarouselMotion"/>): <c>Resting{rest}</c>, <c>Watching{input}</c>,
+/// <c>OwnProjecting{target, scrolls}</c> and <c>AwaitingAnswer{seq}</c>. <b>Items</b>: published, with
+/// a <i>deferred</i> transaction waiting for rest, and a <i>barrier window</i> open from a transaction
+/// until its epoch's completion. The platform's resting item is the truth: Reactor writes only from a
+/// verified rest (through the port's <c>ScrollTo</c>), publishes only at rest, and reports the item the
+/// platform rests on when the rest is input. Input is what the platform shows: a finger
+/// (<c>UserDragging</c>), motion while the port has no scroll of its own pending, or a ref's
+/// <c>ScrollToRequested</c>. Nothing else is inferred about who moved the carousel.
+/// </para>
 /// </summary>
 internal sealed class CarouselPositionController
 {
+    /// <summary>No verified rest since the indices changed (an items change, a new platform view): the next rest is projected unless input was seen.</summary>
+    internal const int Unknown = -1;
+
+    /// <summary>Scrolls toward one target before giving up on a platform that never lands there.</summary>
+    internal const int MaxScrolls = 3;
+
+    private const int IdleFrameLimit = 600;
+
     private readonly Func<int?> _declared;
     private readonly Func<bool> _animated;
     private readonly Action<Action> _writeSuppressed;
-    private readonly Action<int> _report;
+    private readonly Action<int, int> _report;
     private readonly Action _publish;
     private ICarouselPort? _port;
-
-    private int _generation;
     private bool _retired;
 
-    // Items and layout transactions (rule 3).
-    private bool _transactionPending;
-    private int _epoch;
-    private int _barrierFor = -1;
-    private bool _barrierPending;
-    private bool _windowInput;
-
-    // Projections (rule 2).
-    private int? _ownTarget;
-    private bool _userDuringOwn;
+    // ── Motion region ──
+    private CarouselMotion _motion;
+    private int _rest;
+    private bool _input;
+    private int _target;
+    private bool _targetAnimate;
+    private int _scrolls;
+    private int _reportSeq;
+    private bool _reportRan;
     private bool _inOwnScroll;
 
-    // The frame poll (rule 4).
-    private bool _polling;
-    private int _stableFrames;
-    private int _idleFrames;
-    private CarouselSample? _last;
+    // A declaration the platform never landed on: not projected again until the declaration or the items change.
+    private int? _gaveUpOn;
 
-    // The item the platform last rested on (a verified rest, or the mount's position): a rest on another
-    // item is input; a rest on the same one with another declaration is a declaration to project.
-    private int _lastRest;
-
-    // A report is on its way to the app: nothing is projected until the commit that answers it.
-    private bool _awaitingAnswer;
-    private int _ownRetries;
-
-    // The next projection jumps: it follows an items transaction (rule 3).
+    // The next projection is a jump: it follows an items transaction or a new platform view.
     private bool _jumpNext;
+
+    // ── Items region ──
+    private bool _deferred;
+    private int _epoch;
+    private int _barrierEpoch = -1;
+    private int _settledEpoch;
+    private bool _windowOpen;
+    private bool _windowInput;
+
+    // ── The poll (the clock of the motion region) ──
+    private bool _polling;
+    private int _pollId;
+    private int _still;
+    private int _idle;
+    private CarouselSample? _last;
 
     /// <param name="declared">The live declaration, clamped to the published items; <see langword="null"/> for none.</param>
     /// <param name="animated">Whether a declared change animates (the element's <c>IsScrollAnimated</c>).</param>
     /// <param name="writeSuppressed">Runs a write in the handler's echo scope.</param>
-    /// <param name="report">Reports a resting item, an index in the published items (posted, through <c>Live</c>, then restores; it must always restore, so the answer's commit arrives).</param>
+    /// <param name="report">Reports a resting item (an index in the published items) with its sequence number. The handler posts it,
+    /// calls <see cref="ReportRan"/> with the number when the post runs, and restores after it, so the answer's commit arrives.</param>
     /// <param name="publish">Publishes the live element's items and layout to MAUI, in the echo scope.</param>
     /// <param name="mounted">The position written at mount: where the platform rests first.</param>
-    public CarouselPositionController(Func<int?> declared, Func<bool> animated, Action<Action> writeSuppressed, Action<int> report, Action publish, int mounted)
+    public CarouselPositionController(Func<int?> declared, Func<bool> animated, Action<Action> writeSuppressed, Action<int, int> report, Action publish, int mounted)
     {
-        _lastRest = mounted;
+        _rest = mounted;
         _declared = declared;
         _animated = animated;
         _writeSuppressed = writeSuppressed;
@@ -98,7 +138,10 @@ internal sealed class CarouselPositionController
         _publish = publish;
     }
 
-    /// <summary>The platform's port; set lazily by the handler, or by tests.</summary>
+    /// <summary>
+    /// The platform port. Setting a new one (handler replacement) retires the old view's poll and barrier:
+    /// the new view starts at MAUI's position, so its first rest is projected (a jump), not reported.
+    /// </summary>
     public ICarouselPort? Port
     {
         get => _port;
@@ -106,157 +149,313 @@ internal sealed class CarouselPositionController
         {
             if (ReferenceEquals(_port, value)) return;
             _port = value;
-            // A new platform view (handler replacement): the old one's barrier, poll and projection retire.
-            _generation++;
+            _pollId++;
             _polling = false;
-            _barrierPending = false;
-            _barrierFor = -1;
+            _windowOpen = false;
+            _barrierEpoch = -1;
             _windowInput = false;
-            _ownTarget = null;
+            _rest = Unknown;
+            _input = false;
+            _jumpNext = true;
+            if (_motion is CarouselMotion.Watching or CarouselMotion.OwnProjecting) _motion = CarouselMotion.Resting;
             if (_port is null) return;
             _port.Watch(OnTrigger);
-            // A new platform view: look at where it rests (a declaration may have changed before it existed).
+            if (_motion == CarouselMotion.Resting) _motion = CarouselMotion.Watching;
             ArmPoll();
         }
     }
 
-    /// <summary>Test witnesses.</summary>
+    // Witnesses for tests and fixtures.
+    internal CarouselMotion Motion => _motion;
     internal int Projections { get; private set; }
     internal int Publications { get; private set; }
     internal int BarriersIssued { get; private set; }
-    internal bool TransactionPending => _transactionPending;
+    internal bool TransactionPending => _deferred;
     internal bool Polling => _polling;
-    internal bool AwaitingAnswer => _awaitingAnswer;
-    internal bool BarrierPending => _barrierPending;
-    internal int? OwnTarget => _ownTarget;
+    internal bool AwaitingAnswer => _motion == CarouselMotion.AwaitingAnswer;
+    internal bool BarrierPending => _windowOpen;
+    internal int? OwnTarget => _motion == CarouselMotion.OwnProjecting ? _target : null;
+    internal int? GaveUpOn => _gaveUpOn;
 
     /// <summary>
-    /// A commit. <paramref name="transaction"/>: the element's items structure or layout differs from
-    /// what's published. Projects the declaration at rest; defers a transaction while the carousel moves.
+    /// A commit of the element (not its mount). <paramref name="transaction"/>: the items or layout differ
+    /// from the published ones. Only the commit after the pending report ran answers it.
     /// </summary>
     public void Commit(bool transaction)
     {
         if (_retired) return;
-        _awaitingAnswer = false;
-        if (transaction) _transactionPending = true;
-        if (_transactionPending)
+        if (transaction) _deferred = true;
+        if (_gaveUpOn is { } stuck && _declared() != stuck) _gaveUpOn = null;
+        switch (_motion)
         {
-            if (IsMoving()) ArmPoll();
-            else ApplyTransaction();
-            return;
+            case CarouselMotion.AwaitingAnswer:
+                if (!_reportRan) return;
+                // The answer: verify the rest again (the user may have moved meanwhile), then decide.
+                _motion = CarouselMotion.Watching;
+                _input = false;
+                if (_port is null) Rested(null);
+                else ArmPoll();
+                return;
+            case CarouselMotion.Resting:
+                Decide(_port?.Sample());
+                return;
+            case CarouselMotion.Watching:
+                // Nothing laid out can't move under a finger: a transaction applies (an empty carousel's first items).
+                if (_deferred && _port?.Sample() is null) ApplyTransaction();
+                return;
+            default:
+                // OwnProjecting: its rest projects the newest declaration.
+                return;
         }
-        Project(_animated());
     }
 
-    /// <summary>A platform signal (an event outside Reactor's scope, a scroller interaction): look again.</summary>
-    public void OnTrigger() => ArmPoll();
-
-    /// <summary>MAUI's <c>ScrollToRequested</c>: from Reactor's own projection, or a ref command (input).</summary>
-    public void OnScrollToRequested()
+    /// <summary>The report numbered <paramref name="seq"/> was delivered: the next commit answers it.</summary>
+    public void ReportRan(int seq)
     {
-        if (_retired || _inOwnScroll) return;
-        // A ref's ScrollTo is input: it ends any own projection and wins over a pending one.
-        _ownTarget = null;
-        if (_barrierPending) _windowInput = true;
+        if (_motion == CarouselMotion.AwaitingAnswer && seq == _reportSeq) _reportRan = true;
+    }
+
+    /// <summary>A MAUI event or a platform interaction: look at the platform until it rests.</summary>
+    public void OnTrigger()
+    {
+        if (_retired) return;
+        if (_motion == CarouselMotion.Resting)
+        {
+            _motion = CarouselMotion.Watching;
+            _input = false;
+        }
         ArmPoll();
     }
 
-    /// <summary>Unmount or a handler that's gone: nothing is written, published or reported after this.</summary>
+    /// <summary>MAUI's <c>ScrollToRequested</c>: outside Reactor's own scroll, a ref's command, which is input.</summary>
+    public void OnScrollToRequested()
+    {
+        if (_retired || _inOwnScroll) return;
+        if (_motion == CarouselMotion.Resting) _motion = CarouselMotion.Watching;
+        Input();
+        ArmPoll();
+    }
+
+    /// <summary>Unmount: nothing is written, published or reported after it.</summary>
     public void Retire()
     {
         _retired = true;
-        _generation++;
         _polling = false;
+        _pollId++;
     }
 
-    // Moving, or not yet verified at rest since the last signal.
-    private bool IsMoving() => _polling || _port?.Sample() is { Moving: true };
+    // Input observed: an own projection becomes the user's, a watched rest is input, the window has input.
+    private void Input()
+    {
+        if (_motion == CarouselMotion.OwnProjecting) _motion = CarouselMotion.Watching;
+        if (_motion == CarouselMotion.Watching) _input = true;
+        if (_windowOpen) _windowInput = true;
+        _jumpNext = false;
+    }
+
+    private bool IsInput(CarouselSample sample, ICarouselPort port) =>
+        sample.UserDragging || sample.Moving && !(_motion == CarouselMotion.OwnProjecting && port.ScrollPending);
+
+    // ── At a verified rest ───────────────────────────────────────────────────
+
+    private void Rested(CarouselSample? sample)
+    {
+        switch (_motion)
+        {
+            case CarouselMotion.OwnProjecting:
+                OwnRested(sample);
+                return;
+            case CarouselMotion.Watching:
+            case CarouselMotion.Resting:
+                WatchRested(sample);
+                return;
+            default:
+                // AwaitingAnswer: the answer starts a fresh verification.
+                return;
+        }
+    }
+
+    // An own projection's rest: never reported.
+    private void OwnRested(CarouselSample? sample)
+    {
+        _motion = CarouselMotion.Resting;
+        if (sample is not { } now)
+        {
+            _rest = Unknown;
+            Decide(null);
+            return;
+        }
+        if (_windowOpen)
+        {
+            // MAUI's work for the change isn't done: the completion projects.
+            _rest = now.Shown == _target ? _target : Unknown;
+            return;
+        }
+        if (now.Shown == _target && now.Aligned)
+        {
+            _rest = _target;
+            Decide(now);
+            return;
+        }
+        if (_declared() != _target)
+        {
+            // Superseded by a newer declaration: wherever it stopped isn't input.
+            _rest = now.Shown;
+            Decide(now);
+            return;
+        }
+        if (_scrolls >= MaxScrolls)
+        {
+            Microsoft.UI.Reactor.Core.Diagnostics.DiagnosticLog.Warning(Microsoft.UI.Reactor.Core.Diagnostics.LogCategory.Reactor,
+                "CarouselView.Position", $"The carousel didn't come to rest at item {_target} after {_scrolls} scrolls; it stays where it is until the declaration or the items change.");
+            _gaveUpOn = _target;
+            _rest = now.Shown;
+            return;
+        }
+        // Short of its target or off center (interrupted): asked again, as the original was.
+        _motion = CarouselMotion.OwnProjecting;
+        OwnScroll(_target, _targetAnimate);
+    }
+
+    private void WatchRested(CarouselSample? sample)
+    {
+        _motion = CarouselMotion.Resting;
+        var input = _input;
+        _input = false;
+        if (sample is not { } now)
+        {
+            Decide(null);
+            return;
+        }
+        // In the barrier window the completion decides (input there is kept in _windowInput).
+        if (_windowOpen) return;
+        var moved = _rest == Unknown ? input : now.Shown != _rest;
+        // Moved, to an item other than the declared one: input, reported once. With a deferred
+        // transaction the declaration is in the new items' indices: any move is reported first.
+        if (moved && (_deferred || now.Shown != _declared()))
+        {
+            Report(now.Shown);
+            return;
+        }
+        _rest = now.Shown;
+        Decide(now);
+    }
+
+    private void Report(int shown)
+    {
+        _rest = shown;
+        _motion = CarouselMotion.AwaitingAnswer;
+        _reportRan = false;
+        _jumpNext = false;
+        _report(shown, ++_reportSeq);
+    }
+
+    // From Resting: apply a deferred transaction, or project the declaration.
+    private void Decide(CarouselSample? sample)
+    {
+        if (sample is { } moving && (moving.Moving || moving.UserDragging))
+        {
+            // Something moves that no poll has verified: watch it (it isn't Reactor's).
+            _motion = CarouselMotion.Watching;
+            Input();
+            ArmPoll();
+            return;
+        }
+        if (_deferred)
+        {
+            ApplyTransaction();
+            return;
+        }
+        if (_windowOpen || sample is not { } now) return;
+        if (_rest != Unknown && now.Shown != _rest)
+        {
+            // It changed without a verified rest: verify first.
+            _motion = CarouselMotion.Watching;
+            ArmPoll();
+            return;
+        }
+        _rest = now.Shown;
+        if (_declared() is { } target && (now.Shown != target || !now.Aligned) && _gaveUpOn != target)
+        {
+            OwnScroll(target, _animated());
+            return;
+        }
+        _jumpNext = false;
+    }
+
+    // ── Items transactions and their barriers ────────────────────────────────
 
     private void ApplyTransaction()
     {
-        _transactionPending = false;
+        _deferred = false;
         _publish();
         Publications++;
         _epoch++;
-        _barrierPending = true;
         _windowInput = false;
-        // Indices moved with the items: any rest after the window that isn't the projection is input.
-        _lastRest = -1;
+        _gaveUpOn = null;
+        // Indices moved with the items: the next rest is projected unless input is seen.
+        _rest = Unknown;
         // The same-turn jump makes MAUI's Android carousel skip its deferred correction (its ScrollTo
         // counter), so no frame shows item 0; on iOS the published items already show the right item.
         if (_declared() is { } target) OwnScroll(target, animate: false);
+        _jumpNext = true;
         IssueBarrier();
     }
 
     private void IssueBarrier()
     {
-        if (_port is not { } port) { _barrierPending = false; return; }
+        if (_port is not { } port)
+        {
+            _windowOpen = false;
+            return;
+        }
         var epoch = _epoch;
-        var generation = _generation;
         var owner = port.Owner;
-        _barrierFor = epoch;
+        _barrierEpoch = epoch;
+        _windowOpen = true;
         BarriersIssued++;
-        if (!port.Barrier(() => BarrierDone(port, owner, epoch, generation)))
+        if (!port.Barrier(() => BarrierDone(port, owner, epoch)))
         {
             // No native view yet: nothing of MAUI's is pending either.
-            _barrierFor = -1;
-            _barrierPending = false;
+            _barrierEpoch = -1;
+            _windowOpen = false;
         }
     }
 
-    private void BarrierDone(ICarouselPort port, object? owner, int epoch, int generation)
+    private void BarrierDone(ICarouselPort port, object? owner, int epoch)
     {
-        if (_retired || generation != _generation || !ReferenceEquals(port, _port) || !ReferenceEquals(port.Owner, owner)) return;
+        if (_retired || !ReferenceEquals(port, _port) || !ReferenceEquals(port.Owner, owner)) return;
         if (epoch != _epoch)
         {
-            // Obsolete: a newer transaction owns the window. It neither projects nor releases.
-            if (_barrierFor != _epoch) IssueBarrier();
+            // Obsolete: a newer transaction owns the window. It neither projects nor closes it; it
+            // reissues the current epoch's barrier when that one couldn't be issued.
+            if (_barrierEpoch != _epoch && _settledEpoch != _epoch) IssueBarrier();
             return;
         }
-        _barrierFor = -1;
-        _barrierPending = false;
-        if (_windowInput)
+        _settledEpoch = epoch;
+        _barrierEpoch = -1;
+        _windowOpen = false;
+        var sample = port.Sample();
+        if (_windowInput || sample is { } now && IsInput(now, port))
         {
-            // A drag, a settle or a ref command during the window: the user's, reported at rest.
+            // Input during the window (a drag, a settle, a ref command): the user's, reported at rest.
             _windowInput = false;
-            _ownTarget = null;
+            _jumpNext = false;
+            if (_motion is CarouselMotion.Resting or CarouselMotion.OwnProjecting) _motion = CarouselMotion.Watching;
+            if (_motion == CarouselMotion.Watching) _input = true;
             ArmPoll();
             return;
         }
-        if (_transactionPending) { Commit(false); return; }
-        // MAUI's work for the change is done: the declaration is projected now, as a jump, unless the
-        // platform moves (then at rest, still as a jump). Our own same-turn jump's poll doesn't defer it.
-        _jumpNext = true;
-        if (port.Sample() is { Moving: false } sample && !_awaitingAnswer)
+        // Without input, whatever the platform shows is MAUI's processing: the declaration is projected (a jump).
+        if (_motion == CarouselMotion.Resting)
         {
-            _jumpNext = false;
-            if (_declared() is { } target && (sample.Shown != target || !sample.Aligned)) OwnScroll(target, animate: false);
-            else _lastRest = sample.Shown;
-            return;
+            _rest = Unknown;
+            Decide(sample);
         }
-        ArmPoll();
+        // Watching or OwnProjecting: their rest decides.
     }
 
-    /// <summary>Projects the declaration if the carousel rests elsewhere or between items (rule 2).</summary>
-    private void Project(bool animate)
-    {
-        if (_retired || _port is not { } port || _transactionPending || _barrierPending || _awaitingAnswer) return;
-        if (port.Sample() is not { } sample)
-        {
-            ArmPoll();
-            return;
-        }
-        if (sample.Moving || _polling)
-        {
-            // Moving (the user's, or an own projection still settling), or not yet verified at rest:
-            // projected at rest (AtRest finds the declaration changed while the item stayed).
-            ArmPoll();
-            return;
-        }
-        if (_declared() is not { } target) return;
-        if (sample.Shown != target || !sample.Aligned) OwnScroll(target, animate);
-        else _lastRest = sample.Shown;
-    }
+    // ── Writes ───────────────────────────────────────────────────────────────
 
     private void OwnScroll(int target, bool animate)
     {
@@ -266,18 +465,11 @@ internal sealed class CarouselPositionController
             _jumpNext = false;
             animate = false;
         }
-        _ownRetries = _ownTarget == target ? _ownRetries + 1 : 0;
-        if (_ownRetries > 2)
-        {
-            // The platform doesn't land where it's asked to: stop, rather than scroll forever.
-            Microsoft.UI.Reactor.Core.Diagnostics.DiagnosticLog.Warning(Microsoft.UI.Reactor.Core.Diagnostics.LogCategory.Reactor,
-                "CarouselView.Position", $"The carousel didn't come to rest at item {target} after {_ownRetries} scrolls; giving up until the next commit.");
-            _ownTarget = null;
-            _ownRetries = 0;
-            return;
-        }
-        _ownTarget = target;
-        _userDuringOwn = false;
+        _scrolls = _motion == CarouselMotion.OwnProjecting && _target == target ? _scrolls + 1 : 1;
+        _motion = CarouselMotion.OwnProjecting;
+        _target = target;
+        _targetAnimate = animate;
+        _input = false;
         Projections++;
         _inOwnScroll = true;
         try
@@ -291,112 +483,46 @@ internal sealed class CarouselPositionController
         ArmPoll();
     }
 
+    // ── The poll ─────────────────────────────────────────────────────────────
+
     private void ArmPoll()
     {
         if (_retired || _polling || _port is not { } port) return;
         _polling = true;
-        _stableFrames = 0;
-        _idleFrames = 0;
+        _still = 0;
+        _idle = 0;
         _last = null;
-        var generation = _generation;
-        port.NextFrame(() => Frame(port, generation));
+        var id = ++_pollId;
+        port.NextFrame(() => Frame(port, id));
     }
 
-    private void Frame(ICarouselPort port, int generation)
+    private void Frame(ICarouselPort port, int id)
     {
-        if (_retired || generation != _generation || !ReferenceEquals(port, _port) || !_polling) return;
-        var sample = port.Sample();
-        if (sample is not { } now)
+        if (_retired || id != _pollId || !ReferenceEquals(port, _port) || !_polling) return;
+        if (port.Sample() is not { } now)
         {
-            // Not laid out: keep looking for a while (a handler arriving), then stop.
-            if (++_idleFrames > 600) { _polling = false; return; }
-            port.NextFrame(() => Frame(port, generation));
+            // Nothing laid out: keep looking for a while (a handler arriving), then rest on nothing.
+            if (++_idle > IdleFrameLimit)
+            {
+                _polling = false;
+                Rested(null);
+                return;
+            }
+            port.NextFrame(() => Frame(port, id));
             return;
         }
-        if (now.UserDragging)
-        {
-            if (_ownTarget is not null) _userDuringOwn = true;
-            if (_barrierPending) _windowInput = true;
-        }
+        _idle = 0;
+        if (IsInput(now, port)) Input();
         var moved = now.Moving || _last is not { } last || last.Shown != now.Shown || Math.Abs(last.Offset - now.Offset) > 0.5;
         _last = now;
-        if (moved)
+        // Rest: two still frames, and no scroll of the port's own on its way.
+        if (moved || _motion == CarouselMotion.OwnProjecting && port.ScrollPending || ++_still < 2)
         {
-            _stableFrames = 0;
-            port.NextFrame(() => Frame(port, generation));
-            return;
-        }
-        // Two still frames make a rest; short of an own projection's target, a longer stillness (an
-        // animation that hasn't started yet looks still too).
-        var required = _ownTarget is { } own && !(now.Shown == own && now.Aligned) ? 12 : 2;
-        if (++_stableFrames < required)
-        {
-            port.NextFrame(() => Frame(port, generation));
+            if (moved) _still = 0;
+            port.NextFrame(() => Frame(port, id));
             return;
         }
         _polling = false;
-        AtRest(now);
-    }
-
-    /// <summary>A verified rest (rule 4): apply a waiting transaction, end an own projection, or report.</summary>
-    private void AtRest(CarouselSample sample)
-    {
-        if (_awaitingAnswer) return;
-        if (_transactionPending)
-        {
-            // The user moved during the transaction's wait: that comes first (mapped to the new items
-            // by key, by the handler); the answer's commit applies the transaction.
-            if (sample.Shown != _lastRest && _ownTarget is null)
-            {
-                _lastRest = sample.Shown;
-                _awaitingAnswer = true;
-                _report(sample.Shown);
-                return;
-            }
-            ApplyTransaction();
-            return;
-        }
-        // The barrier's completion acts for the window.
-        if (_barrierPending) return;
-        var declared = _declared();
-        if (_ownTarget is { } own && !_userDuringOwn)
-        {
-            // An own projection's settle (rule 5), at its target or short of it if a newer declaration
-            // superseded it: never reported; the newest declaration is projected.
-            _lastRest = sample.Shown;
-            // Short of the declaration or off center (an interrupted scroll): asked again, up to the cap.
-            if (declared is { } d && (sample.Shown != d || !sample.Aligned))
-            {
-                // Keep the target for the retry count only when it's the same projection again.
-                if (d != own) _ownTarget = null;
-                OwnScroll(d, _animated());
-            }
-            else
-            {
-                _ownTarget = null;
-                _ownRetries = 0;
-            }
-            return;
-        }
-        _ownTarget = null;
-        _userDuringOwn = false;
-        var moved = sample.Shown != _lastRest;
-        _lastRest = sample.Shown;
-        if (declared is not { } target) return;
-        if (sample.Shown != target)
-        {
-            // Rested on another item than before: input, reported once (the restore that follows projects
-            // the app's answer: refused, back to the declaration; accepted, aligned). Same item as before:
-            // the declaration changed meanwhile, and is projected.
-            if (moved)
-            {
-                _awaitingAnswer = true;
-                _report(sample.Shown);
-            }
-            else OwnScroll(target, _animated());
-            return;
-        }
-        // At the declared item, but between pages (rule 6): aligned without a report.
-        if (!sample.Aligned) OwnScroll(target, animate: true);
+        Rested(now);
     }
 }

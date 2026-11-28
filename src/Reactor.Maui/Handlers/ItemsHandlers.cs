@@ -545,6 +545,12 @@ internal sealed class ReactorCarouselView : MauiCarouselView
     public ItemsHost Host = null!;
     public CarouselPositionController Controller = null!;
 
+    /// <summary>
+    /// No platform port exists here (Windows until 4g): the position falls back to writing
+    /// <c>Position</c> and reporting <c>PositionChanged</c>, without the drag safety of spec 070 §5.4.
+    /// </summary>
+    internal bool Portless { get; set; }
+
     /// <summary>The element whose items and layout MAUI has (spec 070 §5.4 rule 3: published only at rest).</summary>
     public CarouselViewElement? Published;
 }
@@ -568,13 +574,14 @@ internal sealed class CarouselViewHandler : ViewHandler<CarouselViewElement, Rea
             declared: () => Clamp(live.Live?.Position, host.Items.Count),
             animated: () => live.Live?.IsScrollAnimated ?? true,
             writeSuppressed: write => live.WriteSuppressed(view, write),
-            report: shown =>
+            report: (shown, seq) =>
             {
                 // The shown index is in the published items; the app's are the element's (they differ only
                 // while a transaction waits): mapped by key. An item that's gone isn't reported.
                 var key = shown < host.Items.Count ? host.Items[shown].Key : null;
                 live.PostReport(() =>
                 {
+                    view.Controller.ReportRan(seq);
                     if (live.Live is not { } current || key is null) return;
                     var index = IndexOfKey(current, key);
                     if (index >= 0) current.OnPositionChanged?.Invoke(index);
@@ -585,13 +592,55 @@ internal sealed class CarouselViewHandler : ViewHandler<CarouselViewElement, Rea
                 if (live.Live is { } current) Publish(live, view, current);
             },
             mounted: Clamp(element.Position, element.Items.Count) ?? 0);
+        view.Portless = !CarouselPorts.IsSupported;
         // MAUI's events are signals to look at the platform, never the reported value (rule 4).
-        view.PositionChanged += (_, _) => view.Controller.OnTrigger();
+        view.PositionChanged += (_, _) =>
+        {
+            if (Fallback(view)) ReportFallback(live, view);
+            else view.Controller.OnTrigger();
+        };
         view.CurrentItemChanged += (_, _) => view.Controller.OnTrigger();
         view.Scrolled += (_, _) => view.Controller.OnTrigger();
         view.ScrollToRequested += (_, _) => view.Controller.OnScrollToRequested();
-        view.HandlerChanged += (_, _) => view.Controller.Port = view.Handler is null ? null : CarouselPorts.Create(view);
+        view.HandlerChanged += (_, _) =>
+        {
+            var port = view.Handler is null ? null : CarouselPorts.Create(view);
+            if (port is not null) view.Portless = false;
+            view.Controller.Port = port;
+        };
         return view;
+    }
+
+    // Without a port (Windows until 4g), MAUI's own Position is the value: written on change, reported
+    // from PositionChanged outside the echo scope, restored after the callback.
+    private static bool Fallback(ReactorCarouselView view) => view.Portless && view.Controller.Port is null;
+
+    private static void ReportFallback(HandlerContext<CarouselViewElement> context, ReactorCarouselView view)
+    {
+        if (context.IsEchoing(view)) return;
+        var position = view.Position;
+        var key = position >= 0 && position < view.Host.Items.Count ? view.Host.Items[position].Key : null;
+        context.PostReport(() =>
+        {
+            if (context.Live is not { } current || key is null) return;
+            var index = IndexOfKey(current, key);
+            if (index >= 0) current.OnPositionChanged?.Invoke(index);
+        }, restore: true);
+    }
+
+    private static bool s_fallbackLogged;
+
+    private static void ApplyFallback(HandlerContext<CarouselViewElement> context, ReactorCarouselView view, CarouselViewElement next)
+    {
+        if (!s_fallbackLogged)
+        {
+            s_fallbackLogged = true;
+            Microsoft.UI.Reactor.Core.Diagnostics.DiagnosticLog.Warning(Microsoft.UI.Reactor.Core.Diagnostics.LogCategory.Reactor, "CarouselView.Position",
+                "This platform has no carousel port yet: the position is written and reported as MAUI reports it, without the drag safety of iOS and Android (that arrives with the Windows port, phase 4g).");
+        }
+        Publish(context, view, next);
+        if (Clamp(next.Position, next.Items.Count) is { } position && view.Position != position)
+            context.WriteSuppressed(view, () => view.Position = position);
     }
 
     private static int IndexOfKey(CarouselViewElement element, string key)
@@ -619,9 +668,14 @@ internal sealed class CarouselViewHandler : ViewHandler<CarouselViewElement, Rea
             context.WriteSuppressed(view, () => view.Position = Clamp(next.Position, next.Items.Count) ?? 0);
             return;
         }
+        if (Fallback(view))
+        {
+            ApplyFallback(context, view, next);
+            return;
+        }
         if (ReferenceEquals(previous, next))
         {
-            // A restore after a report: project the declaration.
+            // A restore after a report: the answer's commit.
             view.Controller.Commit(transaction: false);
             return;
         }

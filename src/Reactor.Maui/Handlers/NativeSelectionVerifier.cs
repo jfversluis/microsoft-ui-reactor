@@ -160,26 +160,9 @@ internal sealed class NativeSelectionVerifier(
     {
         public object? Owner => view.Handler?.PlatformView;
 
-        private UIKit.UICollectionView? Native()
-        {
-            if (view.Handler?.PlatformView is not UIKit.UIView root) return null;
-            var pending = new Stack<UIKit.UIView>();
-            pending.Push(root);
-            while (pending.Count > 0)
-            {
-                var next = pending.Pop();
-                if (next is UIKit.UICollectionView found) return found;
-                foreach (var child in next.Subviews) pending.Push(child);
-            }
-            return null;
-        }
+        private UIKit.UICollectionView? Native() => UIKitCollections.Find(view);
 
-        public bool Barrier(Action completion)
-        {
-            if (Native() is not { } native) return false;
-            native.PerformBatchUpdates(null, _ => completion());
-            return true;
-        }
+        public bool Barrier(Action completion) => UIKitCollections.Barrier(view, completion);
 
         public IReadOnlyCollection<ItemBox> Selected()
         {

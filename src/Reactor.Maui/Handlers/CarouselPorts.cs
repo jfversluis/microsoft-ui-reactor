@@ -3,6 +3,13 @@ namespace Microsoft.UI.Reactor.Maui.Handlers;
 /// <summary>The carousel's platform port (spec 070 §5.4): what each platform reads and how it waits.</summary>
 internal static class CarouselPorts
 {
+    /// <summary>Whether this platform has a port; without one the carousel falls back to MAUI's own <c>Position</c> (spec 070 §5.13).</summary>
+#if IOS || MACCATALYST || ANDROID
+    public const bool IsSupported = true;
+#else
+    public const bool IsSupported = false;
+#endif
+
     public static ICarouselPort? Create(ReactorCarouselView view)
     {
 #if IOS || MACCATALYST
@@ -26,6 +33,11 @@ internal static class CarouselPorts
         private Action? _onInteraction;
         private UIKit.UIScrollView? _watched;
         private Foundation.NSObject? _watchToken;
+
+        // The port's own scroll on its way: its target offset (or, through MAUI's ScrollTo, its item) and when it started.
+        private long _pendingSince;
+        private double? _pendingOffset;
+        private int _pendingIndex = -1;
 
         public object? Owner => view.Handler?.PlatformView;
 
@@ -92,7 +104,31 @@ internal static class CarouselPorts
         // Position write is debounced. MAUI's ScrollTo remains the fallback.
         public void ScrollTo(int index, bool animate)
         {
-            if (!OffsetScroll(index, animate)) view.ScrollTo(index, position: ScrollToPosition.Center, animate: animate);
+            _pendingOffset = null;
+            _pendingIndex = -1;
+            if (OffsetScroll(index, animate)) return;
+            view.ScrollTo(index, position: ScrollToPosition.Center, animate: animate);
+            _pendingIndex = index;
+            _pendingSince = System.Diagnostics.Stopwatch.GetTimestamp();
+        }
+
+        // UIKit animates setContentOffset toward the offset the port computed: pending until the scroller
+        // is there, a finger takes it, or the bound (above UIKit's animation) passes.
+        public bool ScrollPending
+        {
+            get
+            {
+                if (_pendingOffset is null && _pendingIndex < 0) return false;
+                var done = System.Diagnostics.Stopwatch.GetElapsedTime(_pendingSince) > ScrollBridge.SettleBound
+                    || _watched is { Tracking: true }
+                    || (_pendingOffset is { } offset
+                        ? _watched is null || Math.Abs(_watched.ContentOffset.X - offset) <= 0.5
+                        : Sample() is { } sample && sample.Shown == _pendingIndex && sample.Aligned);
+                if (!done) return true;
+                _pendingOffset = null;
+                _pendingIndex = -1;
+                return false;
+            }
         }
 
         private bool OffsetScroll(int index, bool animate)
@@ -108,29 +144,17 @@ internal static class CarouselPorts
             var max = scroller.ContentSize.Width - scroller.Bounds.Width + scroller.AdjustedContentInset.Right;
             if (target < min - 0.5 || target > max + 0.5) return false;
             scroller.SetContentOffset(new CoreGraphics.CGPoint(target, scroller.ContentOffset.Y), animate);
-            return true;
-        }
-
-        public bool Barrier(Action completion)
-        {
-            if (Collection() is not { } native) return false;
-            native.PerformBatchUpdates(null, _ => completion());
-            return true;
-        }
-
-        private UIKit.UICollectionView? Collection()
-        {
-            if (view.Handler?.PlatformView is not UIKit.UIView root) return null;
-            var pending = new Stack<UIKit.UIView>();
-            pending.Push(root);
-            while (pending.Count > 0)
+            if (animate)
             {
-                var next = pending.Pop();
-                if (next is UIKit.UICollectionView found) return found;
-                foreach (var child in next.Subviews) pending.Push(child);
+                _pendingOffset = target;
+                _pendingSince = System.Diagnostics.Stopwatch.GetTimestamp();
             }
-            return null;
+            return true;
         }
+
+        public bool Barrier(Action completion) => UIKitCollections.Barrier(view, completion);
+
+        private UIKit.UICollectionView? Collection() => UIKitCollections.Find(view);
 
         public void NextFrame(Action callback)
         {
@@ -158,10 +182,15 @@ internal static class CarouselPorts
 
         private AndroidX.RecyclerView.Widget.RecyclerView? Recycler() => view.Handler?.PlatformView as AndroidX.RecyclerView.Widget.RecyclerView;
 
+        // The port's own scroll on its way: when it started (MAUI's Android ScrollTo is synchronous: a smooth
+        // scroller started, or a jump's layout requested, before it returns).
+        private long _pendingSince;
+        private bool _pending;
+
+        // MAUI's Android carousel sets its initial position synchronously when the handler connects
+        // (SetUpNewElement), so unlike iOS there's no later positioning to wait for.
         public CarouselSample? Sample()
         {
-            // Not ready until MAUI has made its initial positioning (it sets CurrentItem then).
-            if (view.CurrentItem is null) return null;
             if (Recycler() is not { } rv || !rv.IsAttachedToWindow || rv.Width <= 0) return null;
             Watch(rv);
             var density = rv.Context?.Resources?.DisplayMetrics?.Density ?? 1;
@@ -216,8 +245,29 @@ internal static class CarouselPorts
             rv.AddOnScrollListener(new Listener(notify));
         }
 
-        public void ScrollTo(int index, bool animate) =>
+        public void ScrollTo(int index, bool animate)
+        {
+            _pending = true;
+            _pendingSince = System.Diagnostics.Stopwatch.GetTimestamp();
             view.ScrollTo(index, position: ScrollToPosition.Center, animate: animate);
+        }
+
+        // The layout manager's smooth scroller runs, its remaining scroll settles (the scroller stops itself
+        // once the target is laid out and hands the rest to the RecyclerView's flinger: measured), or the
+        // jump's layout is pending; a finger, the end of all three, or the bound ends it.
+        public bool ScrollPending
+        {
+            get
+            {
+                if (!_pending) return false;
+                _pending = Recycler() is { } rv
+                    && System.Diagnostics.Stopwatch.GetElapsedTime(_pendingSince) <= ScrollBridge.SettleBound
+                    && rv.ScrollState != AndroidX.RecyclerView.Widget.RecyclerView.ScrollStateDragging
+                    && (rv.GetLayoutManager()?.IsSmoothScrolling == true || rv.IsLayoutRequested || rv.IsComputingLayout
+                        || rv.ScrollState == AndroidX.RecyclerView.Widget.RecyclerView.ScrollStateSettling);
+                return _pending;
+            }
+        }
 
         // After MAUI's deferred handling of the change (its Dispatch, posted earlier), the layout, and
         // the RecyclerView's item animations: a ScrollTo during those lands one item off (§5.1).
