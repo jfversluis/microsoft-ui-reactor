@@ -44,6 +44,12 @@ public sealed class LayoutBridge : Layout, IVisualTreeElement
         if (shield) Resources = new ResourceDictionary { ShieldStyle };
     }
 
+    /// <summary>A bridge whose own dictionary holds <paramref name="nodeShield"/> (round 8, L1: the node's private shield).</summary>
+    public LayoutBridge(IView presented, Style nodeShield) : this(presented)
+    {
+        Resources = new ResourceDictionary { nodeShield };
+    }
+
     public static LayoutBridge? Of(IView view) => Bridges.TryGetValue(view, out var bridge) ? bridge : null;
 
     protected override void OnHandlerChanging(HandlerChangingEventArgs args)

@@ -52,6 +52,7 @@ public static partial class Fixtures
         .. LookRound5CharacterizationFixtures(),
         .. LookRound6CharacterizationFixtures(),
         .. LookRound7CharacterizationFixtures(),
+        .. LookRound8CharacterizationFixtures(),
         new("NavigationStack_PushReachesThePlatform_AndBackIsReported", NavigationBack),
         new("NavigationStack_BackDuringThePushAnimation_IsReported", NavigationBackDuringPush),
         new("NavigationStack_BackTheAppRefuses_PushesThePageBack", NavigationRefusedBack),
