@@ -156,6 +156,10 @@ public static partial class Fixtures
         Check(landed, "the projection landed on item 3");
         Check(longestUnprotected < 2, $"no stillness on the way the port doesn't cover with its pending scroll (longest {longestUnprotected} frames; two still frames make a rest)");
         Equal(0, uncovered, "the port covers its own scroll's motion (else it would be taken for input)");
+        // The port's contract: its scroll pending while it runs (positive witness), not once it has landed.
+        Check(frames.Any(f => f.EndsWith('p')), "the port reported its scroll pending while it ran");
+        await CarouselSettled(c, view);
+        Check(!port.ScrollPending, "and not pending once it landed");
         Check(offsets.Count >= 3, $"the animation passed through several distinct offsets before landing ({offsets.Count}; positive witness: it moved frame by frame)");
         await CarouselSettled(c, view);
         Equal(0, state.Reports.Count, "an own projection isn't reported");
@@ -271,7 +275,8 @@ public static partial class Fixtures
             var reportsWhileMoving = new List<string>();
             var mauiEventsWhileMoving = 0;
             view.PositionChanged += (_, _) => { if (view.Controller.Port?.Sample() is { Moving: true }) mauiEventsWhileMoving++; };
-            await CarouselPlatform.Drag(view, new Drag(-240, 400, 300), _ => { }, async () =>
+            // Held long enough for the look while it moves (the host drag fails if the finger lifts during it).
+            await CarouselPlatform.Drag(view, new Drag(-240, 400, 1200), _ => { }, async () =>
             {
                 await Task.Delay(200);
                 await c.Drain();
