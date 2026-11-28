@@ -107,9 +107,11 @@ inside the change, and divergence, threads and settling in round two (§2.1.5–
 characterized on Android (and the latter on Mac Catalyst) first (§2.1.8). A fourth, on `938621cb`, raised
 G1–G4; non-detaching insertion and the enabling layers were characterized on all four devices (§2.1.9). A
 fifth, on `da45a0d0`, raised H1, H2 and M1; one bridge topology was characterized on all four devices with
-the real `IVisualTreeElement` overrides (§2.1.10).
+the real `IVisualTreeElement` overrides (§2.1.10). A sixth, on `2da9d63c`, raised J1–J4; the projected layouts'
+implicit styles, the first direct child, input transparency and the styles that reach Reactor's own nodes were
+characterized on all four devices (§2.1.11).
 
-### 2.1 Characterization (device, `LookCharacterization.cs`, `LookReviewCharacterization.cs`, `LookRound2Characterization.cs`, `LookRound3Characterization.cs`, `LookRound4Characterization.cs`, `LookRound5Characterization.cs`)
+### 2.1 Characterization (device, `LookCharacterization.cs`, `LookReviewCharacterization.cs`, `LookRound2Characterization.cs`, `LookRound3Characterization.cs`, `LookRound4Characterization.cs`, `LookRound5Characterization.cs`, `LookRound6Characterization.cs` with `tests/Reactor.Maui.DeviceTests.Shadow`)
 
 The baseline is plain MAUI 11.0.0 (`4e6582f`), then the same trees through Reactor on both registries.
 Devices: Mac Catalyst 26.7, the iPhone simulator (iOS 27.0), the iPad simulator (iOS 27.2) and the
@@ -493,6 +495,162 @@ bridge as visual parent, and the bridge reports the direct layout: an upward wal
 bookkeeping hop, while the downward walk never shows it. Wrapping B in a Controls container doesn't help (the
 wrapper's visual parent is again its logical parent).
 
+#### 2.1.11 Projected layouts' styles, the first direct child, input transparency (review round 6, J1–J3)
+
+All four devices, the same on each except where stated. The source is MAUI 11 at `4e6582f`.
+
+**What MAUI does.**
+- **Implicit styles key on the element's own type.** `StyleableElement`'s constructor builds `MergedStyle(GetType(),
+  this)` (`StyleableElement.cs` 20). `MergedStyle.RegisterImplicitStyles` registers one dynamic resource per type
+  from `GetType()` up to `View`, keyed by `Type.FullName`. `OnImplicitStyleChanged` applies the first style found,
+  and a base type's style only if it has `ApplyToDerivedTypes`. `ReRegisterImplicitStyles`, the only other path,
+  is internal and has no callers. A subclass is therefore a different first key: an app's
+  `VerticalStackLayout` style without `ApplyToDerivedTypes` doesn't reach it. That is the same gap `ReactorScrollView`
+  documents (`ScrollBridge.cs` 5–8).
+- **A stock layout enumerates its logical children.** `Element`'s `IVisualTreeElement.GetVisualChildren()` returns
+  `LogicalChildrenInternal` (`Element.cs` 616–617), and `Layout` lists the interface without re-implementing it.
+- **The input-transparency cascade walks `Parent` through containers only.** `InputTransparentCore`
+  (`VisualElement.cs` 688–709) climbs `Parent` while it is an `IInputTransparentContainerElement`, an internal
+  interface that Controls' `Layout` implements. A child's explicit `false` doesn't escape a cascading ancestor.
+  A container propagates `CascadeInputTransparent` changes only while it is transparent
+  (`InputTransparentContainerElement.cs`). Natively a layout's transparency covers only itself (iOS
+  `LayoutView.HitTest`; Android `LayoutViewGroup.OnTouchEvent`), so the cascade exists only as each child's
+  coerced value.
+- **Coerced locals can lose to a style that attaches later.** `SetValue` runs a property's coerce callback before it
+  resolves specificity (`BindableObject.cs` 668). `IsEnabled`'s and `InputTransparent`'s callbacks cache the
+  incoming value (`_isEnabledExplicit`, `_inputTransparentExplicit`, `VisualElement.cs` 1876–1905), even from a setter
+  that doesn't win. The next propagation's `RefreshPropertyValue` writes that cache back at `FromHandler`
+  specificity (`BindableObjectExtensions.cs` 14–29). So a local written before an implicit style with the opposite
+  setter attaches loses to the style.
+
+**(J1) Implicit styles: stock, a plain subclass and a shadow subclass.** `Characterize_Look_ImplicitStyleIdentity`
+runs each scenario on the five layout kinds the direct registry can create with direct children
+(`VerticalStackLayout`, `HorizontalStackLayout`, `Grid`, `FlexLayout`, `AbsoluteLayout`). For each kind:
+- the **stock** type, which is plain MAUI and the oracle;
+- a **plain subclass**, round 5's projection and the negative control;
+- a **shadow** subclass (candidate c'). It lives in an assembly that references Controls only through an extern
+  alias (`tests/Reactor.Maui.DeviceTests.Shadow`), so its full name is the stock type's, for example
+  `Microsoft.Maui.Controls.VerticalStackLayout`.
+
+Each candidate sits alone in a `ContentView` whose resources hold the styles, with a Controls button child.
+
+| Scenario | stock (oracle) | plain subclass | shadow |
+|---|---|---|---|
+| the kind's style (padding 7, teal) | 7, teal | **none** | = stock |
+| the kind's style, `IsEnabled` false | layout and child disabled | **enabled** | = stock |
+| a `Layout` style without `ApplyToDerivedTypes` | none | none | = stock |
+| a `Layout` style with `ApplyToDerivedTypes` (11, orange) | 11, orange | = stock | = stock |
+| the kind's style beside a derived `Layout` style | 7 (the first key wins) | **11** | = stock |
+| the kind's style with a themed setter: Light, Dark, Light | red, blue, red | **none** | = stock |
+| the kind's style; declared 3; cleared | 7, 3, 7 | **0, 3, 0** | = stock |
+| the kind's style replaced (13), restored (7), removed | 7, 13, 7, **7** | **0 throughout** | = stock |
+
+- Over 40 kind × scenario pairs per device, the shadow mismatches stock **0** times; the plain subclass mismatches
+  30 (every pair except the `Layout`-typed styles).
+- A shadow type has the stock full name and `is VerticalStackLayout` holds. `GetType() == typeof(VerticalStackLayout)`
+  doesn't, and the assembly differs.
+- The last row also shows that **removing an implicit style from any element's resources leaves it applied**, on
+  stock too. This is a MAUI issue (§2.16), not only for `Application.Resources`.
+
+**(J1) Projection: (a), (b), (c').** `Characterize_Look_Projection` uses round 5's tree: H → `[A, D, C]`; D (direct)
+→ `[B, E, F]`; F (direct) → `[G, I]`. Afterwards a Controls X is inserted at view index 1 and a Y is added at the
+end.
+
+| | (a) stock H, no bridge | (b) stock H; Layout bridges that represent their direct views in enumeration; no pull | (c') shadow H; Layout bridges kept out of enumeration; pull |
+|---|---|---|---|
+| H's `GetVisualChildren` | A, C | A, bridge(D), C | A, D, C |
+| Traversal under H | `H > A > C`: D's whole subtree is missing | `H > A > bridge(D) > B > E > bridge(F) > G > I > C`: no duplicates, but **D and F are never enumerated**: handler-less bridges take their place, and E's `GetVisualParent` is D, not its enumerator | `H > A > D > B > E > F > G > I > C` (round 5's T3b) |
+| `Window`, H's button style, `BindingContext` on B and G | none (B keeps the default text color) | all three | all three |
+| H disabled | B and G stay enabled | disabled, 0 pulls (H's propagation reaches the bridge in its logical list) | disabled, 2 pulls |
+| After `Insert(1, X)`, `Add(Y)` | logical `A, X, C, Y` | logical `A, X, bridge(D), C, Y`; **traversal follows logical order** | the same logical order; traversal follows the views |
+
+- **(a) is ruled out:** stock layouts project logical children.
+- **(b)** keeps MAUI's style semantics because the types are stock, and needs no pull. But the bookkeeping becomes
+  the managed identity of D and F. A tool looking for D by its `AutomationId` or by its native view can't find it,
+  because the bridge has no handler and no frame. The traversal order also becomes the logical order, so under
+  §2.11.1 rule 8's tail placement (a fixed #40758) it would be wrong.
+- **(c), a supported way for a subclass to keep its base type's style identity, doesn't exist.**
+- **(c')**, the full-name shadow, matches stock in every case and keeps T3b's projection.
+
+**(J2) The first direct child.** In `Characterize_Look_FirstDirectChild`, a layout `[Entry e1, Label l2, Entry e3]`,
+with e3 focused and a selection of 2+3, gains a direct child at index 1. MAUI raises `Loaded` once for a late
+subscriber, so events are counted only after the action.
+
+| | Projection-capable from mount (a shadow layout; the direct view inserted, its bridge placed in the slot) | Replaced on the first direct child (the negative control) |
+|---|---|---|
+| The layout and its native view | the same | new |
+| e3: focus or first responder, selection, IME (Android) | kept: 2+3, the IME shown | **lost**: not focused, the IME hidden (the selection value is kept) |
+| e3's events | none | `Unfocused`, `Unloaded`, `Loaded`, `ParentChanged` ×2; e1 `ParentChanged` ×2 |
+| Android natively | e3 not detached; the layout gains 1 child and loses none | e3 detached and re-attached; 3 children removed |
+| Time, including creating D | 2.3 ms (Android) to 9.0 ms (Mac) | 13 to 36 ms |
+| Traversal afterwards | `H > e1 > D > B > l2 > e3` | the same, under the new layout |
+
+**(J3) Input transparency.** `Characterize_Look_InputTransparency` has a Controls layout H → a direct layout D
+→ `[Controls button B, direct button E]`; in P, D and E are a `VerticalStackLayout` and a Controls button. A
+backdrop button fills the cell under H. Each case sets its inputs after mount and resets them first. Then it
+hit-tests natively at B's and E's centers:
+- on iOS and Mac Catalyst, UIKit's window hit test;
+- on Android, a down/up pair dispatched to the decor view, counting clicks.
+
+The topologies:
+- **P**, plain MAUI: the oracle.
+- **A**, the current product: B's `Parent` is H, and B isn't H's logical child.
+- **V**, round 5's bridge, a `VisualElement` that pulls.
+- **L**, a bridge that is a `Layout`. It pulls `CascadeInputTransparent` too, and the direct views' written
+  transparency is computed from it as Reactor would.
+- **M**, L without the `CascadeInputTransparent` watch.
+
+Results as "tap B → / tap E →"; ✗ marks a mismatch with P:
+
+| Case | P | A | V | L | M |
+|---|---|---|---|---|---|
+| c1 nothing transparent | B / E | = | = | = | = |
+| c2 H transparent, cascading | back / back | ✗ B / E | ✗ B / E | = | = |
+| c2' c2, then undone | B / E | = | = | = | = |
+| c3 H transparent, not cascading | B / E | = | = | = | = |
+| c4 B transparent | back / E (iOS, Mac: H's layout view / E) | = | = | = | = |
+| c5 H cascading, B explicitly `false` | back / back | ✗ back / E (iOS, Mac: H's layout view / E) | ✗ B / E | = | = |
+| c6 D transparent (cascade defaults to true) | back / back (iOS, Mac: H's layout view for both) | ✗ B / E | ✗ B / E | = | = |
+| c7 H transparent, cascade false → true | back / back | ✗ B / E | ✗ B / E | = | ✗ B / E |
+
+What the table shows:
+- **L matches plain MAUI** in every case on every device.
+- **The current product (A) already diverges.** B, which isn't in H's logical list, is never refreshed after mount
+  (c2, c7). D's own transparency never reaches B (c6). The direct button E never cascades.
+- **V breaks the cascade** at the bridge, which isn't a container.
+- **M shows the `CascadeInputTransparent` watch is load-bearing.** A cascade change on an already-transparent
+  parent doesn't change its `InputTransparent`, so nothing else wakes the bridge.
+- On iOS and Mac Catalyst, UIKit stops at H's layout view where Android falls through to the backdrop. This is the
+  same in every topology, so the comparison is per platform.
+
+**Styles that reach Reactor's own nodes.** `Characterize_Look_StyleShield` uses a `ContentView` whose resources
+hold, in turn, three styles:
+- a `Layout` style with `ApplyToDerivedTypes`: padding 21, `IsEnabled` false, `InputTransparent` true,
+  `CascadeInputTransparent` false;
+- a `Grid` style without `ApplyToDerivedTypes`: padding 23;
+- a `Grid` style with it: padding 25.
+
+The same resources hold a button style setting `IsEnabled` false and `InputTransparent` true.
+
+| Node | `Layout`, derived | `Grid` | `Grid`, derived |
+|---|---|---|---|
+| A Layout bridge, bare (the positive control) | 21, disabled, transparent, not cascading | untouched | untouched |
+| The bridge with Reactor's three locals written **before** parenting | 21, **disabled, transparent**, cascading | untouched | untouched |
+| The same locals written **after** the style applied | 21, enabled, not transparent, cascading | untouched | untouched |
+| **Shielded**: an empty style keyed by the bridge's own type in its resources | 0, enabled, not transparent, cascading | untouched | untouched |
+| The shielded bridge's Controls `Grid` child (the shield mustn't hide the app's style from it) | 21 | 23 | 25 |
+| Reactor's `DirectViewHost`, bare | **21** | 0 | **25** |
+| `DirectViewHost`, shielded | 0 | 0 | 0 |
+| Stock buttons with local `IsEnabled` true, `InputTransparent` false, written before parenting (the coercion fact above) | disabled, transparent | disabled, transparent | disabled, transparent |
+| The same, written after | disabled (its parent is), not transparent | enabled, not transparent | enabled, not transparent |
+
+What the table shows:
+- A bridge that is a `Layout` takes the app's derived `Layout` styles.
+- Locals don't shield `IsEnabled` or `InputTransparent`, which follows from MAUI's coercion.
+- The own-type key does shield, because MAUI's first-match rule takes it before any base type's key. It hides
+  nothing from the bridge's children.
+- `DirectViewHost`, a node plain MAUI doesn't have, takes derived `Grid` and `Layout` styles today.
+
 ### 2.2 What WinUI has, and why the MAUI value isn't `ThemeRef` (review D1)
 
 WinUI Reactor's theme value is `ThemeRef(string ResourceKey)`, a reference to a WinUI theme resource:
@@ -791,8 +949,11 @@ static LabelElement Headline(this LabelElement l) => l.FontSize(32).FontFamily("
    owner's scope. A standalone root (a `ReactorWindow`, a `ReactorPage` the app creates) starts with no
    styles; the app wraps its content in `WithStyles`.
 7. **XAML styles on the Controls registry.** Reactor's applied values are local values: they win over the
-   app's XAML implicit styles, and unset properties are cleared and show the XAML style (§2.1, §2.1.5). The
-   exception is a XAML `Disabled` state, which MAUI ranks above local values (§2.1.3).
+   app's XAML implicit styles, and unset properties are cleared and show the XAML style (§2.1, §2.1.5). Two
+   exceptions, both MAUI's own behaviour:
+   - a XAML `Disabled` state, which MAUI ranks above local values (§2.1.3);
+   - `IsEnabled` and `InputTransparent` written before an implicit style with the opposite setter attaches,
+     which MAUI's coercion lets the style win (§2.1.11, §2.11.2 rule 7).
 8. **Reporting the direct registry's gap.** When a direct view mounts and the app's resources define an
    implicit XAML style for the Controls type it stands for, Reactor warns once per type per app.
 9. **Keyed XAML styles are functions** (§2.4).
@@ -942,13 +1103,18 @@ cleaned up and run again, refs rebound to the new views); components above it ke
 beneath skipped components too (the pass reaches the host without rendering its owners), and the same rule
 applies when a parent's disabling activates a Controls-only variant.
 
-#### 2.11.1 The bridge topology (review G1, G3, G4, H1, H2, M1)
+#### 2.11.1 The bridge topology (review G1, G3, G4, H1, H2, M1, J1–J3)
 
-One design replaces round 4's separate stand-ins and adapters: **one bridge per direct view that needs one**, a
-Reactor-owned logical-only `VisualElement` with no handler and no native view (§2.1.10). It fixes MAUI's
-`Layout.Insert` for mixed layouts ([dotnet/maui#40758](https://github.com/dotnet/maui/issues/40758)), carries
-enabling between the registries' segments (§2.8), and is the logical parent of Controls views inside direct
-layouts.
+One design replaces round 4's separate stand-ins and adapters: **one bridge per direct view that needs one**.
+The bridge, `ReactorBridge`, is a Reactor-owned, logical-only **`Layout`** with no handler, no native view and no
+children in its view list (§2.1.10). It:
+- fixes MAUI's `Layout.Insert` for mixed layouts ([dotnet/maui#40758](https://github.com/dotnet/maui/issues/40758));
+- carries enabling and input transparency between the registries' segments (§2.8, §2.11.2);
+- is the logical parent of Controls views inside direct layouts.
+
+It is a `Layout` because MAUI's input-transparency cascade climbs `Parent` only through the internal
+`IInputTransparentContainerElement`, which Controls' `Layout` implements. A `VisualElement` bridge breaks the
+cascade (§2.1.11 J3, V).
 
 1. **Who has a bridge.** A direct view D has `bridge(D)` when D is a child of a Controls layout (including the
    `DirectViewHost` anchor that hosts a direct tree in a Controls slot), or when D is a direct layout with a
@@ -963,19 +1129,46 @@ layouts.
    A bridge's logical children are D's Controls children and the bridges of D's direct-layout children, in D's
    slot order. A Controls layout's logical children are its Controls children and its direct children's bridges.
 3. **The visual projection: real views only, once, in slot order.**
-   - A Controls layout that can hold direct children (every Controls layout the direct registry creates as a
-     fallback, and `DirectViewHost`) is a Reactor-owned subclass of the MAUI layout that re-implements
-     `IVisualTreeElement`: its children are its **views** in slot order (direct ones included), its parent its
-     `Parent`.
+   - **Projected layouts (review J1).** Every Controls layout the direct registry creates (rule 10) is a
+     *projected layout*: a Reactor-owned subclass that re-implements `IVisualTreeElement`. Its children are its
+     **views** in slot order, direct ones included; its parent is its `Parent`.
+   - **Its full name is the stock type's:** `Microsoft.Maui.Controls.VerticalStackLayout`,
+     `…HorizontalStackLayout`, `…Grid`, `…FlexLayout`, `…AbsoluteLayout`. The projected layouts live in a small
+     assembly, `Microsoft.UI.Reactor.Maui.Layouts`, shipped in the same package. It references Controls only
+     through an extern alias, and its types are internal, so no consumer can name them (no ambiguity, no CS0436
+     outside it).
+   - **Why the full name.** MAUI keys implicit styles by `Type.FullName`, the element's own type first
+     (§2.1.11). With the stock full name as the first key, every implicit style applies exactly as on the stock
+     type, including `ApplyToDerivedTypes`, first-key precedence, themed setters, declared overrides, clears and
+     replacement: 0 mismatches in §2.1.11's 40 pairs on each device.
+   - **What doesn't carry over.** Apps never see these instances, but Reactor's own code and tests do:
+     `is VerticalStackLayout` holds; `GetType() == typeof(VerticalStackLayout)` doesn't.
+   - **The probe.** The full-name key is MAUI's implementation, not a documented contract (it matches
+     `ResourceDictionary.Add(Style)`'s public key, `TargetType.FullName`). So the first projected layout runs a
+     one-time probe: a scratch projected `VerticalStackLayout` under a scratch `ContentView` holding an implicit
+     stock-type style without `ApplyToDerivedTypes`.
+     - **Applied:** projected layouts are used.
+     - **Not applied:** reported once. The direct registry then creates stock types, and bridges switch to
+       candidate (b) of §2.1.11: they represent their direct views in enumeration, with exact styles; direct
+       layouts that have bridges are enumerated as their bridges; traversal follows logical order. This is a
+       documented degraded mode, gated by the same tests with the probe forced to fail.
+   - **`DirectViewHost` isn't shadow-named.** It is the `Grid` that hosts a direct tree in a Controls-only slot.
+     Plain MAUI has no node there, so it is shielded from styles (rule 11) rather than given the stock type's
+     identity, and it keeps its own projection (`ViewHandler.cs` 252–255).
    - A direct view's parent is the real view whose view list holds it (`DirectView.GetVisualParent`: its
      Controls layout or its direct parent; `DirectView.cs` 23 changes to the slot owner, not the anchor), and a
      direct layout's children are its views in slot order.
-   - A bridge is never enumerated downward. Its own `GetVisualParent` returns the direct view it serves.
+   - A bridge is never enumerated downward. Its own `GetVisualParent` returns the direct view it serves. The
+     exception is the probe's degraded mode, where a bridge is enumerated in place of its direct view and its
+     visual parent is its `Parent`.
    - **The boundary (§2.1.10):** a Controls view inside a direct layout reports its bridge as visual parent
      (MAUI's `GetVisualParent() => Parent`), and the bridge reports the direct layout. Downward walks see each
      real view once; an upward walk from such a view passes one bookkeeping hop before the direct layout.
-     Reactor's own upward walks (the scroll bridge, spec 070 §2.6.1) use the slot owner table, not the visual
+     Reactor's own upward walks (the scroll bridge, spec 070 §2.6.1) use the slot-owner table, not the visual
      parent.
+   - **The visual tree is therefore not reciprocal, and Reactor doesn't claim it is** (review round 6). A
+     generic managed tool walking up from such a view shows the bridge, a node it never meets walking down.
+     Only downward enumeration is guaranteed: unique, in slot order, real views only.
 4. **No native peers.** Bridges have no handler; a layout's native children are exactly its views (§2.1.10:
    3 for `[A, D, C]`).
 5. **Live inheritance through the logical graph.** `BindingContext` propagates through logical children,
@@ -985,10 +1178,13 @@ layouts.
 6. **MAUI's propagation, pulled.** MAUI pushes `IsEnabled`, `InputTransparent`, `Window`, `FlowDirection` and
    `Visual` through `GetVisualChildren` (`VisualElement.cs` 1966–1976), which a projected layout no longer
    routes to a bridge. Each bridge therefore watches its logical parent's `PropertyChanged` for those
-   properties and re-runs MAUI's own pull-and-push (`OnParentSet`'s base: from the parent, then to the bridge's
-   logical children); its own `GetVisualChildren` stays its logical children, so MAUI's push from the bridge
-   down is unchanged. Without the pull, `Window` and enabling stop at the bridge (§2.1.10 T3a); with it they
-   arrive (T3b). MAUI's coercion (`IsEnabledCore` reads `Parent`) needs nothing: the bridge is the `Parent`.
+   properties **and `CascadeInputTransparent`** (review J3) and re-runs MAUI's own pull-and-push. The cascade
+   watch is load-bearing: a cascade change on an already-transparent parent changes none of the others, and
+   without it the bridge stays stale (§2.1.11, M c7). The pull-and-push is `OnParentSet`'s base: from the parent, then to the bridge's
+   logical children. The bridge's own `GetVisualChildren` stays its logical children, so MAUI's push from the
+   bridge down is unchanged. Without the pull, `Window` and enabling stop at the bridge (§2.1.10 T3a); with it
+   they arrive (T3b). MAUI's coercion (`IsEnabledCore` and `InputTransparentCore` read `Parent`) needs nothing: the
+   bridge is the `Parent`, and a container.
 7. **Lifecycle (review H2).** Every bridge operation runs inside the tree's transaction (§2.6):
    - **Attach.** A direct view entering a slot gets its bridge if rule 1 requires one (created on demand up the
      chain of direct parents), placed by rule 2; a Controls view entering a direct layout D becomes a logical
@@ -1036,8 +1232,73 @@ layouts.
    suffix detaches them, dropping focus, selection and the keyboard). Each affected position is touched at
    most once per sync; a batch of N insertions is N native adds; a reverse of N is at most N−1 moves, as for an
    all-Controls layout.
-10. **Layouts with only Controls children** keep MAUI's types and behave as today; on the Controls registry no
-    bridge exists.
+10. **Factory policy (review J2).** Projection capability belongs to the factory, not to the current children.
+    - **The direct registry** creates every Controls layout as a projected layout from mount, whether or not it
+      has a direct child. That covers `HybridHandler`'s Controls side for `VStack`, `HStack` and `Grid`, and the
+      `FlexLayout` and `AbsoluteLayout` handlers it inherits from the Controls registry. `LayoutHandler<TElement,
+      TLayout>` takes a factory; the direct registry registers instances that use the projected one.
+    - **The Controls registry** keeps `new TLayout()`, so its native types are unchanged. It never holds a direct
+      child.
+    - **A first direct child is an ordinary insertion (rule 9):** one `Layout.Insert` and one bridge placement.
+      The layout keeps its identity, and its siblings keep their native identity, focus, selection, IME and
+      events (§2.1.11 J2). No path replaces a layout to gain capability.
+    - **Under the probe's degraded mode** (rule 3), stock types with representing bridges are equally capable
+      from mount.
+    - **Cost.** A projected type adds two interface methods; its mount cost is gated by §2.14 premise 7.
+11. **Style shields (review J1, J3).** Reactor's own nodes have no counterpart in plain MAUI, so app styles must
+    not reach them. `ReactorBridge` (a `Layout`) and `DirectViewHost` (a `Grid`) carry a resource dictionary
+    holding one empty implicit style keyed by their own type. MAUI's first-match rule takes it before any base
+    type's style, so no derived `Layout` or `Grid` style applies to them (§2.1.11). Their logical descendants
+    still resolve the app's styles, because the key is one only these nodes use.
+    - **Locals alone aren't a shield:** MAUI's coercion lets a style that attaches after a local `IsEnabled` or
+      `InputTransparent` write win (§2.1.11).
+    - **The bridge's three behavioural properties are Reactor's local writes:** `IsEnabled` (§2.8 rule 3),
+      `InputTransparent` and `CascadeInputTransparent` (§2.11.2).
+    - **One dictionary per node is characterized.** Sharing one instance across nodes is an implementation
+      choice, measured under premise 7.
+    - **Fixes `DirectViewHost`** taking derived `Grid` and `Layout` styles today.
+
+#### 2.11.2 Input transparency (review J3)
+
+MAUI's contract (§2.1.11):
+- `InputTransparent` on a layout cascades to its descendants while `CascadeInputTransparent` is true, which is
+  the default.
+- A descendant's explicit `false` doesn't escape a cascading ancestor.
+- Natively a layout's transparency covers only itself; the cascade is each child's coerced value.
+
+Reactor matches it on both registries, as for enabling (§2.8), and never writes an inherited value on a Controls
+view's manual layer:
+
+1. **Controls → Controls.** MAUI's coercion; nothing written.
+2. **Through a bridge.** `ReactorBridge` is a `Layout`, so a Controls view inside a direct layout D coerces from
+   its bridge and, through the bridge's `Parent` chain, from every Controls container above.
+   - Reactor writes the bridge's `InputTransparent` as D's own declared value and its `CascadeInputTransparent`
+     as true. Reactor's direct layouts have no cascade modifier, and true is MAUI's `Layout` default (§2.16).
+   - The bridge's coerced `InputTransparent` is then D's effective value: own, or any cascading ancestor's.
+   - The bridge pulls `InputTransparent` and `CascadeInputTransparent` from its logical parent (§2.11.1 rule 6).
+3. **Direct views.** Reactor computes and writes a direct view's `InputTransparent` as its own value, or its
+   direct parent's effective value (direct layouts cascade), or, at a segment's top, its bridge's coerced
+   value. A direct layout with a bridge writes that bridge's coerced value, which already includes its own.
+   It is written on every mount, ordinary update, controlled restore and patch: `DirectView.ApplyModifiers`
+   no longer writes `n.InputTransparent ?? false`.
+4. **Pure direct trees.** Between direct views Reactor computes the cascade itself. Today a direct layout's
+   transparency covers only the layout itself, which is a direct-registry gap like §2.1.3's. 4d-1 fixes it.
+5. **Re-propagation.** A direct ancestor's own value changing, or a bridge's coerced `InputTransparent`
+   changing, writes the affected direct views (Reactor watches each bridge's `PropertyChanged`, and unsubscribes
+   at detach, §2.11.1 rule 7). It runs as an input pass inside the tree's transaction, beneath skipped
+   components too.
+6. **What this fixes** (§2.1.11): the current product's anchoring (A), which:
+   - never refreshes an anchored Controls child after mount;
+   - doesn't carry a direct layout's transparency to Controls children;
+   - doesn't cascade to direct views.
+
+   With the Layout bridge (L), every case matches plain MAUI on all four devices.
+7. **MAUI's coercion with styles** (§2.1.11): a Controls view's local `IsEnabled` or `InputTransparent` written
+   before an implicit style with the opposite setter attaches loses to the style. Reactor mounts a Controls view
+   before inserting it, as plain MAUI code that builds then adds does. So a declared `.IsEnabled(true)` or
+   `.InputTransparent(false)` under such an app style behaves as plain MAUI does. That is §2.7 rule 7's one
+   exception, which is documented and listed as a MAUI issue (§2.16). Reactor's own nodes are shielded
+   (§2.11.1 rule 11).
 
 ### 2.12 Census and the styleable inventory (review D8, E3)
 
@@ -1066,6 +1327,24 @@ returns an unset spacing to MAUI's default (0 written); a declaration going from
 style returns to 0; `with` copies presence; equality distinguishes present 0 from unset; under an unchanged
 style of 8, explicit 0 → unset → explicit 0 writes 0, 8, 0 (F5); the descriptor's clear resets the bit (a
 `with { Spacing = 0 }` doesn't).
+
+**Both factory paths (review J4).** Projected layouts (§2.11.1 rules 3 and 10) change the direct registry's native
+types without changing the census:
+- **Unchanged:** the DSL census keys and the type floor (`PropertyMatrix.cs` 346: 58 element types).
+- **Controls registry: exact assertions stay exact.** A layout case also asserts the stock type exactly, so
+  a mutant that makes the Controls registry create projected layouts fails.
+- **Direct registry: three checks replace the exact-type assertions.** `ScrollBridgeTests.cs` 107's
+  `IsType<VerticalStackLayout>` becomes: the stock type's full name, assignability to it, and
+  `ProjectedLayouts.IsProjected`. A mutant whose direct registry creates stock types fails.
+- **Fresh views come from the plain MAUI base type.** `PropertyMatrix.cs` 249's
+  `Activator.CreateInstance(native.GetType())` becomes `ProjectedLayouts.StockTypeOf(native.GetType())`: the
+  stock base for a projected type, the type itself otherwise. Defaults are read from an independent oracle, so
+  a projected type that changed a default (a mutant that sets `Spacing` in its constructor) is caught.
+- **Every layout case runs against both real factory paths:** the Controls registry's and the direct
+  registry's, including `HybridHandler`'s Controls side. Both registries' reads are compared with the plain
+  control.
+- **Implicit-style identity** (§2.1.11's eight scenarios, all five kinds) runs headlessly on `net11.0`, with
+  plain MAUI base types as the oracle. MAUI's style resolution is managed code, so it needs no platform.
 
 **Mutants the census must catch.** Omitting a common field from the fieldwise modifier merge (`Opacity`);
 omitting a per-control descriptor (`Entry.PlaceholderColor`); a descriptor whose native writer differs from
@@ -1147,6 +1426,12 @@ observations made after the action (a frame index or sequence number taken at th
 | Batched operations (G4) | a direct prefix and a long Controls suffix: N insertions are N native adds; a keyed move is one remove and one add of the moved child; a reverse of N is at most N−1 moves; each affected position is touched at most once per sync (counter per position) | touch a position twice; re-add siblings |
 | Projection (H1) | §2.1.10's tree headlessly: every real view enumerated once in slot order, no bridge enumerated, D's and E's visual parents their slot owners, B's its bridge whose parent is D (the documented boundary) | enumerate logical children; a direct view's parent the anchor |
 | Bridge lifecycle (H2) | with the enclosing root alive, each of: a Controls child removed from a direct layout; a direct child removed from a Controls layout; keyed moves; reparenting by anchor retarget; backend replacement both ways; a cell retired (recycled, with and without `ReuseItemTrees`): the old memberships are gone from every logical list, the retired bridge has no parent, no logical children, no presented view and no watches; toggling the old parent's `IsEnabled` and `BindingContext` reaches nothing retired (pull counter, binding-context value); the retired bridges and controls are collected (`WeakReference` after GC; positive: a live bridge's reference survives) | keep a membership; keep a watch; anchor = owner |
+| Style identity (J1) | §2.1.11's eight scenarios on the five projected kinds, headless: every read equals the plain MAUI base type's (padding, background, `IsEnabled` of the layout and its child, a themed setter in both themes, declared then cleared, replaced and restored); positive control: a plain subclass differs in the kind's-own-style scenarios | a subclass with its own full name; a projected type that sets a default |
+| The identity probe (J1) | the probe passes on MAUI's lookup; with a stub that keys by assembly-qualified name it fails, reports once and switches the direct registry to stock types with representing bridges (enumeration then lists bridges for bridged direct layouts, styles exact); it runs once per process (counted) | assume the key; no fallback |
+| Factory policy (J2) | the direct registry's `VStack`, `HStack`, `Grid`, `FlexLayout` and `AbsoluteLayout` are projected at mount with no direct child; the Controls registry's are exactly the stock types; a first direct child arriving later is one view insertion and one bridge placement, with the layout's identity, native view and siblings unchanged (native child-operation counter: 1 add, 0 removes) | create projected only when a direct child exists (replace on the first one); projected on the Controls registry |
+| Style shields (J1, J3) | a `ReactorBridge` and a `DirectViewHost` under a derived `Layout` style and a derived `Grid` style: no setter applies (padding 0; the bridge's three locals intact, including when written before parenting); the shielded bridge's Controls `Grid` child still takes the app's styles; positive control: an unshielded bridge takes the style | locals as the only shield; a shield keyed by a base type (it hides the style from children) |
+| Input transparency (J3) | §2.1.11's c1–c7 over a Controls layout → direct layout → Controls and direct children, headless (coerced `InputTransparent` of the Controls child; the written `InputTransparent` of the direct views), equal to the same tree in plain MAUI; also a pure direct tree (a direct layout cascading to direct children) and a nested direct layout with its own bridge | a `VisualElement` bridge (cascade broken); no `CascadeInputTransparent` watch (c7 stale); direct views written from their own value only |
+| Input re-propagation (J3) | H's `InputTransparent` and `CascadeInputTransparent` toggled outside Reactor: one input pass, the direct views rewritten (counted), no ordinary update; Reactor's write to the bridge doesn't read back as an outside change (positive: an outside change does) | ignore outside changes; react to own writes |
 | Inventory | every element property classified | — |
 
 **Headless: Android defaults (stub platform) and fonts.**
@@ -1185,6 +1470,10 @@ observations made after the action (a frame index or sequence number taken at th
 | `Disabled_MauiSource [controls|direct]` | a XAML-disabled Controls button shows the `ElementStyles` Disabled variant; a XAML-disabled Controls layout disables its direct descendants (native, through the bridges), also after a Reactor parent disable → re-enable and an unrelated child render; the source changed outside Reactor re-propagates both ways |
 | `Bridges_Topology [direct]` | §2.1.10's H → D (interleaved Controls and direct children) → F (nested), through Reactor with the real overrides: the runner's traversal lists every real view once in slot order and no bridge; D's parent is H; B's upward walk reaches D through its bridge; a `BindingContext` changed after mount reaches B and G; H's implicit style and a theme change reach them; H disabled disables them (Window set, `IsLoaded` true); H's native children are exactly its views |
 | `Bridges_Lifecycle [direct]` | the H2 cases on device: after each, the runner's traversal shows no retired view, the old parent's toggles reach nothing retired, and the retired bridges and controls are collected |
+| `Layouts_StyleIdentity [direct]` | §2.1.11's J1 table through the direct registry's real factories (projected layouts) against plain MAUI stock layouts under the same app styles, all five kinds: every read equal; the plain-subclass negative control differs |
+| `Layouts_FirstDirectChild [direct]` | a projected layout with a focused `Entry` after the insertion point gains its first direct child through Reactor: the layout's identity and native view unchanged, the entry keeps focus, selection, the keyboard and first-responder status, no `Unfocused`/`Unloaded`/`ParentChanged`, (Android) not detached and 0 children removed; positive control: the replacement path loses all of them |
+| `Input_Transparency [controls|direct]` | §2.1.11's c1–c7, through Reactor on both registries, hit-tested natively (UIKit's window hit test; Android touches dispatched to the decor view): every case equals plain MAUI's on the same platform; positive control: c1 hits B and E |
+| `Bridges_StyleShield [direct]` | derived `Layout` and `Grid` app styles: Reactor's bridges and `DirectViewHost` take none; Controls views below them take the app's |
 | `Layout_MixedInsert [direct]` | a Controls layout with a direct child before a Controls child mounts, and survives insertions and moves (it threw before); a focused `Entry` after the insertion point keeps focus, selection, the keyboard and first-responder status, gets no `Unloaded`/`ParentChanged`, and (Android) is never detached; native and handler identity unchanged |
 | `Enabling_CoincidentWrite [controls|direct]` | §2.1.9's (A) sequence through Reactor on both registries, Controls → Controls and through the adapter: the app's local `false` survives the parent's re-enable, as in plain MAUI |
 | `Replacement_Lifetime [direct]` | a late style forcing Controls and its removal: the old native's events reach nothing after each replacement; the new one's work |
@@ -1237,6 +1526,15 @@ Hard premises, characterized first in the implementation; if one fails on a devi
    §2.1.10's T3b results (each real view once in slot order, no bridge enumerated, live `BindingContext`,
    styles, themes, enabling and `Window`, no native peers), and every H2 lifecycle case leaving nothing retired
    in a logical list, reachable by propagation, or uncollected.
+9. **Plain MAUI's semantics through projection (J1–J3).** Through Reactor's real factories, on all four
+   devices:
+   - **Style identity.** Projected layouts equal plain MAUI stock layouts in every §2.1.11 J1 scenario for all
+     five kinds, and the identity probe passes on MAUI 11.
+   - **Shields.** Reactor's bridges and `DirectViewHost` take no app style.
+   - **First direct child.** It disturbs no sibling.
+   - **Input transparency.** Every c1–c7 case equals plain MAUI's native hit test.
+
+   If the probe fails on a supported MAUI version, stop and report; the degraded mode isn't a pass.
 
 Then: full device suites on all four devices with the look fixtures; the Release build of `Reactor.Maui.slnx`
 with no warnings; the mutants above; spec 068's rows (the theme value ✅, styling direct views ✅, fonts ✅ for
@@ -1275,9 +1573,10 @@ Android defaults' limits).
     invocation (D11, E1, E2, F1).
 14. **Reports**, once each: XAML styles ignored by direct views, theme divergence, font evidence, traits, an
     `IsEnabled` in a Disabled variant.
-15. **One bridge topology** (G1, G4, H1, H2, M1): one logical-only bridge per direct view that needs one,
-    slot-aligned in a Controls parent or reserved under its direct parent's bridge; projected Controls layouts
-    that enumerate views; bridges that pull MAUI's propagation; a defined lifecycle; slot placement chosen by a
+15. **One bridge topology** (G1, G4, H1, H2, M1, J3): one logical-only bridge per direct view that needs one,
+    a `Layout` (MAUI's input cascade needs a container) shielded from app styles, slot-aligned in a Controls
+    parent or reserved under its direct parent's bridge; projected Controls layouts that enumerate views;
+    bridges that pull MAUI's propagation, `CascadeInputTransparent` included; a defined lifecycle; slot placement chosen by a
     one-time probe of `Layout.Insert`'s semantics. MAUI's `Layout.Insert` works without detaching any sibling.
     Rejected: re-adding the suffix (it detaches siblings: focus, selection and keyboard lost; O(n)), Controls
     wrappers (60–90% slower mounts on Apple's platforms, placement moves to the wrapper, and the wrapper's visual
@@ -1285,8 +1584,26 @@ Android defaults' limits).
     visual tree, direct views missing from it, Controls children reachable twice). Upstream:
     [dotnet/maui#40758](https://github.com/dotnet/maui/issues/40758).
 16. **The visual-parent boundary** (§2.1.10): a Controls view inside a direct layout reports its bridge as
-    visual parent, because MAUI fixes a Controls view's visual parent to its logical parent; documented, and
-    Reactor's own upward walks use the slot-owner table.
+    visual parent, because MAUI fixes a Controls view's visual parent to its logical parent. Documented; Reactor
+    claims no reciprocal visual-tree semantics (a generic managed tool walking up shows the extra hop), only a
+    unique, slot-ordered downward enumeration, and its own upward walks use the slot-owner table.
+17. **Projected layouts take the stock type's full name** (J1): MAUI keys implicit styles by `Type.FullName`, so
+    the projection keeps every implicit-style semantic exactly (0 mismatches over 40 pairs on four devices),
+    without converting implicit styles to explicit ones or asking apps for `ApplyToDerivedTypes`. They live in a
+    small internal assembly that references Controls through an extern alias. A one-time probe guards the key;
+    if it fails, the direct registry degrades to stock types with representing bridges (exact styles,
+    bookkeeping in enumeration), reported. Rejected: (a) stock projection (MAUI projects logical children);
+    (b) as the design (bridges become D's managed identity, without handler or frame, and traversal follows
+    logical order); a plain subclass (loses styles without `ApplyToDerivedTypes`); and converting the base
+    type's implicit style to an explicit `Style` (a different precedence). No supported MAUI mechanism exists.
+18. **Projection from mount** (J2): every Controls layout the direct registry creates is projected whatever its
+    children; the Controls registry's types are unchanged; a first direct child never replaces its parent.
+19. **Input transparency matched** (J3): the bridge is a container; direct views' transparency is computed
+    (own, the direct parent's, or the bridge's coerced value) and written like enabling. This fixes today's
+    anchoring, which never cascades into direct layouts or to direct views.
+20. **Style shields** for Reactor's own nodes (J1, J3): an empty implicit style keyed by the node's own type;
+    MAUI's coercion makes locals insufficient for `IsEnabled` and `InputTransparent`. `DirectViewHost` stops
+    taking derived `Grid` and `Layout` styles.
 
 ### 2.16 Open questions
 
@@ -1301,6 +1618,12 @@ Android defaults' limits).
 - A window on a thread other than the main thread (Windows, 4g) is designed (§2.6 rule 6) but untested here.
 - Whether MAUI would accept an extension point for an `Element`'s visual parent (removing §2.1.10's one
   bookkeeping hop); not proposed upstream without approval.
+- A `CascadeInputTransparent` modifier for direct layouts (today always MAUI's default, true).
+- `ReactorScrollView` (spec 070 §2.6.1) is a subclass that needs `ApplyToDerivedTypes`; the full-name technique
+  (§2.11.1 rule 3) could remove that caveat, but it changes the Controls registry's native type, so it is left
+  to a later phase.
+- Whether one shared shield dictionary suffices for all bridges (§2.11.1 rule 11); measured in the
+  implementation.
 - Accessibility focus across an insertion isn't measured directly (no automated screen reader); S2 performs no
   native removal or detach on siblings, which is the path that clears it (§2.1.9).
 - MAUI issues (one filed; the rest are listed here only, and filing them waits for approval):
@@ -1310,7 +1633,11 @@ Android defaults' limits).
     (§2.1.2);
   - Android keeps inflation-time defaults and restores them from a cache after a theme change (§2.1.4,
     §2.1.6);
-  - an implicit style removed from `Application.Resources` stays applied;
+  - an implicit style removed from any element's resources (not only `Application.Resources`) stays applied
+    (§2.1.11);
+  - a coerced property's local value (`IsEnabled`, `InputTransparent`) loses to an implicit style that attaches
+    after it, because the coerce callback caches a losing setter's value and the next propagation writes it
+    back at `FromHandler` specificity (§2.1.11);
   - filed: [dotnet/maui#40758](https://github.com/dotnet/maui/issues/40758), `Layout.Insert` passes the view
     index to `InsertLogicalChild`, throwing or misordering when non-`Element` children precede it (§2.1.8);
   - iOS ignores `Bold` and `Italic` on a single-face registered family silently.
