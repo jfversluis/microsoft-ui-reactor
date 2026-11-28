@@ -13,6 +13,7 @@ on:
       - 'tests/Reactor.Maui.Tests/**'
       - 'tests/Reactor.Maui.Benchmark/**'
       - 'tests/Reactor.Maui.DeviceTests/**'
+      - 'tests/Reactor.Maui.DeviceTests.Shadow/**'
       - 'tests/aot_trim_proof/Reactor.Navigation.AotSmoke/**'
       - 'samples/maui/**'
       - 'Reactor.Maui.slnx'
