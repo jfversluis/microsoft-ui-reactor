@@ -437,31 +437,45 @@ public static partial class Fixtures
                 var target = Other(app.RequestedTheme);
                 log.Phase = $"round {round} → {target}";
                 var expected = Rgba.Of(target == AppTheme.Dark ? DarkBlue : LightRed);
+                // Frames are counted by the one watch that samples, so a sample's index is the frame it ran in. Index 0 is
+                // the synchronous read right after the set; only a frame callback (index 1 or more, after the action)
+                // counts for the positive control.
                 var firstNew = new Dictionary<string, int>();
                 var plainBefore = LookPlatform.TextColor(plain);
-                var watch = new FrameWatch(() => { });
+                var observedByFrame = 0;
+                var acting = false;
+                var actionFrame = -1;
+                FrameWatch? watch = null;
+                void Sample(int frame)
+                {
+                    foreach (var (name, view) in new[] { ("bound", (IView)bound), ("probe", probe) })
+                        if (!firstNew.ContainsKey(name) && LookPlatform.TextColor(view) is { } color && color.Distance(expected) < 0.05)
+                        {
+                            firstNew[name] = frame;
+                            if (frame > 0) observedByFrame++;
+                        }
+                    // The platform's own appearance: a view without a color shows a system color that follows it.
+                    if (!firstNew.ContainsKey("plain") && LookPlatform.TextColor(plain) is { } p && plainBefore is { } b && p.Distance(b) > 0.05)
+                    {
+                        firstNew["plain"] = frame;
+                        if (frame > 0) observedByFrame++;
+                    }
+                }
+                watch = new FrameWatch(() => { if (acting) Sample(watch!.Frames - actionFrame); });
                 using (watch)
                 {
-                    void Sample(int frame)
-                    {
-                        foreach (var (name, view) in new[] { ("bound", (IView)bound), ("probe", probe) })
-                            if (!firstNew.ContainsKey(name) && LookPlatform.TextColor(view) is { } color && color.Distance(expected) < 0.05)
-                                firstNew[name] = frame;
-                        // The platform's own appearance: a view without a color shows a system color that follows it.
-                        if (!firstNew.ContainsKey("plain") && LookPlatform.TextColor(plain) is { } p && plainBefore is { } b && p.Distance(b) > 0.05)
-                            firstNew["plain"] = frame;
-                    }
-                    using var sampler = new FrameWatch(() => Sample(watch.Frames));
                     var clock = Stopwatch.StartNew();
+                    actionFrame = watch.Frames;
                     app.UserAppTheme = target;
-                    log.Add($"set returned after {clock.Elapsed.TotalMilliseconds:0.00} ms; synchronously: {ColorSummary(views)}");
+                    acting = true;
+                    log.Add($"set returned after {clock.Elapsed.TotalMilliseconds:0.00} ms (frame callbacks before the set: {actionFrame}); synchronously: {ColorSummary(views)}");
                     Sample(0);
                     await c.Drain(1);
-                    log.Add($"after one dispatch ({watch.Frames} frames): {ColorSummary(views)}");
+                    log.Add($"after one dispatch ({watch.Frames - actionFrame} frames): {ColorSummary(views)}");
                     await c.Settle(600);
                     log.Add($"settled ({LookPlatform.Appearance(plain)}): {ColorSummary(views)}");
-                    log.Add($"first frame showing the new color (0 = synchronously, before any frame): bound {(firstNew.TryGetValue("bound", out var fb) ? fb : -1)}, probe {(firstNew.TryGetValue("probe", out var fp) ? fp : -1)}, plain (the platform's appearance) {(firstNew.TryGetValue("plain", out var fa) ? fa : -1)}");
-                    Check(firstNew.ContainsKey("bound") || firstNew.ContainsKey("probe"), "the frame sampler saw at least one view take the new color (positive control)");
+                    log.Add($"first frame showing the new color (0 = the synchronous read after the set, n = the n-th frame callback after it): bound {(firstNew.TryGetValue("bound", out var fb) ? fb : -1)}, probe {(firstNew.TryGetValue("probe", out var fp) ? fp : -1)}, plain (the platform's appearance) {(firstNew.TryGetValue("plain", out var fa) ? fa : -1)}");
+                    Check(observedByFrame > 0, "a frame callback after the set observed a view taking its new color (positive control for the sampler)");
                 }
             }
         }
@@ -596,11 +610,17 @@ public static partial class Fixtures
         var original = app.UserAppTheme;
         var results = new List<string>();
 
-        async Task Measure(string name, Func<IView> last, Action<AppTheme>? reapply = null)
+        async Task Measure(string name, Func<IView> last, Action<AppTheme>? reapply = null, bool inEvent = false)
         {
+            // In the event: the colors are written by a RequestedThemeChanged subscriber, as Reactor's re-projection
+            // would be; otherwise after the setter returns.
+            void OnChanged(object? sender, AppThemeChangedEventArgs e) => reapply!(e.RequestedTheme);
             var syncs = new List<double>();
             var totals = new List<double>();
             var frames = new List<int>();
+            if (inEvent) app.RequestedThemeChanged += OnChanged;
+            try
+            {
             for (var round = 0; round < 4; round++)
             {
                 var target = Other(app.RequestedTheme);
@@ -620,7 +640,7 @@ public static partial class Fixtures
                 using (watch)
                 {
                     app.UserAppTheme = target;
-                    reapply?.Invoke(target);
+                    if (!inEvent) reapply?.Invoke(target);
                     syncs.Add(clock.Elapsed.TotalMilliseconds);
                     if (LookPlatform.TextColor(last()) is { } now && now.Distance(expected) < 0.05) (done, doneFrame) = (clock.Elapsed.TotalMilliseconds, 0);
                     var limit = Stopwatch.StartNew();
@@ -629,6 +649,11 @@ public static partial class Fixtures
                 totals.Add(done ?? double.NaN);
                 frames.Add(doneFrame);
                 await c.Settle(300);
+            }
+            }
+            finally
+            {
+                if (inEvent) app.RequestedThemeChanged -= OnChanged;
             }
             // The first switch warms caches; report the median of the other three.
             static double Median(IEnumerable<double> xs) { var s = xs.Skip(1).OrderBy(x => x).ToArray(); return s[s.Length / 2]; }
@@ -680,7 +705,7 @@ public static partial class Fixtures
                 var all = c.FindAll<ILabel>(l => l.AutomationId?.StartsWith("cost-", StringComparison.Ordinal) == true).ToArray();
                 Check(all.Length == count, $"found {all.Length} of {count} rows");
                 await c.Settle(300);
-                await Measure($"Reactor [{registryName}], {count} labels, themed color re-applied without a render", () => lastPlain, t =>
+                void Reapply(AppTheme t)
                 {
                     var color = t == AppTheme.Dark ? DarkBlue : LightRed;
                     foreach (var label in all)
@@ -688,7 +713,9 @@ public static partial class Fixtures
                         if (label is MauiLabel controls) controls.TextColor = color;
                         else if (label is DirectLabel direct) direct.Apply(new LabelElement(direct.Text) { TextColor = color });
                     }
-                });
+                }
+                await Measure($"Reactor [{registryName}], {count} labels, themed color re-applied without a render, after the set", () => lastPlain, Reapply);
+                await Measure($"Reactor [{registryName}], {count} labels, themed color re-applied without a render, inside RequestedThemeChanged", () => lastPlain, Reapply, inEvent: true);
                 c.Unmount();
                 await c.Settle(200);
             }
