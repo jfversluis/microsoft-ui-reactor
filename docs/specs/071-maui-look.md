@@ -1177,7 +1177,7 @@ Android defaults' limits).
 - A window on a thread other than the main thread (Windows, 4g) is designed (§2.6 rule 6) but untested here.
 - Accessibility focus across an insertion isn't measured directly (no automated screen reader); S2 performs no
   native removal or detach on siblings, which is the path that clears it (§2.1.9).
-- MAUI issues (one filed, the rest to file):
+- MAUI issues (one filed; the rest are listed here only, and filing them waits for approval):
   - a `UserAppTheme` set during a theme change is suppressed and leaves MAUI inconsistent, with split
     bindings (§2.1.1, §2.1.7);
   - iOS applies a stale platform theme when returning to Unspecified after the system changed while forced
