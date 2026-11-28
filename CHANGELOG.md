@@ -121,6 +121,8 @@ Conventions for contributors:
   `IsCurrent` is the declared position. `IndicatorView(count, position, …)` is new, with its position
   controlled too; link it to a carousel through app state. The `CarouselView` element's template is
   now `Func<object?, ItemState, Element?>` (the factory with a one-argument template is unchanged).
+  Windows has no carousel port yet: there the position falls back to MAUI's `Position` and
+  `PositionChanged`, as before.
   Built with `Reactor.Maui.slnx` and tested in `.github/workflows/maui.yml`, including a
   device tier that runs on the real platform controls. It doesn't change the WinUI packages.
 

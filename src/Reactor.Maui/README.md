@@ -127,7 +127,7 @@ and refine them with modifiers. Elements are immutable records, so `with` works 
 | Input | `Button`, `ImageButton`, `Entry`, `Editor`, `SearchBar`, `CheckBox`, `Switch`, `Slider`, `Stepper`, `Picker`, `DatePicker`, `TimePicker`, `RadioButton` |
 | Formatted text | `Label(Run(…), Hyperlink(…))` |
 | Layout | `VStack`, `HStack`, `Grid`, `FlexLayout`, `AbsoluteLayout`, `ScrollView`, `Border`, `ContentView`, `RefreshView`, `SwipeView` |
-| Lists | `CollectionView`, `CarouselView` (virtualized; each item is its own tree) |
+| Lists | `CollectionView`, `CarouselView` (virtualized; each item is its own tree), `IndicatorView` |
 | Pages and navigation | `Page`, `NavigationHost`, `NavigationStack`, `Tabs`, `Flyout`, `Shell` (`TabBar`, `FlyoutItem`, `ShellTab`, `ShellContent`, `ShellMenuItem`) |
 | Composition | `Component<T>()`, `Component<T, TProps>(props)`, `Group`, `Empty`, `Memo`, `ErrorBoundary`, `Context.Provide` |
 
@@ -713,6 +713,18 @@ the callback reports the item that shows.
 `IndicatorView(count, position, onPositionChanged)` is a controlled value of its own: link it to a
 carousel through app state, as above. Its position is clamped to the count. `IndicatorTemplate`
 isn't supported; to draw custom indicators, render a row of elements from the count and position.
+
+Also worth knowing:
+
+- **`Loop` defaults to `false`**, unlike MAUI's `CarouselView` (where it's `true`).
+- **Horizontal only**: vertical carousels aren't supported.
+- **A ref's `ScrollTo` on iOS and Mac Catalyst** does nothing when the carousel has an `ItemSpacing`
+  and no `PeekAreaInsets` (MAUI's own behavior). Declare the position instead: Reactor scrolls the
+  carousel itself.
+- **VoiceOver's page swipe** (three fingers) doesn't move MAUI's carousel on iOS; moving to a
+  neighbor that peeks does, and is reported like a swipe.
+- **Windows** has no carousel port yet (phase 4g): there the position is written to MAUI's
+  `Position` and reported from `PositionChanged`, without the guarantees above for a drag.
 
 ## Swipe actions
 
