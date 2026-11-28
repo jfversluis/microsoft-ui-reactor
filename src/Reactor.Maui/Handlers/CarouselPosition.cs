@@ -190,11 +190,9 @@ internal sealed class CarouselPositionController
         {
             case CarouselMotion.AwaitingAnswer:
                 if (!_reportRan) return;
-                // The answer: verify the rest again (the user may have moved meanwhile), then decide.
-                _motion = CarouselMotion.Watching;
-                _input = false;
-                if (_port is null) Rested(null);
-                else ArmPoll();
+                // The answer: decide from here (Decide verifies first if the user moved meanwhile).
+                _motion = CarouselMotion.Resting;
+                Decide(_port?.Sample());
                 return;
             case CarouselMotion.Resting:
                 Decide(_port?.Sample());
@@ -346,7 +344,6 @@ internal sealed class CarouselPositionController
         _rest = shown;
         _motion = CarouselMotion.AwaitingAnswer;
         _reportRan = false;
-        _jumpNext = false;
         _report(shown, ++_reportSeq);
     }
 
@@ -393,8 +390,8 @@ internal sealed class CarouselPositionController
         _epoch++;
         _windowInput = false;
         _gaveUpOn = null;
-        // Indices moved with the items: the next rest is projected unless input is seen.
-        _rest = Unknown;
+        // Indices moved with the items: the same-turn jump's rest (OwnRested) sets the rest, Unknown
+        // unless it landed; without a port, the port's arrival does.
         // The same-turn jump makes MAUI's Android carousel skip its deferred correction (its ScrollTo
         // counter), so no frame shows item 0; on iOS the published items already show the right item.
         if (_declared() is { } target) OwnScroll(target, animate: false);
@@ -435,24 +432,22 @@ internal sealed class CarouselPositionController
         _settledEpoch = epoch;
         _barrierEpoch = -1;
         _windowOpen = false;
-        var sample = port.Sample();
-        if (_windowInput || sample is { } now && IsInput(now, port))
+        if (_windowInput)
         {
             // Input during the window (a drag, a settle, a ref command): the user's, reported at rest.
             _windowInput = false;
-            _jumpNext = false;
             if (_motion is CarouselMotion.Resting or CarouselMotion.OwnProjecting) _motion = CarouselMotion.Watching;
             if (_motion == CarouselMotion.Watching) _input = true;
             ArmPoll();
             return;
         }
-        // Without input, whatever the platform shows is MAUI's processing: the declaration is projected (a jump).
+        // Without input, whatever the platform shows is MAUI's processing: the declaration is projected (a
+        // jump). Motion starting just now is Decide's to see. Watching or OwnProjecting: their rest decides.
         if (_motion == CarouselMotion.Resting)
         {
             _rest = Unknown;
-            Decide(sample);
+            Decide(port.Sample());
         }
-        // Watching or OwnProjecting: their rest decides.
     }
 
     // ── Writes ───────────────────────────────────────────────────────────────

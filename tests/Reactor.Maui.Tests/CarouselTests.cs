@@ -936,11 +936,15 @@ public class CarouselPositionTests
         h.View.Controller.Port = h.Port;
         h.Port.RaiseOn = h.View; // Android's port scrolls through MAUI's ScrollTo
         h.Settle();
+        h.Port.AutoLand = false;
         h.SetPosition(3);
         h.Host.Scheduler.Drain();
+        // It stops short at 2: Reactor's own scroll (asked again), not a ref command to report.
+        h.Port.Shown = 2;
+        h.Port.AutoLand = true;
         h.Settle();
         Assert.Empty(h.Log);
-        Assert.Equal([(3, true)], h.Port.Scrolls);
+        Assert.Equal([(3, true), (3, true)], h.Port.Scrolls);
     }
 
     [Fact]
@@ -1097,6 +1101,116 @@ public class CarouselPositionTests
         Assert.Empty(h.Port.Barriers);
         Assert.False(h.View.Controller.BarrierPending);
         Assert.Equal(2, h.View.Controller.BarriersIssued);
+    }
+
+    [Fact]
+    public void AnOwnJumpRestingShortInsideTheWindow_WaitsForTheCompletion()
+    {
+        var h = Mount(position: 2);
+        h.Port.AutoLand = false;
+        h.SetItems(["z", .. Five]);
+        h.Host.Scheduler.Drain();
+        h.Port.Shown = 0; // MAUI's processing shows the first item
+        h.Settle(); // the jump's rest, inside the window
+        Assert.Single(h.Port.Scrolls); // no retry while MAUI's work is pending
+
+        h.Port.AutoLand = true;
+        h.Port.CompleteBarrier();
+        h.Settle();
+        Assert.Equal([(2, false), (2, false)], h.Port.Scrolls);
+        Assert.Empty(h.Log);
+    }
+
+    [Fact]
+    public void AnInputRestInsideTheWindow_IsReportedAtTheCompletion()
+    {
+        var h = Mount(accept: true);
+        h.SetItems(["z", .. Five]);
+        h.Host.Scheduler.Drain();
+        h.Port.Moving = true;
+        h.Port.User = true;
+        h.Port.Shown = 3;
+        h.View.Controller.OnTrigger();
+        h.Frames(3);
+        h.Port.Moving = false;
+        h.Port.User = false;
+        h.Settle(); // the drag rests while MAUI's work is still pending
+        Assert.Empty(h.Log);
+
+        var scrolls = h.Port.Scrolls.Count;
+        h.Port.CompleteBarrier();
+        h.Settle();
+        Assert.Equal(["3"], h.Log); // "c" in the app's items
+        Assert.Equal(scrolls, h.Port.Scrolls.Count);
+        Assert.Equal(3, h.Port.Shown);
+    }
+
+    [Fact]
+    public void AMotionlessJumpInTheWindow_AfterTheJumpRested_IsOverwritten()
+    {
+        var h = Mount(accept: true);
+        h.SetItems(["z", .. Five]);
+        h.SetPosition(4);
+        h.Host.Scheduler.Drain();
+        h.Settle(); // the same-turn jump to 4 rests inside the window
+        // The documented limitation: a jump without motion in the window can't be told from MAUI's processing.
+        h.Port.Shown = 1;
+        h.Port.CompleteBarrier();
+        h.Settle();
+        Assert.Empty(h.Log);
+        Assert.Equal((4, false), h.Port.Scrolls[^1]);
+        Assert.Equal(4, h.Port.Shown);
+    }
+
+    [Fact]
+    public void ADeclaredChangeWhileAFingerMovesIt_BeforeAnyEvent_WritesNothing()
+    {
+        var h = Mount();
+        h.Port.Moving = true;
+        h.Port.User = true;
+        h.SetPosition(3);
+        h.Host.Scheduler.Drain();
+        Assert.Empty(h.Port.Scrolls);
+
+        h.Port.Shown = 1;
+        h.Port.Moving = false;
+        h.Port.User = false;
+        h.Settle();
+        Assert.Equal(["1"], h.Log); // the drag's rest, then (refused) the declaration
+        Assert.Equal([(3, true)], h.Port.Scrolls);
+    }
+
+    [Fact]
+    public void AHandlerReplacement_ProjectsTheDeclaration_AsAJump_NotReported()
+    {
+        var h = Mount(position: 1);
+        // The new view shows MAUI's position (2), and its first jump stops short.
+        var replacement = new StubCarouselPort { Shown = 2, AutoLand = false };
+        h.View.Controller.Port = replacement;
+        h.Port = replacement;
+        while (replacement.Scrolls.Count == 0 && replacement.Frames.Count > 0) replacement.Frame();
+        replacement.AutoLand = true;
+        h.Settle();
+        Assert.Empty(h.Log);
+        Assert.Equal([(1, false), (1, false)], replacement.Scrolls); // the retry jumps too
+        Assert.Equal(1, replacement.Shown);
+    }
+
+    [Fact]
+    public void APlatformThatLandsButNeverAligns_IsAskedThreeTimes_ThenWarned()
+    {
+        using var warnings = new WarningListener("CarouselView.Position");
+        var h = Mount();
+        h.Port.AutoLand = false;
+        h.SetPosition(3);
+        h.Host.Scheduler.Drain();
+        h.Port.Shown = 3;
+        h.Port.Aligned = false;
+        h.Port.Offset = 30;
+        h.Settle(2000);
+        Assert.Equal(3, h.Port.Scrolls.Count);
+        Assert.Single(warnings.Warnings);
+        Assert.Empty(h.Log);
     }
 
     [Fact]

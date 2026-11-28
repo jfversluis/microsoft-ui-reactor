@@ -83,18 +83,21 @@ public static partial class MatrixCases
 internal static class CarouselMutants
 {
     public const string Position =
-        "Position written on every update (H1) and not at mount (H6), a projection while moving (C4), the restore not projecting (H5), "
-        + "an off-center landing accepted (C18), no retry cap (C17): red; on device the iOS port without its readiness gate (DV1) "
-        + "and through MAUI's ScrollTo instead of the page offset (DV2): red (spec 070 §5.13)";
+        "Position written on every update (H1) and not at mount (H6), the answer projecting nothing (G38), a rest taken while "
+        + "the own scroll is pending (G30), no scroll cap (G7) or give-up (G8, G16, G4), an off-center landing accepted (G39): red; "
+        + "on device the iOS readiness gate removed (DV1), MAUI's ScrollTo instead of the page offset (DV2): red (spec 070 §5.13)";
     public const string OnPositionChanged =
-        "reports from the poll while moving (C1), no wait for the answer (C2), every other rest taken for input (C3), the report "
-        + "not mapped by key (H3), a ref ScrollTo ignored (C10), a drag in the barrier window not input (C15) or projected over (C16), "
-        + "an own settle reported (C11): red; on device reports while moving (DV5): red (spec 070 §5.13)";
+        "an unrelated commit answering the report (G1), motion not input (G28), own motion input (G29), input not taking over an "
+        + "own projection (G31), a ref ScrollTo not input (G33), an own request taken for one (G32), an unknown rest always or "
+        + "never a move (G10, G11), a deferred move compared by index (G12), the report unmapped (H3): red; on device reports "
+        + "while moving (DV5): red (spec 070 §5.13)";
     public const string Items =
-        "items published while moving (C5), synced at once without a transaction (H7), an obsolete barrier completion acting (C6) "
-        + "or not reissuing (C7): red; on device the Android barrier ignoring the item animator (DV3): red (spec 070 §5.13)";
+        "no transaction (H7), no publication while nothing is laid out (G2, G3), an obsolete completion acting (G20) or "
+        + "never or always reissuing (G21, G22), window rests deciding (G5, G9), window input ignored (G24): red; on device the "
+        + "Android barrier ignoring the item animator (DV3): red (spec 070 §5.13)";
     public const string ItemKey = "new boxes on every publish instead of keeping them by key (H4): red (spec 070 §5.13)";
     public const string ItemTemplate = "IsCurrent from the previous declaration (H2): red (spec 070 §5.13)";
     public const string IsScrollAnimated =
-        "a declared change always animated (C13) and an items change's deferred projection animated (C14): red (spec 070 §5.13)";
+        "no same-turn jump (G19), jumpNext outliving a rest that needed nothing (G17) or input (G37), a port change animating "
+        + "(G27), a retry animating by the flag (G36): red (spec 070 §5.13)";
 }
