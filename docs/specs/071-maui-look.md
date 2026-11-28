@@ -5,7 +5,8 @@ remaining 🧪 modifiers: a theme value applied without rendering, styling for d
 fonts, animations, flow direction, `AutomationProperties`, and tests for every untested modifier. It
 stacks on 4c (spec 070), whose head is `1a8d88c6`.
 
-§1 is the outline of the whole phase. §2 is 4d-1's design: characterized on devices, not yet built.
+§1 is the outline of the whole phase. §2 is 4d-1's design: characterized on devices, revised after the
+design review of `bc46b5ea` (its decisions D1–D12 are cited where they apply), not yet built.
 4d-2 and 4d-3 get their own sections when their characterization is done.
 
 ## 1. The phase
@@ -70,7 +71,7 @@ Ordered by how many ports need each item (spec 068 §4).
 
 | Feature | WinUI Reactor | MAUI renderer | Why it differs |
 |---|---|---|---|
-| A themed value on a modifier | `ThemeRef` passed to modifier overloads (`.Background(ThemeRef)`, `.Foreground(ThemeRef)`, `.BorderBrush(ThemeRef)`), stored in `Element.ThemeBindings` | `ThemeRef<T>` passed to modifier overloads (`.BackgroundColor(ThemeRef<Color>)`, `.TextColor(ThemeRef<Color>)`, …), stored in `Element.ThemeBindings` | MAUI has no theme resource dictionaries in Reactor (spec 068: ⛔), so the value is a light and dark pair, not a resource key. The modifier names are MAUI's property names (spec 070 §3.2) |
+| A themed value on a modifier | `ThemeRef` passed to modifier overloads (`.Background(ThemeRef)`, `.Foreground(ThemeRef)`, `.BorderBrush(ThemeRef)`), stored in `Element.ThemeBindings` | `AppThemeValue<T>` passed to overloads of the same modifiers under MAUI's property names (`.BackgroundColor`, `.TextColor`, …) and to `.Themed(property, value)`, stored in `Element.ThemeBindings` | a different abstraction, so a different name (§2.2): WinUI's `ThemeRef` is a resource key that WinUI resolves with the element's inherited theme; Reactor's MAUI renderer has no theme dictionaries (spec 068: ⛔), so its value is a light and dark pair, named in MAUI's vocabulary (`AppThemeBinding`). The shape (overloads on the modifiers, literal wins) is WinUI's |
 | Theme as state | `UseColorScheme()`, `UseIsDarkTheme()` | `UseAppTheme()` (exists) | unchanged |
 | Implicit (type-wide) styles | XAML implicit styles, which WinUI's controls honor | `ElementStyles` provided to a subtree (§2.3) | WinUI Reactor has no Reactor-level implicit style. Its spec 015 recommends plain style functions instead (proposal 1). The MAUI renderer needs one because direct views can't read XAML styles |
 | Named styles | named-style fluents (`.AccentButton()`), `.ApplyStyle(key)` | style functions, a documented pattern with no API | |
@@ -96,7 +97,11 @@ These carry over from 4c:
 
 ## 2. 4d-1: the theme value, styling direct views and registered fonts
 
-### 2.1 Characterization (device, `LookCharacterization.cs`)
+The design review of `bc46b5ea` (two model families) asked for twelve changes. Four needed devices first
+(re-entrant theme sets, the Disabled state's precedence, Android's stale defaults, and the
+instrumentation), so §2.1 gained §2.1.1–§2.1.4 and the rest of §2 was rewritten on them.
+
+### 2.1 Characterization (device, `LookCharacterization.cs`, `LookReviewCharacterization.cs`)
 
 The baseline is plain MAUI 11.0.0 (`4e6582f`), then the same trees through Reactor on both registries.
 Devices: Mac Catalyst 26.7, the iPhone simulator (iOS 27.0), the iPad simulator (iOS 27.2) and the
@@ -106,8 +111,10 @@ The fixtures are on demand (`REACTOR_DEVICE_TEST_FILTER=Characterize_Look`). The
 and assert only that each instrument works:
 - **Mapper hook:** appended to every `LabelHandler` and `ButtonHandler` mapping. Its positive control is
   that a `Text` change counts once.
-- **Frame sampler:** `CADisplayLink` or `Choreographer`. Its positive control is that some view
-  takes the new color.
+- **Frame sampler:** `CADisplayLink` or `Choreographer`, one watch that both counts and samples, so a
+  sample's index is the frame callback it ran in: 0 is the synchronous read right after the action, *n*
+  the *n*-th frame callback after it. Its positive control is an observation of a new color made by a
+  frame callback after the action (index 1 or more), never by the synchronous read (review D12).
 - **Log capture:** an `ILoggerProvider` added in `MauiProgram`. Its positive control is a line logged
   through the app's logger factory.
 - **Width oracle:** a registered family measures differently from the default.
@@ -168,6 +175,10 @@ same frame as the set. A Reactor re-render's synchronous part is 1–7 ms; the r
 | Reactor `UseAppTheme` re-render, direct registry | 62.1, 1 | 92.8, 1 | 74.8, 1 | 26.6, 2 |
 | Reactor, the themed color written without a render, Controls registry | 32.1, 0 | 35.6, 0 | 20.7, 0 | 1.3, 0 |
 | Reactor, the themed color written without a render, direct registry | 20.5, 0 | 22.8, 0 | 23.5, 0 | 1.3, 0 |
+| The same, second run: written after the setter returns, Controls registry | 31.0, 0 | 25.7, 0 | 26.3, 0 | 1.4, 0 |
+| The same, written **inside a `RequestedThemeChanged` subscriber** (Reactor's path), Controls registry | 32.0, 0 | 22.7, 0 | 16.5, 0 | 1.3, 0 |
+| Written after the setter returns, direct registry | 32.7, 0 | 33.3, 0 | 34.4, 0 | 1.3, 0 |
+| Written inside a `RequestedThemeChanged` subscriber, direct registry | 20.3, 0 | 34.6, 0 | 32.2, 0 | 1.1, 0 |
 
 The cost is the platform's text-color writes: about 0.07–0.13 ms a label on UIKit and 5 µs on Android.
 Writing only the themed property costs what MAUI's own bindings cost. A re-render costs 2–4 times that
@@ -203,400 +214,599 @@ The width oracle at 17 pt for "The quick brown fox 0123456789":
 - That font spellings and missing fonts differ by platform.
 
 **What they leave open:**
-- Mac Catalyst's platform-started change (the host's appearance).
+- Mac Catalyst's platform-started change. Flipping it would change the host Mac's own appearance, and
+  no non-disruptive way to give one app a different system appearance was found, so it stays
+  uncharacterized (review D12).
 - Real Dynamic Type and accessibility font scaling, which these fixtures don't touch.
 
-### 2.2 What WinUI has (the source of truth for names)
+#### 2.1.1 Re-entrant theme sets (review D5)
 
-WinUI Reactor's theme value is `ThemeRef(string ResourceKey)`, a reference to a WinUI theme
-resource:
+`Characterize_Look_Reentrancy`, plain MAUI, all four devices. Three subscribers to
+`RequestedThemeChanged` (one before a stand-in for Reactor's, the stand-in, one after), a label with an
+`AppThemeBinding`, and a label without a color. During a change from Light to Dark, the app sets
+`UserAppTheme = Light`: from the subscriber before, from the subscriber after, or from a `TextColor`
+property-changed handler that runs while MAUI applies its bindings (before the event). A control round
+sets nothing.
+
+| | Mac Catalyst | iPhone, iPad | Android |
+|---|---|---|---|
+| The nested set | **suppressed**: MAUI's `TriggerThemeChangedActual` returns while `_themeChangedFiring`, so there is no second event, no binding pass, and no `OnPropertyChanged(UserAppTheme)` (so the application handler doesn't map the new theme). `UserAppTheme` and `RequestedTheme` read Light from then on | the same | the same |
+| What the subscribers see | the event's argument stays Dark for every subscriber; `RequestedTheme` reads Light for every subscriber after the nested set, so a subscriber after it sees a disagreement and one before it doesn't | the same | the same |
+| From the binding pass | the bound label shows Light briefly (the nested set's value), then MAUI's outer pass overwrites it with Dark | the same | the same |
+| Settled: MAUI's bindings | **Dark** (the event's theme) | Dark | Dark |
+| Settled: the platform's appearance | **Light** (the label without a color is black) | **Dark** (trait Dark) | **Dark** (AppCompat night mode 2) |
+| Recovery | `UserAppTheme = Light` again is a no-op (the setter compares with its field); only a different value (Unspecified) raises an event and re-applies | the same | the same |
+
+A set from inside Reactor's own pass would run inside the same dispatch (Reactor's pass is a subscriber), so
+it behaves as the subscriber cases.
+
+After a suppressed nested set, MAUI's three answers disagree: `RequestedTheme` says Light, its bindings say
+Dark, and the platform says Light on Mac Catalyst and Dark elsewhere. Nothing reports it.
+
+#### 2.1.2 A forced user theme while the system changes (review D12)
+
+`Characterize_Look_ForcedTheme` and `…_SystemChangedWhileForced`, host-driven, on iPhone, iPad and
+Android (Mac Catalyst not run, §2.1). The system goes dark with `UserAppTheme` Unspecified, the app forces
+Light, the system changes while forced, and the app returns to Unspecified.
+
+| | iPhone, iPad | Android |
+|---|---|---|
+| Unspecified under a dark system | one event, Dark; bindings and platform dark | the same |
+| The app forces Light | one event, Light; bindings and platform light | the same |
+| The system flips while forced | **MAUI doesn't observe it**: `PlatformAppTheme` stays Dark (the forced override hides the system's trait change from MAUI); no event | `PlatformAppTheme` follows the system; no event (`RequestedTheme` stays Light); platform light |
+| Back to Unspecified after the system went dark while forced | one event, Dark; correct | the same |
+| Back to Unspecified after the system went **light** while forced | **one event, Dark** (the stale `PlatformAppTheme`): bindings Dark while the platform shows Light, never corrected (2 s later, and after another system flip to light: still Dark) | no event (`RequestedTheme` was already Light); correct |
+
+MAUI 11 on iOS: returning to Unspecified after the system changed while a user theme was forced applies a
+stale theme for good.
+
+#### 2.1.3 The Disabled state and inherited `IsEnabled` (review D7)
+
+`Characterize_Look_Disabled_Plain` and `…_Disabled_Reactor`, all four devices, the same on each. The style
+has a teal background and a `Disabled` state with a gray background and yellow text.
+
+| | Plain MAUI | Reactor, Controls registry | Reactor, direct registry |
+|---|---|---|---|
+| A local value under a `Disabled` state (implicit style, explicit style, or groups set on the view) | **the state wins while disabled**: a local red background shows gray (`WithFullVsmPriority` promotes a system state's setters above local values, `VisualStateManager.cs` 49–60, 145–165); red again when enabled | the same: Reactor's declared red shows gray while disabled | no visual states: the declared red stays, with the platform's disabled text |
+| A parent layout disabled | the child's `IsEnabled` reads false (`IsEnabledCore` ANDs the parent's, `VisualElement.cs` 660–677), it goes to `Disabled`, its platform control is disabled | the same (this registry has no anchored views) | **nothing propagates**: direct children stay enabled on the platform and in look; the **anchored Controls child stays enabled** (its `Parent` is the `DirectViewHost`, so `IsEnabledCore` never sees the direct layout); the layout's own platform view is disabled on Android only (not an input barrier for its children) |
+| The child explicitly `IsEnabled = true` under a disabled parent | stays disabled (the parent wins) | the same | stays enabled |
+| The parent re-enabled | the child is enabled and `Normal` again | the same | — |
+
+The direct registry has no inherited `IsEnabled` at all today: a disabled direct layout neither disables
+nor greys its children, on any platform. That is a defect of the registry, independent of styling.
+
+#### 2.1.4 Android's defaults after a theme change (review D11)
+
+`Characterize_Look_Defaults [controls|direct]` (an app-started change) and `…_Defaults_System [direct]`
+(host-started), all four devices. A label, a button, a disabled button and an entry, without colors and
+with colors that a render clears after the change.
+
+| | Mac Catalyst, iPhone, iPad | Android |
+|---|---|---|
+| Views without a color | follow (dynamic system colors) | **stale**: they keep the inflation-time colors (§2.1), both registries, app- and system-started |
+| A color cleared after the change (label text, button text and background) | the current theme's default | **the stale inflation-time default**: MAUI restores the color list it cached at the view's first color write (`TextViewExtensions.cs` 66–82, `ButtonHandler.Android.cs` 27–55, 109–119) |
+| An entry's placeholder color cleared after the change | the current default | the current default (`#FFFFFF` at 70% in dark) |
+| An entry's text color without a value | follows | follows (`#FFFFFF` in dark) |
+| The existing view's context after the change | — | **reconfigured**: night mode on, and its theme's attributes re-resolve (`textColorPrimary` white, `textColorSecondary` white at 70%, `textColorHint` white at 70%; disabled variants with them) |
+| A fresh view of the same class created on that existing context | — | **the current theme's defaults**, enabled and disabled: `TextView` white at 70% (disabled 21%), `MaterialButton` text black, tint `#512BD4` (disabled white at 38% and 12%), `EditText` hint white at 70%; identical to a fresh view on a context re-themed for the new configuration (`CreateConfigurationContext` + `Maui.MainTheme.NoActionBar`) |
+
+So the current defaults are recoverable natively, without hard-coded colors and without remounting: a
+fresh platform view of the same class on the view's own (already reconfigured) context carries them, in
+every state. Only views that already exist, and colors MAUI restores from its cache, are stale.
+
+### 2.2 What WinUI has, and why the MAUI value isn't `ThemeRef` (review D1)
+
+WinUI Reactor's theme value is `ThemeRef(string ResourceKey)`, a reference to a WinUI theme resource:
 - Typed tokens: `Theme.Accent`, `Theme.CardBackground`, …. Any key: `Theme.Ref(key)`.
 - It is passed to modifier overloads (`.Background(ThemeRef)`, `.Foreground(ThemeRef)`,
-  `.BorderBrush(ThemeRef)`, `.WithBorder(ThemeRef, …)`), which record it in
-  `Element.ThemeBindings` (`IReadOnlyDictionary<string, ThemeRef>`, keyed by property name).
-- The reconciler applies the bindings as a synthesized `Style` whose setters are `{ThemeResource}`
-  references, so WinUI itself re-resolves them when the theme changes.
-- The host also re-renders on `ActualThemeChanged`, for values resolved in render.
+  `.BorderBrush(ThemeRef)`, `.WithBorder(ThemeRef, …)`), which record it in `Element.ThemeBindings`
+  (`IReadOnlyDictionary<string, ThemeRef>`, keyed by property name; `ElementExtensions.cs` 3428–3433,
+  `Element.cs` 202). Literals are stored separately (`VisualModifiers`), and **a literal always wins**:
+  the bindings are applied as a synthesized `Style` of `{ThemeResource}` setters, which a local value
+  overrides whatever the call order (`ElementExtensions.cs` 1358–1388).
+- WinUI resolves the key with the **element's own effective theme**, which a subtree's
+  `RequestedTheme` can override (`Theme.cs`, `Reconciler.cs` ≈8277), and re-resolves it itself when the
+  theme changes.
 
-For styles, WinUI Reactor relies on XAML:
-- implicit styles in app resources, honored natively by WinUI's controls;
-- named-style fluents (`.AccentButton()`, typography factories over `.ApplyStyle(key)`);
-- lightweight styling (`.Resources(r => r.Set(key, value))`).
+That is a different abstraction from MAUI's `AppThemeBinding`: an indirection through a theme dictionary,
+with an inherited per-element theme. Reactor's MAUI renderer has neither (no theme dictionaries, spec 068
+⛔; MAUI has no per-view theme). Its value is a literal light and dark pair for the app's theme, so it
+takes MAUI's vocabulary: **`AppThemeValue<T>`**. It keeps WinUI's *shape*: overloads on the same modifiers,
+a binding table on the element keyed by property, literals stored apart and always winning.
 
-Spec 015 considered and declined a Reactor-level style type ("Style bundles: document the pattern,
-don't add ceremony") and deferred typed per-control style protocols.
+**A neutral pair in the shared core?** No. WinUI wouldn't use it: its themed values are resource keys
+resolved by WinUI, and a literal pair would bypass the element-inherited theme and high-contrast
+resources. A type both renderers don't use doesn't belong in the core, so `AppThemeValue<T>` is MAUI-side
+and WinUI is unchanged.
 
-The MAUI renderer keeps WinUI's shape for the theme value: a value type passed to modifier overloads,
-recorded in `Element.ThemeBindings` and applied by the renderer, not by render. It differs where MAUI
-does:
-- There are no theme dictionaries in Reactor (spec 068 excludes `ResourceDictionary`), so the value is
-  a light and dark pair, `ThemeRef<T>`.
-- The overloads are named after MAUI's properties (`.BackgroundColor`, `.TextColor`).
+For styles WinUI Reactor relies on XAML: implicit styles honored by WinUI's controls, named-style
+fluents, lightweight styling (`.Resources(...)`). Spec 015 declined a Reactor-level style type.
 
-WinUI is unchanged: nothing in 4d-1 moves to the shared core. WinUI's `ThemeRef` is tied to WinUI's
-resource system, and the MAUI type differs in meaning and arity.
+### 2.3 The model: look properties; declared, applied and native
 
-### 2.3 API
+**Look properties (review D3, D8).** Every property a theme value or a style can set is a
+**`LookProperty`**: a static descriptor with a stable identity that knows
+
+- its owner element type and value type, and its **presence**: whether a declaration has a value (§2.12's
+  inventory: `null` means unset for nullable properties);
+- how to read, set and clear it on the element record (typed, no reflection);
+- how to write it to each registry's native view: the Controls view's `BindableProperty`
+  (`SetValue`, or `ClearValue` for unset), and the direct view's field and the handler key it re-maps;
+- whether a value needs a Controls view on the direct registry (§2.11);
+- on Android, whether its platform default is theme-derived and how to re-resolve it (§2.9).
+
+The handlers' own property writes for look properties go through the same descriptors, so the ordinary
+update path and the look patch below can't diverge (the census runs both, §2.12).
+
+Theme bindings, style merging and the look patch are all keyed by descriptor: one binding is one property.
+
+**Three elements per host node (review D4).**
+
+- **Declared**: `node.Element`, what the app rendered. The reconciler, `HandlerContext.Live`, callbacks and
+  every controlled-value rule use it (the carousel reads `Live.Position`; the echo contract restores from
+  it). It is never projected.
+- **Applied**: the declared element merged with its style and with every theme binding resolved for the
+  current theme, as plain values. The handler receives it in ordinary mounts and updates and diffs
+  applied-to-applied. Handlers read look values only from the element they're given, never from `Live`.
+- **Native**: what the platform views hold. After a look patch the node's applied element is updated
+  through the descriptors to the values the patch wrote, so the next ordinary update diffs from what is
+  really on the view.
+
+**The look patch.** A theme pass, a style pass, an `IsEnabled`-driven Disabled-variant change (§2.8) and
+Android's default re-resolution (§2.9) write *only the affected look properties*, through their
+descriptors' native writers, in the root's echo scope. A look patch never runs the handler's `Update`:
+not `Configure` (`.Set(...)`), not a controlled value's restore against native drift, not a
+`GraphicsView` invalidate, not child reconciliation.
+
+### 2.4 API
 
 ```csharp
 namespace Microsoft.UI.Reactor.Maui;
 
-/// <summary>
-/// A value per app theme. The renderer writes the current theme's value and rewrites it when the theme
-/// changes, without rendering.
-/// </summary>
-public readonly record struct ThemeRef<T>(T Light, T Dark)
+/// <summary>A value per app theme, written by the renderer and rewritten at a theme change, without rendering.</summary>
+public readonly record struct AppThemeValue<T>(T Light, T Dark)
 {
-    /// <summary>The value for <paramref name="theme"/>: <see cref="Dark"/> for Dark, <see cref="Light"/> otherwise (MAUI's rule).</summary>
+    /// <summary>Dark for <see cref="AppTheme.Dark"/>, Light otherwise (MAUI's AppThemeBinding rule).</summary>
     public T For(AppTheme theme) => theme == AppTheme.Dark ? Dark : Light;
 }
 
-public static class ThemeRef
+public static class AppThemeValue
 {
-    public static ThemeRef<T> Of<T>(T light, T dark) => new(light, dark);
+    public static AppThemeValue<T> Of<T>(T light, T dark) => new(light, dark);
 }
 
-// Modifier overloads, beside the literal ones (WinUI's shape):
-public static T BackgroundColor<T>(this T element, ThemeRef<Color> color) where T : ViewElement;
-public static T Background<T>(this T element, ThemeRef<Brush> brush) where T : ViewElement;
-public static T TextColor<T>(this T element, ThemeRef<Color> color) where T : TextViewElement;
-public static BorderElement Stroke(this BorderElement element, ThemeRef<Color> color, double thickness = 1);
-public static T Fill<T>(this T shape, ThemeRef<Color> color) where T : ShapeElement;
-public static T Stroke<T>(this T shape, ThemeRef<Color> color, double? thickness = null) where T : ShapeElement;
+/// <summary>A property a theme value or a style can set (§2.12's inventory). Instances are static and compared by reference.</summary>
+public abstract class LookProperty
+{
+    public string Name { get; }
+    public Type OwnerType { get; }
+    public Type ValueType { get; }
+}
+public sealed class LookProperty<TOwner, TValue> : LookProperty where TOwner : Element { /* internal get/set/clear, native writers */ }
 
-// Any other property, including init-only ones and those of pages and Shell items:
-public static TElement Themed<TElement, TValue>(this TElement element, ThemeRef<TValue> value,
-    Func<TElement, TValue, TElement> apply) where TElement : Element;
-// e.g. Entry(text, setText).Themed(ThemeRef.Of(Gray200, Gray500), static (e, c) => e with { PlaceholderColor = c })
+/// <summary>The descriptors, grouped by owner.</summary>
+public static class LookProperties
+{
+    public static class View { public static readonly LookProperty<ViewElement, Color> BackgroundColor; /* Background, Opacity, IsEnabled, … */ }
+    public static class Text { public static readonly LookProperty<TextViewElement, Color> TextColor; /* FontFamily, FontSize, … */ }
+    public static class Entry { public static readonly LookProperty<EntryElement, Color> PlaceholderColor; /* … */ }
+    public static class Page { public static readonly LookProperty<PageElement, Color> BackgroundColor; }
+    public static class Shell { public static readonly LookProperty<ShellElement, Color> TitleColor; /* … */ }
+    // … one class per owner, every property of §2.12's inventory
+}
 
-// The bindings, as WinUI names them (on the renderer's Element base, namespace Microsoft.UI.Reactor.Core):
-public IReadOnlyList<ThemeBinding>? ThemeBindings { get; }   // set only through the modifiers above
-public sealed class ThemeBinding { public string Key { get; } public object? Light { get; } public object? Dark { get; } }
+// Typed overloads on the existing modifiers (WinUI's shape), each binding its descriptor:
+public static T BackgroundColor<T>(this T element, AppThemeValue<Color> color) where T : ViewElement;
+public static T Background<T>(this T element, AppThemeValue<Brush> brush) where T : ViewElement;
+public static T TextColor<T>(this T element, AppThemeValue<Color> color) where T : TextViewElement;
+public static BorderElement Stroke(this BorderElement element, AppThemeValue<Color> color, double thickness = 1);
+public static T Fill<T>(this T shape, AppThemeValue<Color> color) where T : ShapeElement;
+public static T Stroke<T>(this T shape, AppThemeValue<Color> color, double? thickness = null) where T : ShapeElement;
 
-/// <summary>
-/// Implicit styles for Reactor elements: per element type, an element whose set properties are the
-/// style's setters, and optionally the look while disabled (MAUI's CommonStates Disabled).
-/// </summary>
+// Every other property, pages and Shell included:
+public static TElement Themed<TElement, TOwner, TValue>(this TElement element,
+    LookProperty<TOwner, TValue> property, AppThemeValue<TValue> value) where TElement : TOwner where TOwner : Element;
+// e.g. Entry(text, setText).Themed(LookProperties.Entry.PlaceholderColor, AppThemeValue.Of(Gray200, Gray500))
+
+// On the renderer's Element base (namespace Microsoft.UI.Reactor.Core), WinUI's name:
+public IReadOnlyDictionary<LookProperty, object>? ThemeBindings { get; }   // value: the boxed AppThemeValue<T>; set only through the methods above
+
+/// <summary>Implicit styles for Reactor elements, by exact element type.</summary>
 public sealed class ElementStyles
 {
     public static ElementStyles Empty { get; }
 
-    /// <summary>Returns styles with <paramref name="style"/> for <typeparamref name="TElement"/>, replacing an earlier one.</summary>
-    public ElementStyles Add<TElement>(TElement style, TElement? disabled = null)
-        where TElement : ViewElement, IStyleable<TElement>;
-
-    /// <summary>These styles with <paramref name="inner"/>'s entries replacing theirs per type (MAUI's BasedOn, by composition).</summary>
-    public ElementStyles With(ElementStyles inner);
-}
-
-/// <summary>An element type whose look properties a style can fill. Every built-in element implements it.</summary>
-public interface IStyleable<TSelf> where TSelf : ViewElement, IStyleable<TSelf>
-{
     /// <summary>
-    /// <paramref name="declared"/> with every look property it leaves unset, and has no theme binding
-    /// for, taken from <paramref name="style"/>.
+    /// <paramref name="style"/>'s set look properties and theme bindings become the type's defaults;
+    /// <paramref name="disabled"/>'s apply while the element is effectively disabled (§2.8). Replaces an earlier entry for the type.
     /// </summary>
-    static abstract TSelf MergeUnder(TSelf declared, TSelf style);
+    public ElementStyles Add<TElement>(TElement style, TElement? disabled = null) where TElement : ViewElement;
+
+    /// <summary>Returns styles without an entry for <typeparamref name="TElement"/> (the type then falls through to an outer scope).</summary>
+    public ElementStyles Remove<TElement>() where TElement : ViewElement;
 }
 
-// Provides styles to a subtree (a composition primitive, beside ErrorBoundary):
+// Provides styles to a subtree; nested scopes fall through per type (§2.7). A composition primitive, beside ErrorBoundary:
 public static Element WithStyles(ElementStyles styles, Element? child);
+
+// Android's theme-derived defaults (§2.9), on by default:
+public static class ReactorTheme { public static bool ResolveAndroidDefaults { get; set; } = true; }
 ```
+
+The layout spacings become nullable so a style can tell "unset" from 0 (§2.12): `VStackElement.Spacing`,
+`HStackElement.Spacing`, `GridElement.RowSpacing` and `ColumnSpacing` are `double?` (unset: MAUI's
+default, 0). Writers (`with { Spacing = 8 }`, `VStack(8, …)`) compile unchanged; a reader of `.Spacing`
+sees `double?`.
 
 An app's template styles, ported:
 
 ```csharp
 static readonly ElementStyles AppStyles = ElementStyles.Empty
     .Add(Label("").FontFamily("OpenSansRegular").FontSize(14)
-        .TextColor(ThemeRef.Of(Colors.Black, Colors.White)))
+        .TextColor(AppThemeValue.Of(Colors.Black, Colors.White)))
     .Add(Button("").FontFamily("OpenSansSemibold").FontSize(14)
-            .TextColor(ThemeRef.Of(Colors.White, AppColors.Primary))
-            .BackgroundColor(ThemeRef.Of(AppColors.Primary, Colors.White))
+            .TextColor(AppThemeValue.Of(Colors.White, AppColors.Primary))
+            .BackgroundColor(AppThemeValue.Of(AppColors.Primary, Colors.White))
             with { CornerRadius = 8, Padding = new Thickness(14, 10) },
         disabled: Button("")
-            .TextColor(ThemeRef.Of(AppColors.Gray950, AppColors.Gray200))
-            .BackgroundColor(ThemeRef.Of(AppColors.Gray200, AppColors.Gray600)));
+            .TextColor(AppThemeValue.Of(AppColors.Gray950, AppColors.Gray200))
+            .BackgroundColor(AppThemeValue.Of(AppColors.Gray200, AppColors.Gray600)));
 
-// The root: every view below takes the styles, on either registry.
 new ReactorWindow(WithStyles(AppStyles, Component<AppShell>()), DirectHandlers.CreateRegistry());
 
 // A named (keyed) XAML style is a function:
 static LabelElement Headline(this LabelElement l) => l.FontSize(32).FontFamily("OpenSansSemibold");
 ```
 
-### 2.4 The theme value
+### 2.5 Theme values
 
-1. **The theme.** `Application.Current.RequestedTheme`: Dark gives the dark value, anything else
-   (Light, Unspecified) the light one. This is MAUI's own rule (`AppThemeBinding.GetValue`). Without an
-   application (headless tests), a test seam supplies the theme.
-2. **Projection before the handler.** Before a host element reaches its handler (mount, update, a
-   controlled value's restore), Reactor projects it: each theme binding's value for the current theme
-   is written into the element through its `apply`, in declaration order. The handler sees only plain
-   values, so handlers don't change. The node keeps the projected element it last gave its handler,
-   and every later update diffs from it.
-3. **Last call wins** between a literal and a themed modifier for the same key:
-   - `.TextColor(Colors.Red)` removes a `TextColor` binding.
-   - `.TextColor(ThemeRef.Of(a, b))` adds the binding and clears the field.
-   - A field set with `with { TextColor = … }` beside a binding for the same key: the binding wins, and
-     Reactor warns once per element type and key. Reporting, not swallowing: the field is silently
-     overwritten otherwise.
+1. **Literal always wins (review D2).** A declaration's literals and its theme bindings are stored
+   independently: literals in the element's fields and modifiers (a `with { TextColor = … }` assignment is
+   a literal), bindings in `ThemeBindings`, keyed by descriptor. For each property, the applied value is
+   the declared literal if present, else the declared binding resolved for the theme, else the style's
+   literal, else the style's binding resolved (§2.7), else unset. Call order doesn't matter:
+   `.TextColor(red).TextColor(themed)` and `.TextColor(themed).TextColor(red)` both apply red. Removing
+   the literal in a later render reveals the binding. A theme switch writes nothing to a property a
+   literal overrides.
+2. **One binding per property.** Binding a descriptor again (a second `.Themed` call, or a typed overload
+   and `.Themed` with the same descriptor) replaces the earlier binding: last binding wins among bindings.
+   Bindings compare by descriptor and value, so two renders with equal values are equal elements.
+3. **The theme (review D5).** The renderer's theme is **the theme MAUI last applied**: the argument of the
+   last `RequestedThemeChanged`, held by one app-wide `ThemeSource` subscribed before the first root
+   mounts and initialized from `Application.RequestedTheme`. It is what MAUI's bindings and the app's XAML
+   styles show on every platform (§2.1.1, §2.1.2). Without an application (headless), a test seam supplies
+   it. Dark resolves the dark value, anything else the light one.
+4. **Divergence is reported, not guessed (review D5).** After each change, a posted check compares the
+   applied theme, `Application.RequestedTheme` and the platform's appearance (iOS and Mac Catalyst: the key
+   window's trait collection; Android: the activity's night mode). A disagreement is reported once per
+   kind with what it means: a `UserAppTheme` set during a theme change that MAUI suppressed (§2.1.1; the
+   remedy is to set it from a posted callback), or iOS's stale platform theme after a forced theme
+   (§2.1.2). Reactor doesn't repair MAUI's state and doesn't follow `RequestedTheme` there: doing either
+   would split Reactor's views from the app's XAML bindings.
+5. **Re-projection without rendering.** Each top root subscribes to the `ThemeSource`. On a change it
+   runs a theme pass (§2.6): every enrolled host node gets a look patch for the descriptors its bindings
+   (own or from its style) name. No component renders, no handler `Update` runs. The pass runs inside
+   MAUI's event, so it lands in the frame MAUI's own bindings change in (frame 0 on all four devices; the
+   in-event cost equals the after-set cost, §2.1).
+6. **Enrolment.** A host node is enrolled while it has theme bindings, its style has any, it has a
+   Disabled variant, or (Android, §2.9) it has a theme-derived default that is unset. Nodes leave the set at
+   unmount. Unmounted roots unsubscribe; the `ThemeSource` iterates a snapshot of subscribers and skips a
+   root that unmounted during the notification.
+7. **Only look properties.** Descriptors exist only for look properties (§2.12), so no controlled value,
+   event or content can be themed.
 
-   `.Themed(value, apply)` is keyed by its `apply` delegate. A static lambda is one cached instance
-   per call site, so two renders' bindings are equal. A capturing lambda is allowed but makes the
-   element unequal on every render; that costs a handler update, never a wrong write.
-4. **A theme change re-projects without rendering.**
-   - **Subscription:** the top root of a tree subscribes to `Application.RequestedThemeChanged` while
-     mounted. MAUI raises it synchronously, after applying its own bindings (§2.1).
-   - **Inside the event**, Reactor updates every mounted host node with theme bindings (its own, or
-     inherited from a style, §2.5) in its root's echo scope: from the projected element it last applied
-     to the element projected for the new theme.
-   - **Only the themed properties are written**: the census proves an equal value writes nothing
-     (spec 070 §4.14). No component renders.
-   - **Timing:** this is the frame MAUI's own bindings change in (frame 0 on all four devices, §2.1),
-     where a `UseAppTheme` re-render lands a frame late on Android.
-   - **Child roots** (list cells, pushed pages, dialogs) are re-projected by their top root, in tree
-     order.
-5. **Not during a commit.** If the event arrives while a root is committing (an app setting
-   `UserAppTheme` from inside a render), the re-projection runs once at the end of the commit. Nodes
-   the commit projected after the change already used the new theme; the pass fixes the earlier ones.
-6. **Once per change.** Each root records the theme it last projected for and ignores an event that
-   names it again. MAUI deduplicates its own events, but a re-entrant set and a commit-end pass must not
-   re-project twice.
-7. **Unmount.**
-   - A node leaves the themed set when it unmounts, and the top root unsubscribes when it unmounts.
-   - Nothing is written after either.
-   - The handler swap the direct registry's fallback performs (a projected element that now needs
-     Controls) is a remount, as for any property flip.
-8. **Errors.** A handler's exception during re-projection goes to the nearest error boundary, as a
-   restore's does (`RestoreControlledValues`).
-9. **Controlled values aren't look.** The typed overloads exist only for look properties (colors,
-   brushes). `.Themed` on a controlled property is a declared change at every switch: written in the
-   echo scope, never reported.
-10. **`UseAppTheme` is unchanged.** A component that branches on the theme still re-renders. Its
-    projection then writes nothing new for the bindings, which already changed.
+### 2.6 Transactions and re-entrancy (review D5)
 
-### 2.5 Element styles
+1. **One transaction per tree.** The top root holds a transaction depth entered by every operation that
+   writes to native views in its tree: a commit (mount, update, unmount), a child root's commit (list
+   cells, `CreateChildRoot` content, including a cell realized by the platform outside a Reactor commit),
+   a controlled value's restore, teardown, and the theme, style, Disabled and Android-default passes.
+2. **A change during a transaction is deferred.** The `ThemeSource` notification records the pending
+   theme and bumps a generation; the pass runs when the outermost transaction ends, synchronously in the
+   same turn. Nodes a commit mounts after the change are projected with the new theme at mount.
+3. **A pass settles.** It takes the target theme and generation, iterates a snapshot of the enrolled
+   nodes, checks each node's liveness (not unmounted, its root alive) before writing, skips nodes already
+   applied for the target, and patches the rest. Nodes mounted during the pass (an error boundary's
+   fallback, a realized cell) are projected at mount with the current theme and enrolled. When the pass
+   ends, if the generation moved, it runs again for the newest theme; only then is the root marked applied.
+   A pass that would run a fourth time in one turn is posted, with a warning: then, and only then, the
+   same-frame guarantee doesn't hold.
+4. **Nested theme sets** from inside a pass can't produce a second MAUI event (MAUI suppresses it,
+   §2.1.1); they reach rule 4 of §2.5 instead.
+5. **Errors.** A native write that throws is routed to the nearest error boundary, as a restore's error is;
+   the pass continues with the other nodes; the failed node is re-projected on the next pass.
+6. **Two windows.** Each window's top root subscribes; the source notifies them in subscription order;
+   a window closed during the notification is skipped by rule 3's liveness check.
 
-1. **Fill unset.** A style is an element of the same type, and the properties it sets are its setters.
-   A host element of exactly that type takes the style's value or theme binding for each look property
-   it leaves unset (null) and has no binding for. Content is never styled: the positional parameters
-   (text, items, children, callbacks) aren't look properties, and `MergeUnder` doesn't read them. The
-   declared element always wins, as a MAUI local value beats a style setter.
-2. **Disabled.** When the element's own `IsEnabled` is false, the `disabled` style is merged first, then
-   the normal one. This is MAUI's `Disabled` visual state layered over the style's setters, the only
-   state the template styles use besides `Normal`.
-   - A change of `IsEnabled` re-projects.
-   - A parent's `IsEnabled` isn't inherited into this decision (open question, §2.12).
-   - Other states: `PointerOver`, `Focused` and `Pressed` need pointer events (4e). `Checked`,
-     `Selected`, `On` and `Off` are props from state (spec 068).
-3. **Order.** Projection merges the styles (disabled, then normal), then resolves the theme bindings:
-   the element's own and those it took from the style.
-4. **Scope.** `WithStyles(styles, child)` provides styles to its subtree through Reactor's context
-   mechanism (a provider node), so a host node finds them through its nearest provider, as context
-   lookups do.
-   - Nested providers: the nearest provider's entry for a type replaces outer ones. That is MAUI's
-     nearest-implicit-style rule; `BasedOn` is `outer.With(inner)`.
-   - Child roots (list cells, pushed pages, dialogs) inherit, as context does.
-5. **Changing the styles** (a provider rendered with a different `ElementStyles` instance; compared by
-   reference, since the type is immutable) re-projects the provider's host descendants without
-   rendering components.
-6. **XAML styles on the Controls registry.** Reactor's projected values are local values, so they win
-   over the app's XAML implicit styles. Properties Reactor leaves unset are cleared (`ClearValue`) and
-   show the XAML style (§2.1). The layers on the Controls registry are therefore:
-   declared ⊕ `ElementStyles` > XAML implicit style > MAUI's default. On the direct registry XAML
-   styles don't apply.
-7. **Reporting the direct registry's gap.** When a direct view mounts and the app defines an implicit
-   XAML style for the Controls type it stands for (`Label` for `DirectLabel`, …), Reactor warns once
-   per type per app. The warning names the type and the two remedies: `ElementStyles`, or the Controls
-   registry for that subtree. The check reads MAUI's implicit-style key, the target type's full name,
-   in `Application.Current.Resources` and up the direct tree's Controls anchor. It runs once per type.
-8. **Keyed XAML styles are functions** (§2.3; WinUI's named-style fluents and spec 015 proposal 1). There
-   is no API for them, only the documented pattern.
-9. **`IStyleable` on every built-in element.** `MergeUnder` is written by hand per type. The census
-   (§2.8) proves it fills every look property of every element.
+### 2.7 Element styles (review D9)
 
-### 2.6 Registered fonts
+1. **Fill unset, fieldwise.** A style is an element of the same type; its set look properties and its
+   theme bindings are its setters. For each descriptor of the element's type (common view properties
+   inside `Modifiers` included, field by field), the declaration's literal or binding wins; otherwise the
+   style's literal, then the style's binding (§2.5 rule 1). Content, controlled values and events are
+   never read from a style (they have no descriptors).
+2. **Per-type fall-through.** `WithStyles` scopes nest. A host node takes, for its exact type, the entry of
+   the nearest scope that has one: an inner scope with only a `Label` entry doesn't hide an outer `Button`
+   entry, and `Remove<T>()` in an inner scope falls through to the outer entry.
+3. **Resolved once per scope.** A scope node keeps a resolved table: its entries over its outer scope's
+   resolved table, computed when the scope mounts or its styles change, never per render. A host node finds
+   its scope through a pointer fixed at creation (like `NearestProvider`) and reads its type's entry in
+   O(1). A render with the same `ElementStyles` instance does nothing.
+4. **Restyling without rendering.** A scope rendered with a different `ElementStyles` instance recomputes
+   its resolved table and its inner scopes', then runs a style pass: look patches for the host nodes
+   enrolled under it whose type's resolved entry changed (compared by reference), beneath skipped
+   components too. No component renders.
+5. **Root boundaries.** Child roots made with `CreateChildRoot` (list cells, item content) continue their
+   owner's scope. A standalone root (a `ReactorWindow`, a `ReactorPage` created by the app) starts with no
+   styles: the app wraps its content in `WithStyles` (the guide shows one shared `ElementStyles` for
+   every root).
+6. **XAML styles on the Controls registry.** Reactor's applied values are local values: they win over
+   the app's XAML implicit styles, and unset properties are cleared and show the XAML style (§2.1). The
+   exception is a XAML `Disabled` state, which MAUI ranks above local values (§2.1.3).
+7. **Reporting the direct registry's gap.** When a direct view mounts and the app's resources define an
+   implicit XAML style for the Controls type it stands for, Reactor warns once per type per app, naming the
+   type and the remedies (`ElementStyles`, or the Controls registry for that subtree).
+8. **Keyed XAML styles are functions** (§2.4).
+9. **Measured.** The projection path is part of the gate (§2.14): with no styles and no bindings in the
+   tree it must cost nothing measurable.
 
-1. **No new API.** `FontFamily` takes:
-   - the alias registered with `ConfigureFonts`: portable, and what the guide recommends;
-   - the file name, with or without its extension: portable, although Android logs a warning for the
-     form without one;
-   - on iOS and Mac Catalyst, the font's PostScript or family name: not portable, since Android doesn't
-     resolve them (§2.1).
+### 2.8 The Disabled state and effective `IsEnabled` (review D7)
 
-   Both registries resolve every spelling the same way, through MAUI's font manager.
-2. **An unresolved family is reported once per family per app**, on both registries, when a text
-   element's family first reaches a handler. Unresolved means MAUI's font manager returns the same
-   native font for the family as for a sentinel name no font has (iOS and Mac Catalyst: `UIFont` name
-   and size; Android: `Typeface` equality).
-   - Comparing with the sentinel's font, not the default font, matters: on Android a missing family
-     resolves to a sans-serif fallback that isn't `Typeface.Default` (§2.1).
-   - The result is cached per family. MAUI caches the resolution itself (under 0.1 ms after the
-     first).
-   - iOS and Mac Catalyst log nothing for a missing family today, and Android logs a warning per
-     resolution. The report gives every platform one actionable line naming the family and the
-     registration API.
-3. **Attributes on a single-face family.** iOS and Mac Catalyst ignore `Bold` and `Italic` on a family
-   registered with one face; Android fakes them. On iOS and Mac Catalyst Reactor reports once per
-   family and attribute when the resolved font lacks the trait (`UIFontDescriptor.SymbolicTraits`). The
-   guide recommends registering each face under its own alias.
-4. **Styles carry fonts** like any other property. Font sizes and auto-scaling are unchanged: the direct
-   views mirror Controls (spec 065 §4).
+MAUI (§2.1.3): a `Disabled` state's setters beat local values; `IsEnabled` is inherited (a disabled
+ancestor disables every descendant, and a descendant's own `IsEnabled = true` can't override it). Reactor
+matches both, on both registries.
 
-### 2.7 Both registries
+1. **Effective enabled.** A host node is effectively enabled when its applied `IsEnabled` (declared, or
+   from its style) isn't false and its nearest host ancestor is effectively enabled. The ancestry is
+   Reactor's host-node tree, through components and through child roots made with `CreateChildRoot`
+   (cells inherit the list's state), not through page roots.
+2. **The variant.** An effectively disabled node applies its style's `disabled` element: for the
+   properties it sets, **above the declaration's literals** (MAUI's precedence), then the normal rules.
+   A declaration that wants a different disabled look declares it conditionally (`enabled ? red : gray`)
+   or uses its own `ElementStyles` scope.
+3. **Propagation.** A change of a node's effective state is propagated to its host descendants (beneath
+   skipped components too) by a Disabled pass: a look patch for the descendants with a Disabled variant,
+   and the effective `IsEnabled` written to every descendant's native view on the direct registry and to
+   anchored Controls views (whose MAUI parent doesn't carry the direct layout's state, §2.1.3). On the
+   Controls registry MAUI's own inheritance does the rest.
+4. **Themes while disabled.** A theme pass resolves the Disabled variant's bindings for disabled nodes.
+5. **The direct registry's `IsEnabled` defect** (§2.1.3) is fixed by rule 3: a disabled direct layout
+   disables its children's platform views.
 
-Projection, styles and theme re-projection run in the engine, before the registry's handler, so both
-registries see the same element. The two differ only in:
-- **XAML implicit styles**, which only Controls views honor (§2.5 rule 6, reported by rule 7);
-- **the direct registry's fallback decision** (`NeedsControls`), which sees the projected element. A
-  themed `Background` brush is a Controls setting in both themes. A theme switch that changes the
-  decision (a value Controls needs in one theme only) remounts that view, as any property flip does.
+### 2.9 Android's theme-derived defaults (review D11)
 
-Controls views inside direct layouts are styled and themed like logical children (§2.1), so mixed trees
-need nothing more.
+On Android a view without a color keeps its inflation-time default, and MAUI restores that stale default
+when a color is cleared (§2.1.4). Reactor re-resolves defaults natively; it never remounts and never uses
+a hard-coded palette.
 
-### 2.8 Census keys and their evidence
+1. **The resolver.** For each Android platform class Reactor renders whose look properties have
+   theme-derived defaults (the gate's premise 5 lists them, from a per-control characterization:
+   `TextView` text, `MaterialButton` text and background tint, …), Reactor creates one reference view per
+   class and configuration, on the existing views' context (characterized as reconfigured, §2.1.4), and
+   reads its defaults: color state lists with every state (enabled, disabled).
+2. **When.** In every theme pass, for enrolled nodes whose descriptor is unset (no literal, binding or
+   style), and whenever a property becomes unset after the first theme change (MAUI restores its stale
+   cache; Reactor writes the reference default after MAUI's clear).
+3. **Opt-out.** `ReactorTheme.ResolveAndroidDefaults = false` leaves MAUI's behavior.
+4. **Limits.** MAUI's own clears (a XAML `Disabled` state unapplied on a Controls view) still restore
+   MAUI's cache; that is reported to MAUI (§2.16). Plain MAUI views outside Reactor aren't touched.
+5. **Rejected: a built-in default `ElementStyles` palette.** It would hard-code Material's colors,
+   diverge from an app's own Android theme, and theme only properties it knows.
 
-- **No new element keys.** The theme bindings live on the renderer's `Element` base and `WithStyles`
-  is a composition primitive. Both are in `Microsoft.UI.Reactor.Core`, which the property census
-  skips (`PropertyMatrix.cs`), as it skips `Key`.
-- **Their evidence** is §2.9's tests.
-- **Two existing groups gain facets:**
-  - Group T (text and font, spec 070 §4.14.2): `TextCases` emits a themed case for `TextColor` on every
-    text element, with themed set, switched, equal-render and cleared steps. Font families gain a
-    registered-alias case.
-  - Group P: every color property with a typed overload (`BackgroundColor`, `Background`, a Border's
-    and a shape's `Stroke` and `Fill`) gains a themed case.
-- **A new style census:**
-  - For each element type and each look property the census lists, a style that sets it and a
-    declaration that doesn't: the merged element has the style's value.
-  - A declaration that sets it keeps its own.
-  - A look property `MergeUnder` misses fails its case.
-  - The census already enumerates the properties. "Look" is every property except the content
-    parameters, controlled values and events (groups C, E and S).
+### 2.10 Registered fonts (review D10)
 
-### 2.9 Tests
+1. **No new API.** `FontFamily` takes the alias registered with `ConfigureFonts` (portable), the file name
+   with or without extension (portable), or on iOS and Mac Catalyst the font's PostScript or family name
+   (not portable; §2.1).
+2. **Evidence first, and no lookups that log.** When a family first reaches a handler (both registries),
+   Reactor classifies it from evidence:
+   - **registered**: `IFontRegistrar.GetFont(family)` returns a file;
+   - **available** (iOS, Mac Catalyst): `UIFont.FromName(family, size)` or a non-empty
+     `UIFont.FontNamesForFamilyName(family)`; neither logs;
+   - **an asset** (Android): the family, or the family with MAUI's extensions, is in the app's assets
+     (the listing read once);
+   - **a system family** (Android 14+): the view's resolved `Typeface.SystemFontFamilyName` equals the
+     family (MAUI already resolved it for the view; Reactor reads the view's typeface, it doesn't resolve
+     again).
 
-Each oracle names the mutation that must turn it red. Headless tests read the theme from the test seam
-and count handler writes through the existing stub handlers. Device tests run on Mac Catalyst, iOS
-(iPhone and iPad) and Android, `[controls]` and `[direct]`.
+   No sentinel lookup: on Android MAUI logs a warning for each name it can't load, so a synthetic lookup
+   would add noise to the normal path.
+3. **Reports.** iOS and Mac Catalyst: a family with no evidence "isn't registered or installed" (definite).
+   Android: a family with no evidence whose view renders the system sans-serif is a **suspected
+   fallback** (the wording says so); below Android 14 there is no system-family evidence, so nothing is
+   reported for an unregistered non-asset family (MAUI's own warning remains). Once per family per app and
+   font manager.
+4. **Traits.** iOS and Mac Catalyst ignore `Bold` and `Italic` on a single-face family: reported once per
+   family and trait when the resolved font lacks it (`UIFontDescriptor.SymbolicTraits`). Android fakes
+   them; nothing reported. The guide recommends an alias per face.
+5. **Styles carry fonts** like any property; sizes and auto-scaling are unchanged.
 
-**Headless (`tests/Reactor.Maui.Tests`, `tests/Reactor.Maui.Engine.Tests`):**
+### 2.11 Both registries and eligibility (review D6)
+
+Projection, styles, theme passes and Disabled passes run in the engine, before or instead of the handler,
+so both registries see the same applied values. Two differences remain, both reported: XAML implicit
+styles reach only Controls views (§2.7 rule 7), and a XAML `Disabled` state ranks above Reactor's values
+on Controls views (§2.7 rule 6).
+
+**Eligibility is stable across themes.** On the direct registry, the choice between the direct view and
+the Controls fallback is computed from the declaration with its style and **both** branches of every theme
+binding: a view that needs Controls in either theme (a themed brush whose dark branch is a gradient) is a
+Controls view in both. A theme switch never remounts. Ordinary renders can still change the choice, as
+any declared change can.
+
+### 2.12 Census and the styleable inventory (review D8)
+
+**The common-look census moves into 4d-1.** The property census excludes `ViewElement.Modifiers`
+(`PropertyMatrix.cs` 348–365). 4d-1 adds the modifiers that are look properties: `BackgroundColor`,
+`Background`, `Opacity`, `IsVisible`, `IsEnabled`, `Rotation`, `Scale`, `TranslationX`, `TranslationY`,
+`ZIndex`, `Shadow`, `Clip`, `InputTransparent`, `Margin`, `Width`, `Height`, the minimums and maximums,
+`HorizontalOptions` and `VerticalOptions`. Each gets the matrix's set, update, equal-render and clear
+steps on both registries, a themed step where a typed overload exists, and a style step. 4d-3 still adds
+device geometry and pixels, gestures and semantics.
+
+**The inventory.** Every element property is classified, and the census fails on an unclassified one:
+
+| Class | Properties | Presence |
+|---|---|---|
+| Look: common (`LookProperties.View`) | the modifiers above | `null` = unset |
+| Look: text (`LookProperties.Text`) | `FontSize`, `FontAttributes`, `FontFamily`, `TextColor`, `CharacterSpacing` (every text element) | `null` |
+| Look: per control | Label: `TextDecorations`, alignments, `LineBreakMode`, `MaxLines`, `LineHeight`, `Padding`, `TextTransform`, `TextType`; Image: `Aspect`; BoxView: `Color` (positional), `CornerRadius`; ActivityIndicator: `Color`; ProgressBar: `ProgressColor`; Border: `Stroke`, `StrokeThickness`, `CornerRadius`, `Padding`; Button: `CornerRadius`, `BorderColor`, `BorderWidth`, `Padding`; ImageButton: `Aspect`, `CornerRadius`, `Padding`; Entry: `PlaceholderColor`, `HorizontalTextAlignment`, `ClearButtonVisibility`; Editor: `PlaceholderColor`; CheckBox: `Color`; Switch: `OnColor`, `ThumbColor`; Slider: the track and thumb colors; layouts: `Padding`, `Spacing`, `RowSpacing`, `ColumnSpacing`, the flex enums; ScrollView: scroll bar visibilities; RefreshView: `RefreshColor`; IndicatorView: the colors, `IndicatorSize`, `IndicatorsShape`; shapes: `Fill`, `Stroke`, the stroke settings, `Aspect`, `RadiusX`, `RadiusY`, `FillRule`; ContentView: `Padding` | `null`; the four spacings become nullable (§2.4) |
+| Look, theme values only (not styleable: pages and Shell aren't `ViewElement`s) | Page: `BackgroundColor`; NavigationStack: `BarBackgroundColor`, `BarTextColor`; Tabs: the three colors; Shell: its eleven colors | `null` |
+| Excluded: presence can't be told (non-nullable, not look-critical) | RadioButton `IsIndicatorVisible`, IndicatorView `HideSingle`, CollectionView and CarouselView `ItemSpacing`, swipe modes, `RoundRectangle.CornerRadius` (positional) | listed with the reason |
+| Not look | content (text, sources, items, children, slots, inlines, data), controlled values, events, behavior (`Keyboard`, `IsReadOnly`, `MaxLength`, `Orientation`, …), identity and placement modifiers (`AutomationId`, grid and flex placement), `Style`, `StyleClass`, `Configure`, `Ref`, semantics | — |
+
+**Mutants the census must catch.** Omitting a common field from the fieldwise modifier merge (e.g.
+`Opacity`); omitting a per-control descriptor (e.g. `Entry.PlaceholderColor`); a descriptor whose native
+writer differs from the handler's ordinary write (the census runs both paths and compares the native
+value).
+
+### 2.13 Tests
+
+Each oracle names the mutation that must turn it red; every zero-write and no-warning oracle has a
+positive control in the same test. Headless tests use the theme seam, a stub `ThemeSource`, the stub
+handlers' write counters, and a counter of `Update`, `Configure`, restore and invalidate calls. Device
+tests run on Mac Catalyst, iPhone, iPad and Android, `[controls]` and `[direct]`; their waits accept only
+observations made after the action (a frame index or sequence number taken at the action).
+
+**Headless: theme values.**
 
 | Test | Oracle | Mutation |
 |---|---|---|
-| Projection at mount | Light: the light value written; Dark: the dark one | always the light value |
-| Re-projection without render | a switch: the themed property written once, every other property zero writes, the component's render count unchanged. Positive controls: a state change renders once, and a literal change writes once | re-render on the event; re-apply every property |
-| In-order, once | two switches and back in one turn: the last theme applied, one write per switch; an event naming the projected theme writes nothing (positive: a real change writes) | no dedupe |
-| During a commit | the theme changes inside a handler's update: no nested re-projection; after the commit, the earlier nodes carry the new theme | apply re-entrantly |
-| Unmount | a node unmounted, then a switch: zero writes to it; a root unmounted: unsubscribed (the event reaches no handler). Positive: a live sibling is written | keep removed nodes in the set |
-| Child roots | a themed label in a list cell and in a pushed page re-projects on the switch | re-project only the top root's nodes |
-| Last call wins | the literal after the themed: literal; the themed after the literal: themed; a field beside a binding: the binding, one warning per type and key, none for the positive control (no field) | field wins; warn on every render |
-| Equality | two renders with equal `ThemeRef`s and static `apply`s: equal elements, zero writes | reference-equal bindings |
-| Style fill-unset (census) | every look property of every element: the style fills it when unset, the declaration keeps it when set | drop one property from one `MergeUnder` |
-| Styles and themes | a themed style setter re-projects on a switch; a declared literal beats a themed setter, and a declared binding beats a literal setter | resolve themes before merging |
-| Disabled | `IsEnabled(false)`: the disabled style over the normal one; enabling writes the normal values back | ignore `disabled` |
-| Scope | nested providers: the inner entry replaces the outer for its type, other types fall through; a provider re-rendered with new styles re-projects its descendants with zero component renders (positive: the same instance writes nothing) | merge nested entries; re-render to restyle |
-| Both registries | the same tree, styled and themed, gives each registry's handler the same projected element (a recorded projection per node, compared) | project in one registry's adapter only |
-| XAML gap report | a direct label under an app-level implicit `Label` style: one warning; a second label: none; a Controls label: none; no style: none (positive: the first case) | warn per view; never warn |
-| Font report | a stub font manager where the sentinel and `NoSuchFont` resolve to one fallback and the alias to another: one report for `NoSuchFont`, none for the alias; the Android-like stub (fallback ≠ default) still reports | compare with the default font |
+| Projection at mount | Light: the light value written; Dark: the dark value | always light |
+| Literal wins, both orders | `.TextColor(red).TextColor(themed)` and the reverse both apply red; a switch writes nothing to `TextColor` (positive control: a themed `BackgroundColor` on the same element is written) | last call wins |
+| `with` is a literal | `with { TextColor = red }` beside a binding applies red | binding over field |
+| Literal removal | a render without the literal applies the binding for the current theme | keep the stale literal |
+| Switching while overridden | two switches while a literal overrides: zero writes to that property; after removing the literal, the next switch writes it | patch overridden properties |
+| One binding per property | two `.Themed` calls on one descriptor: the second's values; a typed overload then `.Themed` on its descriptor: one binding, the later one | key by delegate or call site |
+| A literal over a themed style setter | style `TextColor` themed, declaration red: red, and a switch writes nothing to it (positive: an unoverridden themed setter is written) | style binding over declared literal |
+| Look patch only | a switch on a themed view that has a controlled value with native drift pending, a `.Set(...)` counter and a themed `GraphicsView`: the drift isn't restored, `Configure` count 0, invalidate count 0, `Update` count 0; positive controls: an ordinary render restores the drift, runs `Configure` once and invalidates once | route the patch through `Update` |
+| Declared vs applied | during and after a switch, `Live` returns the declared element (unprojected bindings, same instance); the next ordinary update diffs from the patched applied element (a property the patch changed and the render sets to the same value writes nothing) | `Live` returns applied; applied not updated by the patch |
+| No renders | a switch: component render count unchanged; positive: a state change renders once | re-render on the event |
+| Equality | two renders with equal values: equal elements, zero writes | reference-equal bindings |
 
-**Device (`tests/Reactor.Maui.DeviceTests`):**
+**Headless: transactions and re-entrancy.**
+
+| Test | Oracle | Mutation |
+|---|---|---|
+| Flip inside the pass | a stub write handler flips the source during the pass: the pass ends, re-runs for the newest theme, every node ends on it, each patched at most twice | mark applied before settling |
+| During first mount | a change while the first commit mounts: nodes after the change mounted with the new theme, earlier ones patched at the end of the commit, none twice | nested pass |
+| Subscription before mount | a change between root creation and first mount: the mount uses the new theme | subscribe at first mount |
+| A recycled cell | a cell rebinding A→null→B (with and without `ReuseItemTrees`) during a flip: no write to the retired tree, B's nodes on the new theme | iterate live list, not snapshot + liveness |
+| A boundary removes later nodes | a write in the pass throws; the boundary unmounts later enrolled nodes: no write to them; the error reaches the boundary once | no liveness check |
+| A later switch after a throw | the next switch patches the failed node | drop the failed node |
+| Two windows | two top roots: both patched; one closed during the notification: no write to it, the other patched | iterate live subscribers |
+| Unmount | after unmount, the source's subscriber count for the root is 0 (direct proof) and the root is collectable (a `WeakReference` after GC); positive: a live root is counted | rely on MAUI's weak event manager |
+| Divergence report | a stub where `RequestedTheme` differs from the applied theme after dispatch: one report naming the suppressed set; positive: a consistent change reports nothing | follow `RequestedTheme`; never report |
+
+**Headless: styles, Disabled, eligibility, inventory.**
+
+| Test | Oracle | Mutation |
+|---|---|---|
+| Fill-unset census | every inventory descriptor of every type: style fills it when unset, the declaration keeps it when set; common modifiers fieldwise | omit `Opacity` from the merge; omit `Entry.PlaceholderColor` |
+| Per-type fall-through | outer `{Label, Button}`, inner `{Label}`: buttons use the outer entry; inner `Remove<Label>()`: labels use the outer | inner scope hides outer |
+| Restyle without renders | a scope rendered with new styles: descendants patched (also below a skipped component), zero component renders; the same instance: zero writes (positive: a changed entry writes) | context re-render; per-render walk |
+| Root boundaries | a cell's tree uses the list's scope; a standalone `ReactorPage` root without `WithStyles` uses none | inherit across standalone roots |
+| Disabled precedence | an effectively disabled button: the disabled variant's background above the declared literal; enabled: the literal | literal over variant |
+| Parent disable and re-enable | disabling a parent patches descendants' variants (also below a skipped component and in cells), re-enabling restores; an explicit child `IsEnabled(true)` stays disabled | own state only |
+| Style-supplied `IsEnabled(false)` | the style disables: variant applied | ignore styled `IsEnabled` |
+| Theme while inherited-disabled | a switch resolves the variant's bindings | resolve the normal style |
+| Mixed ancestry | a disabled direct layout over a direct button and an anchored Controls button: both disabled natively (written `IsEnabled`) | write only to direct views |
+| Eligibility union, both directions | a binding needing Controls only in Dark, and one only in Light: a Controls view from mount; switches keep native identity, a child component's hook state, its effect (no cleanup or re-run) and its ref | decide on the current theme |
+| Inventory | every element property classified; a new unclassified property fails | — |
+
+**Headless: fonts and reports.**
+
+| Test | Oracle | Mutation |
+|---|---|---|
+| Valid family same as the fallback | Android stub: `sans-serif` resolves to the fallback and has system-family evidence: no report; positive: `NoSuchFont` with no evidence reports once as suspected | sentinel or fallback equality alone |
+| Evidence order | registered alias: no native lookup made (counted); iOS PostScript name: available; missing: definite on iOS | look up before the registrar |
+| Size and traits | the same family at two sizes and with Bold/Italic: classified once per family; iOS Bold on a single face: one trait report; Android: none | report per size; never report traits |
+| Several missing spellings | `NoSuchFont`, `NoSuchFont.ttf`, `no such font`: one report each, once | report once in total |
+| XAML gap | a direct label under an app-level implicit `Label` style: one warning; a second: none; Controls registry: none; no style: none (positive: the first) | per view; never |
+
+**Device.**
 
 | Fixture | Oracle |
 |---|---|
-| `Theme_ThemeRef_SameFrame` | A tree with a Reactor-themed label, a MAUI `AppThemeBinding` label and a `UseAppTheme` probe. `UserAppTheme` switches; frames sampled from before the set, accepting only observations made after it. The themed label shows the new color in the same sampled frame as MAUI's label (frame 0). The probe is the sampler's positive control: later on Android. The mapper hook counts one `TextColor` mapping per themed view and nothing else (positive control: a `Text` change counts once) |
-| `Theme_SystemAppearance` (host-driven, on demand) | the same oracle for a platform-started change (`simctl ui`, `cmd uimode`); skips without a host |
-| `Styles_Parity` | `ElementStyles` for Label and Button: the native font name, size, text color and measured width are equal on both registries, and equal to a plain MAUI view under the equivalent XAML style (a differential oracle); a declared override wins; its removal shows the style's value; a theme switch restyles |
-| `Styles_Disabled` | a disabled button shows the disabled style's background (pixels) and text color; enabling restores the normal style |
-| `Fonts_Registered` | the alias, the file name and the name without extension each render the face (iOS: the native font name; all: the width equals the plain MAUI label's with the same family and differs from the default, the positive control); a missing family reports once, a registered one never |
-| `Fonts_AttributesOnSingleFace` | iOS and Mac Catalyst: Bold on `OpenSansRegular` reports once and renders regular; Android: renders fake bold, no report |
-| `Styles_XamlGapReport` | the direct registry under an app-level implicit `Label` style: one warning naming `Label`; the Controls registry: none |
+| `Theme_SameFrame [controls|direct]` | a Reactor-themed label, a MAUI `AppThemeBinding` label and a `UseAppTheme` probe: the themed label's new color first observed at the same frame index as MAUI's label (0); the probe (later on Android) is the sampler's positive control, observed by a frame callback |
+| `Theme_LookPatchOnly [controls|direct]` | mapper hook: a switch maps each themed property once per view and nothing else; a themed Entry with drift isn't restored; positive control: a `Text` change maps once |
+| `Theme_LiteralWins [controls|direct]` | both orders, `with`, removal; a switch while overridden changes nothing on the platform (pixels), the themed sibling changes |
+| `Theme_Reentrancy` | a subscriber sets `UserAppTheme` during the change: Reactor's views show MAUI's applied theme, the divergence is reported once |
+| `Theme_SystemAppearance`, `Theme_ForcedTheme` (host-driven, iPhone, iPad, Android) | platform-started changes land in the same frame as MAUI's bindings; iOS's stale theme after a forced theme is reported |
+| `Theme_Eligibility [direct]` | a binding needing Controls in one theme: native identity unchanged across switches, a stateful child keeps its state |
+| `Styles_Parity` | `ElementStyles` for Label and Button: native font, size, color and width equal on both registries and equal to a plain MAUI view under the equivalent XAML style; override wins, removal shows the style, a switch restyles |
+| `Styles_Scopes` | nested scopes fall through per type; restyling patches without rendering (render counter) |
+| `Disabled_Inherited [controls|direct]` | a disabled parent: children disabled natively and showing the variant, including an anchored Controls child and an explicit-enabled child; re-enabled: back; the direct registry no longer differs from Controls |
+| `Android_Defaults [controls|direct]` (Android; Apple as reference) | after app- and system-started changes: views without colors show the fresh-view defaults (enabled and disabled), cleared colors too; with the opt-out: MAUI's stale behavior (the positive control that the resolver is what fixes it) |
+| `Fonts_Registered`, `Fonts_Evidence` | spellings render the face (width equals plain MAUI's, differs from default); missing families: definite on iOS, suspected on Android 14+; `sans-serif` not reported; MAUI's own warnings not increased by Reactor (log capture count) |
 
-### 2.10 Gate
+### 2.14 Gate
 
-Hard premises, characterized first in the implementation. If one fails on a device, stop and report.
+Hard premises, characterized first in the implementation; if one fails on a device, stop and report:
 
-1. **The same frame.** Reactor's re-projection inside `RequestedThemeChanged` shows in the same sampled
-   frame as MAUI's own bindings, on all four devices, for app-started changes. It must also hold for
-   platform-started ones on iPhone, iPad and Android; Mac Catalyst only if the host allows its
-   appearance to be flipped.
-2. **Minimal writes.** A switch maps each themed property once per view and nothing else, measured with
-   the mapper hook.
-3. **The sentinel.** Every spelling resolves or fails to resolve as §2.1's table says, on all four
-   devices.
-4. **Style parity.** A styled direct view matches a styled Controls view and a plain MAUI view under the
-   equivalent XAML style: font, size, color and width.
+1. **The same frame.** Reactor's in-event look patch shows in the same frame index as MAUI's bindings on all
+   four devices for app-started changes, and on iPhone, iPad and Android for platform-started ones.
+2. **Look patch only.** A switch maps each themed property once per view and nothing else, and runs no
+   `Update`, `Configure`, restore or invalidate.
+3. **Android defaults.** For every Android platform class Reactor renders, a per-control characterization
+   lists which defaults go stale after a change (app and system); the resolver covers exactly those, and a
+   fresh reference view reproduces the defaults a newly mounted view shows, enabled and disabled.
+4. **Disabled.** Reactor's effective enabled state and variant match plain MAUI's for the §2.1.3 cases on
+   both registries.
+5. **Font evidence.** Every spelling of §2.1 is classified as its row says, with no extra MAUI warnings.
+6. **Projection cost.** `Reactor.Maui.Benchmark` (1,000 rows, both registries): with no styles and no
+   bindings, mount and update within noise of `1a8d88c6` (the medians' ranges overlap); with an app-wide
+   `ElementStyles` and themed colors, the cost is reported.
 
-Then:
-- full device suites on all four devices, with the look fixtures;
-- the Release build of `Reactor.Maui.slnx` with no warnings;
-- the mutants above;
-- spec 068's rows: the theme value ✅, styling direct views ✅, and fonts ✅ for registration and
-  rendering;
-- README caveats: the Android default colors, and XAML styles on direct views.
+Then: full device suites on all four devices with the look fixtures; the Release build of
+`Reactor.Maui.slnx` with no warnings; the mutants above; spec 068's rows (the theme value ✅, styling
+direct views ✅, fonts ✅ for registration and rendering); README caveats (the reported MAUI divergences,
+XAML styles on direct views, Android defaults' limits).
 
-### 2.11 Decisions to review
+### 2.15 Decisions to review
 
-1. **`ThemeRef<T>`, WinUI's name for a light and dark pair.** WinUI's `ThemeRef` names a resource key.
-   The alternative is MAUI's vocabulary, `AppThemeValue<T>`. WinUI is unchanged either way.
-2. **Projection before the handler.** The alternatives are per-handler theme code, or MAUI's
-   `AppThemeBinding` on Controls views plus Reactor code for direct views. The second was rejected for
-   three reasons:
-   - two mechanisms;
-   - Reactor's `SetValue` and `ClearValue` would contend with the binding;
-   - direct views have no bindable properties.
+1. **`AppThemeValue<T>`** (review D1), MAUI-side; WinUI's `ThemeRef` is a different abstraction.
+2. **Literal always wins**, independent storage (review D2), as in WinUI.
+3. **Descriptors** (`LookProperty`) key bindings, styles and the look patch (review D3); `.Themed` takes a
+   descriptor. Handlers' look writes go through them.
+4. **The look patch** never runs `Update` (review D4); declared, applied and native are distinct.
+5. **The applied theme is MAUI's** (the last event's argument), not `RequestedTheme`, against review D5's
+   suggestion: §2.1.1 and §2.1.2 show that after a suppressed nested set, and after iOS's forced-theme
+   case, `RequestedTheme` disagrees with what MAUI's bindings and XAML styles show; following it would
+   split Reactor's views from the app's XAML. Divergence is reported. The alternative (follow
+   `RequestedTheme`, with a posted settle) is recorded.
+6. **One transaction per tree**, deferred and settling passes (review D5).
+7. **Eligibility from both theme branches** (review D6): no remount on a switch.
+8. **MAUI's Disabled precedence**: the variant above declared literals, inherited state (review D7). The
+   alternative (declared literals above the variant, a deliberate deviation) is recorded.
+9. **The direct registry gets inherited `IsEnabled`**, fixing §2.1.3's defect in 4d-1.
+10. **The common-look modifier census and the inventory move into 4d-1** (review D8); the four layout
+    spacings become nullable (a reader-side source break).
+11. **Style scopes** fall through per type, resolved per scope, restyled by look patches (review D9).
+12. **Font evidence**, never a sentinel; "suspected" wording on Android (review D10).
+13. **Android defaults** by a native resolver, on by default (review D11); a palette rejected.
+14. **Reports**, once each: XAML styles ignored by direct views, theme divergence, font evidence, traits.
 
-   Projection needs no handler changes and gives the registries one behavior.
-3. **Synchronously inside `RequestedThemeChanged`**, the same frame as MAUI's bindings (§2.1), not a
-   posted pass. A posted pass is a `UseAppTheme` re-render's timing: a frame late on Android.
-4. **Last call wins** between literal and themed modifiers. WinUI differs incidentally: a literal local
-   value beats the `ThemeRef`'s synthesized style whatever the order. A field beside a binding warns.
-5. **`.Themed(value, apply)`**, keyed by delegate identity, for every property without a typed
-   overload. It avoids typed overloads for nearly 40 color and brush properties of elements, pages and Shell.
-6. **`ElementStyles`, Reactor's implicit styles in C#,** fill-unset, with a `Disabled` state.
-   Rejected:
-   - translating XAML styles for direct views: a second style engine with partial semantics (visual
-     states, triggers, `BasedOn`, `StyleClass`, `DynamicResource`, `ApplyToDerivedTypes`);
-   - falling back to Controls whenever an implicit XAML style exists: honest, but it silently turns a
-     template app's direct registry into the Controls registry. It is kept as an open question for an
-     opt-in.
+### 2.16 Open questions
 
-   WinUI has no counterpart: its controls honor XAML styles.
-7. **Styles through a provider element (subtree)**, not a root option: page-level styles exist in 3 of
-   the 5 sample ports.
-8. **`MergeUnder` written by hand** per built-in element and enforced by the census. Reflection is
-   rejected (AOT, and it would read content); a source generator is the alternative, worth it only if
-   4f's wrapper generator needs one anyway.
-9. **Reporting.** Reactor reports:
-   - XAML implicit styles that direct views ignore: once per type;
-   - unresolved font families: once per family;
-   - attributes iOS ignores: once per family and attribute;
-   - a field beside a binding: once per type and key.
-10. **Android's default colors aren't fixed.** A view without a color doesn't follow a runtime theme
-    change on Android, and MAUI's templates mask this with styles. Reactor documents that any color
-    that must follow the theme needs a theme value or a style.
-
-### 2.12 Open questions
-
-- A subtree theme override, like WinUI's `.RequestedTheme(...)`. MAUI has none; Reactor could project
-  a subtree with a fixed theme.
+- A subtree theme override, like WinUI's `.RequestedTheme(...)`.
 - An opt-in fallback to Controls for direct views under XAML implicit styles.
-- Theme values in rich-text runs (a label's `Inlines`).
-- Whether a parent's `IsEnabled` should select a child's `Disabled` style (MAUI inherits `IsEnabled`
-  into the visual state).
-- `IStyleable` for third-party elements: 4f's wrapper generator should emit `MergeUnder`.
-- Mac Catalyst's platform-started theme change is uncharacterized (§2.1).
+- Theme values and styles in rich-text runs (a label's `Inlines`).
+- Styles for pages and Shell (theme values are supported, styles aren't).
+- Whether the Disabled variant should also cover other system states once 4e brings pointer and focus.
+- Font family evidence below Android 14 (no reliable system-family name).
+- Mac Catalyst's platform-started theme change and forced-theme behavior (uncharacterized, §2.1).
 - MAUI issues to file:
+  - a `UserAppTheme` set during a theme change is suppressed and leaves MAUI inconsistent (§2.1.1);
+  - iOS applies a stale platform theme when returning to Unspecified after the system changed while forced
+    (§2.1.2);
+  - Android keeps inflation-time defaults and restores them from a cache after a theme change (§2.1.4);
   - an implicit style removed from `Application.Resources` stays applied;
-  - iOS ignores `Bold` and `Italic` on a single-face registered family silently;
-  - a missing family is silent on iOS and logs a warning per resolution on Android.
+  - iOS ignores `Bold` and `Italic` on a single-face registered family silently.
 
-### 2.13 Out of scope
+### 2.17 Out of scope
 
-- `ResourceDictionary`, `StaticResource` and `DynamicResource` (spec 068: ⛔).
-- `StyleClass` and CSS style sheets.
-- Visual states other than `Disabled`, and triggers.
-- Theme values in rich-text runs.
+- `ResourceDictionary`, `StaticResource`, `DynamicResource` (spec 068: ⛔); `StyleClass` and CSS.
+- Visual states other than `Disabled`; triggers.
 - Dynamic Type and font auto-scaling.
 - Windows (4g).
