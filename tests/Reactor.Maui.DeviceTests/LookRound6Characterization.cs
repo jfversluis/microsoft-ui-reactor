@@ -30,10 +30,26 @@ public sealed class LayoutBridge : Layout, IVisualTreeElement
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IView, LayoutBridge> Bridges = new();
     private Microsoft.Maui.Controls.Element? _watched;
 
-    public LayoutBridge(IView presented)
+    /// <summary>The empty style shared by every shield (round 7, K4: one dictionary per node, one style object).</summary>
+    public static readonly Style ShieldStyle = new(typeof(LayoutBridge));
+
+    /// <summary>Handler attachments and layout-manager calls on any bridge (round 7, K4); must stay 0.</summary>
+    public static int Materializations, LayoutCalls;
+
+    public LayoutBridge(IView presented, bool shield = false)
     {
         Presented = presented;
         Bridges.AddOrUpdate(presented, this);
+        // The earliest a per-node shield can exist: after the base constructors (round 7, K2).
+        if (shield) Resources = new ResourceDictionary { ShieldStyle };
+    }
+
+    public static LayoutBridge? Of(IView view) => Bridges.TryGetValue(view, out var bridge) ? bridge : null;
+
+    protected override void OnHandlerChanging(HandlerChangingEventArgs args)
+    {
+        if (args.NewHandler is not null) Materializations++;
+        base.OnHandlerChanging(args);
     }
 
     public IView Presented { get; }
@@ -44,8 +60,10 @@ public sealed class LayoutBridge : Layout, IVisualTreeElement
 
     protected override ILayoutManager CreateLayoutManager() => new NoLayout();
 
+    // Representing (round 7, K3): the presented view's own visual children, empty for a leaf; a child direct view
+    // with a bridge is represented by its bridge.
     IReadOnlyList<IVisualTreeElement> IVisualTreeElement.GetVisualChildren() => Represents
-        ? [.. ((IEnumerable<IView>)Presented).Select(v => v is DirectView && Bridges.TryGetValue(v, out var b) ? b : v).OfType<IVisualTreeElement>()]
+        ? [.. ((IVisualTreeElement)Presented).GetVisualChildren().Select(v => v is DirectView dv && Bridges.TryGetValue(dv, out var b) ? b : v)]
         : [.. ((IElementController)this).LogicalChildren];
 
     IVisualTreeElement? IVisualTreeElement.GetVisualParent() => Represents ? Parent : Presented as IVisualTreeElement;
@@ -71,8 +89,8 @@ public sealed class LayoutBridge : Layout, IVisualTreeElement
 
     private sealed class NoLayout : ILayoutManager
     {
-        public Size Measure(double widthConstraint, double heightConstraint) => Size.Zero;
-        public Size ArrangeChildren(Rect bounds) => Size.Zero;
+        public Size Measure(double widthConstraint, double heightConstraint) { LayoutCalls++; return Size.Zero; }
+        public Size ArrangeChildren(Rect bounds) { LayoutCalls++; return Size.Zero; }
     }
 }
 
@@ -80,7 +98,7 @@ public sealed class LayoutBridge : Layout, IVisualTreeElement
 // factory policy (J2), input transparency through the bridge (J3). On demand.
 public static partial class Fixtures
 {
-    private static readonly string[] LayoutKinds = ["VerticalStackLayout", "HorizontalStackLayout", "Grid", "FlexLayout", "AbsoluteLayout"];
+    private static string[] LayoutKinds => ["VerticalStackLayout", "HorizontalStackLayout", "Grid", "FlexLayout", "AbsoluteLayout"];
 
     private static IEnumerable<Fixture> LookRound6CharacterizationFixtures() =>
     [
@@ -90,7 +108,8 @@ public static partial class Fixtures
         new("Characterize_Look_Projection [c shadow layout, bridge]", c => LookProjection(c, 'c'), 60, OnDemand: true),
         new("Characterize_Look_FirstDirectChild [projection-capable from mount]", c => LookFirstDirectChild(c, replace: false), 60, OnDemand: true),
         new("Characterize_Look_FirstDirectChild [replaced on first direct child]", c => LookFirstDirectChild(c, replace: true), 60, OnDemand: true),
-        .. new[] { "P plain MAUI", "A previous anchoring", "V VisualElement bridge", "L Layout bridge", "M Layout bridge without the cascade watch" }
+        new("Characterize_Look_FirstDirectChild [stock layout, representing bridge]", c => LookFirstDirectChild(c, replace: false, stock: true), 60, OnDemand: true),
+        .. new[] { "P plain MAUI", "A previous anchoring", "V VisualElement bridge", "L Layout bridge", "M Layout bridge without the cascade watch", "S stock layout, representing Layout bridge, no pull" }
             .Select(name => new Fixture($"Characterize_Look_InputTransparency [{name}]", c => LookInputTransparency(c, name[0]), 90, OnDemand: true)),
         new("Characterize_Look_StyleShield", LookStyleShield, 60, OnDemand: true),
     ];
@@ -335,12 +354,12 @@ public static partial class Fixtures
     /// shadow layout put in its place. Recorded: the layout's identity, e3's focus, selection, IME and events, native
     /// attach and hierarchy counts, the traversal and the frames.
     /// </summary>
-    private static async Task LookFirstDirectChild(FixtureContext c, bool replace)
+    private static async Task LookFirstDirectChild(FixtureContext c, bool replace, bool stock = false)
     {
-        var log = new LookLog { Phase = replace ? "replaced" : "from mount" };
+        var log = new LookLog { Phase = replace ? "replaced" : stock ? "stock" : "from mount" };
         try
         {
-            Layout h = replace ? new VerticalStackLayout() : ShadowLayouts.Create("VerticalStackLayout");
+            Layout h = replace || stock ? new VerticalStackLayout() : ShadowLayouts.Create("VerticalStackLayout");
             h.AutomationId = "H";
             var host = new Grid { Children = { h } };
             var e1 = new MauiEntry { Text = "first entry", AutomationId = "e1" };
@@ -392,7 +411,7 @@ public static partial class Fixtures
             }
             target.Insert(1, d);
             d.Parent = target;
-            var bridge = new LayoutBridge(d);
+            var bridge = new LayoutBridge(d, shield: stock) { Represents = stock, Pull = !stock };
             target.InsertLogicalChild(1, bridge);
             bridge.AddLogicalChild(b);
             d.Add(b);
@@ -625,7 +644,7 @@ public static partial class Fixtures
             };
         }
 
-        var layout = topology == 'A' ? new VerticalStackLayout() : ShadowLayouts.Create("VerticalStackLayout");
+        var layout = topology is 'A' or 'S' ? new VerticalStackLayout() : ShadowLayouts.Create("VerticalStackLayout");
         var direct = new DirectStackLayout(StackOrientation.Vertical) { AutomationId = "D" };
         var button = new DirectButton();
         button.Apply(new ButtonElement("E"));
@@ -654,7 +673,9 @@ public static partial class Fixtures
                 break;
             default:
                 direct.Parent = layout;
-                bridge = layoutBridge = new LayoutBridge(direct) { WatchCascade = topology != 'M' };
+                bridge = layoutBridge = topology == 'S'
+                    ? new LayoutBridge(direct, shield: true) { Represents = true, Pull = false }
+                    : new LayoutBridge(direct) { WatchCascade = topology != 'M' };
                 layout.InsertLogicalChild(0, layoutBridge);
                 layoutBridge.AddLogicalChild(b);
                 // What Reactor would do: the direct views' effective transparency from the bridge's MAUI coercion.
