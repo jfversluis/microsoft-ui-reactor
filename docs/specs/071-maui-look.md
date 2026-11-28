@@ -111,9 +111,11 @@ the real `IVisualTreeElement` overrides (§2.1.10). A sixth, on `2da9d63c`, rais
 implicit styles, the first direct child, input transparency and the styles that reach Reactor's own nodes were
 characterized on all four devices (§2.1.11). A seventh, on `3e8770bb`, rejected the shadow name (c′) as the
 shipping design and raised K1–K5. Every projection option ran against one style matrix, and the shield's timing
-and leaf bridges with every direct primitive were measured, on all four devices (§2.1.12).
+and leaf bridges with every direct primitive were measured, on all four devices (§2.1.12). An eighth, on
+`f640cf88`, accepted option (2) and raised L1–L3; shield ownership was characterized on all four devices
+(§2.1.13).
 
-### 2.1 Characterization (device, `LookCharacterization.cs`, `LookReviewCharacterization.cs`, `LookRound2Characterization.cs`, `LookRound3Characterization.cs`, `LookRound4Characterization.cs`, `LookRound5Characterization.cs`, `LookRound6Characterization.cs` with `tests/Reactor.Maui.DeviceTests.Shadow`, `LookRound7Characterization.cs`)
+### 2.1 Characterization (device, `LookCharacterization.cs`, `LookReviewCharacterization.cs`, `LookRound2Characterization.cs`, `LookRound3Characterization.cs`, `LookRound4Characterization.cs`, `LookRound5Characterization.cs`, `LookRound6Characterization.cs` with `tests/Reactor.Maui.DeviceTests.Shadow`, `LookRound7Characterization.cs`, `LookRound8Characterization.cs`)
 
 The baseline is plain MAUI 11.0.0 (`4e6582f`), then the same trees through Reactor on both registries.
 Devices: Mac Catalyst 26.7, the iPhone simulator (iOS 27.0), the iPad simulator (iOS 27.2) and the
@@ -754,6 +756,33 @@ representing Layout bridge **that doesn't pull**:
   enumerates the bridge, so MAUI's own propagation, `CascadeInputTransparent` included, reaches it, and through
   the bridge's enumeration B.
 
+#### 2.1.13 Shield ownership (review round 8, L1)
+
+`Characterize_Look_ShieldOwnership`, all four devices, identical. Each scenario starts with three live bridges in
+the page:
+- two with node shields;
+- one with only the application shield (the positive control: the mutation path is live);
+- and a stock `Grid` (the positive control for application-level styles).
+
+Then the app mutates something, and a new bridge is constructed after Reactor's check. Counts are behavior
+attaches / probe-setter changes / padding. The two designs:
+- **Round 7:** one shared `Style` object in `Application.Resources` and in every node's dictionary, with a
+  key-exists check.
+- **Round 8:** a private empty `Style` per node, never published, and a constructor shield that Reactor owns and
+  validates (reference and contents), with replace and report on any mismatch.
+
+| Mutation (with live nodes) | Positive controls after it | Round 7: live nodes; the next node | Round 8: live nodes; the next node; report |
+|---|---|---|---|
+| S1 the application shield's `BasedOn` set in place (to a derived `Layout` style) | application-shield-only bridge 1/1/21 | **1/1/21** (via `Style.BasedOnChanged`); **1/1/21** | 0/0/0; 0/0/0; "owned shield modified" |
+| S2 a setter and a behavior added to the application shield in place | application-shield-only 1/0/0 (an added behavior attaches to live targets; an added setter applies only to later ones) | **1/0/0**; **1/1/0** | 0/0/0; 0/0/0; "owned shield modified" |
+| S3 `Application.Resources` replaced by one holding a derived `Layout` style | stock `Grid` 1/1/21; application-shield-only bridge 0/0/0 (a replacement doesn't remove the old shield from existing nodes) | 0/0/0; 0/0/0 (the key is missing, so it is re-added) | 0/0/0; 0/0/0; no report |
+| S4 `Application.Resources` replaced by one whose merged dictionary holds a bridge-type style | application-shield-only 1/1/21 | 0/0/0; **1/2/0** (the key exists, so it passes) | 0/0/0; 0/0/0; "non-owned entry" |
+| S5 an app style for the bridge type written under the reserved key | application-shield-only 1/1/21 | 0/0/0; **1/2/0** | 0/0/0; 0/0/0; "non-owned entry" |
+
+So with one shared object, an in-place change to the published shield reaches every live node, and a key check
+lets a foreign entry reach the next node. With private node shields and a validated owner, nothing reaches any
+node, and each foreign or modified entry is reported once.
+
 ### 2.2 What WinUI has, and why the MAUI value isn't `ThemeRef` (review D1)
 
 WinUI Reactor's theme value is `ThemeRef(string ResourceKey)`, a reference to a WinUI theme resource:
@@ -896,7 +925,24 @@ public static Element WithStyles(ElementStyles styles, Element? child);
 
 // Android's theme-derived defaults (§2.9). Read once, when the first root mounts; setting it later throws.
 public static class ReactorTheme { public static bool ResolveAndroidDefaults { get; set; } = true; }
+
+// Identity normalization for managed visual-tree tools (§2.11.1 rules 12 and 13). Opt-in: Reactor never calls it
+// on a tool's behalf, and it changes nothing for tools that don't call it.
+public static class ReactorVisualTree
+{
+    /// <summary>The direct view a live Reactor bridge represents; any other node, itself (the same reference);
+    /// <see langword="null"/> for <see langword="null"/> and for a retired bridge.</summary>
+    public static IVisualTreeElement? Resolve(IVisualTreeElement? node);
+
+    /// <summary>Whether <paramref name="node"/> is a Reactor bridge, live or retired.</summary>
+    public static bool IsBridge(IVisualTreeElement? node);
+}
 ```
+
+**New public API in 4d-1.** `AppThemeValue<T>`, `AppThemeValue`, `LookProperty`/`LookProperties`, the `.Themed`
+and typed theme overloads, `ElementStyles`, `WithStyles`, `ReactorTheme` and `ReactorVisualTree`. The MAUI package
+has no generated API index yet; these are its listed public additions, and the README's API section gains them.
+WinUI's `skills/reactor.api.txt` is unchanged, byte for byte.
 
 **The layout spacings keep their public `double` contract (review E3).** `VStackElement.Spacing`,
 `HStackElement.Spacing`, `GridElement.RowSpacing` and `ColumnSpacing` stay `double` with the same
@@ -1261,6 +1307,10 @@ cascade (§2.1.11 J3, V).
      `DirectView.cs` 23 changes.
    - **`DirectViewHost` drops its `IVisualTreeElement` override** (`ViewHandler.cs` 252–255). As a stock
      `Grid`, it lists its logical children, which is the presented view's bridge.
+     - **This is a regression for that case (review L2).** Today the override exposes the real direct root to
+       generic managed tools; after it, that root appears as its bridge.
+     - **Why it is accepted:** it keeps every Controls view's visual parent equal to its enumerator, and the same
+       rule holds for every direct child of a Controls layout. Rule 12 states the trade, which isn't monotonic.
    - **Result:** a unique enumeration, in slot order, in which every node's visual parent is the node that
      enumerated it. Controls views inside direct layouts report the bridge that enumerated them (§2.1.12, stock
      first-direct-child run: no mismatch), so **decision 16's upward hop no longer exists**. The cost is that a
@@ -1344,42 +1394,90 @@ cascade (§2.1.11 J3, V).
       identity, focus, selection, IME and events.
     - **Custom handler registrations** and mapper changes for stock types apply to direct-registry layouts as
       they do to Controls-registry ones.
-11. **Style shields (review J1, J3, K2, K4).** Reactor's own nodes, `ReactorBridge` (a `Layout`) and
-    `DirectViewHost` (a `Grid`), have no counterpart in plain MAUI, so app styles must never reach them. Two
-    layers, keyed by each node type's own full name. MAUI's first-match rule takes the node's own key before any
-    base type's, and the key is one only these nodes use, so their descendants still resolve the app's styles:
-    - **Application level, before construction.** Before creating a bridge or a `DirectViewHost`, Reactor
-      ensures `Application.Current.Resources` holds the empty shield style under the node type's full name. This
-      is an O(1) check, re-added if the app replaced `Application.Resources`. MAUI resolves it during the base
-      constructor (§2.1.12), so no app style, setter or behavior ever reaches the node (§2.1.12: 0 / 0 / 0). A
-      shield installed in the node's own constructor comes too late (2 setter changes, 1 behavior attach).
-    - **Per node, for its lifetime.** Each node has its own `ResourceDictionary` holding the shield. Dictionaries
-      are never shared, because their `ValuesChanged` is a strong event; only the empty `Style` object is
-      shared. This covers an `Application.Resources` replaced after the node was built.
-    - **Without `Application.Current`** (headless), nothing resolves during construction; the per-node layer
+11. **Style shields and their ownership (review J1, J3, K2, K4, L1).** Reactor's own nodes, `ReactorBridge` (a
+    `Layout`) and `DirectViewHost` (a `Grid`), have no counterpart in plain MAUI, so app styles must never reach
+    them. MAUI's first-match rule takes a node's own-type key before any base type's, so an empty style under that
+    key shields it, and the node's descendants still resolve the app's styles. A `Style` is mutable (`BasedOn`,
+    `Setters`, `Behaviors`, `Triggers`), and MAUI re-applies a changed `BasedOn` to every live target
+    (`Style.BasedOnChanged`). So the shields are **separate objects with separate owners** (§2.1.13):
+    - **Reserved keys.** The full names of the two internal types, `Microsoft.UI.Reactor.Maui.Direct.ReactorBridge`
+      and `Microsoft.UI.Reactor.Maui.Handlers.DirectViewHost`, are reserved in `Application.Resources`. The README
+      documents them.
+    - **The constructor shield (application-visible).** One per node type: a fresh empty `Style` that Reactor
+      creates and owns under the reserved key in the root `Application.Resources`. MAUI resolves it during the base
+      constructor (§2.1.12), which is the only reason it is published.
+    - **Validated before every construction**, not just looked up. The entry must be **reference-equal to
+      Reactor's owned instance** and pristine:
+      - `TargetType` exactly the node type;
+      - no `Setters`, `Behaviors` or `Triggers`;
+      - `BasedOn` and `BaseResourceKey` null;
+      - no `Class`, and `ApplyToDerivedTypes` false.
+
+      The checks are O(1) on each construction.
+    - **Collision policy: replace and report.** A missing key (the app replaced `Application.Resources`) gets a
+      new owned shield, without a report. Any other mismatch (a non-owned entry under the reserved key, in the
+      root or in a merged dictionary, or a modified owned shield) is handled the same way:
+      - Reactor writes a **fresh** owned shield into the root dictionary, whose own entries take precedence over
+        merged ones;
+      - it reports once per key and cause (the diagnostic names the key and says what was found);
+      - it leaves the app's object untouched.
+
+      Alternatives rejected:
+      - *Reject* (throw) would break an app over an internal type.
+      - *Report only* would let the entry reach every new node at construction: round 7's key check let a
+        bridge-type style and a merged-dictionary entry reach a new bridge (§2.1.13, S4 and S5).
+    - **The node shield (private).** Each node's own `ResourceDictionary` holds **its own empty `Style`**. It is
+      never published to any app-visible dictionary and is never the constructor shield. Dictionaries aren't
+      shared, because `ValuesChanged` is a strong event; neither are node shields, so a mutation reached
+      through one node's resources can't spread to another.
+      - From the end of the node's constructor its own key resolves to the node shield, and MAUI unapplies the
+        constructor shield (its target list no longer holds the node).
+      - So no mutation of the application-visible shield reaches a live node: §2.1.13 S1 and S2 show live nodes
+        at 0 while an application-shield-only node takes the mutation.
+    - **Without `Application.Current`** (headless), nothing resolves during construction, and the node shield
       suffices.
     - **Locals alone aren't a shield:** MAUI's coercion lets a style that attaches after a local `IsEnabled` or
       `InputTransparent` write win (§2.1.11). The bridge's three behavioural properties are Reactor's local
       writes: `IsEnabled` (§2.8 rule 3), and `InputTransparent` and `CascadeInputTransparent` (§2.11.2).
     - **Fixes `DirectViewHost`** taking derived `Grid` and `Layout` styles today.
-12. **What managed tools see** (review K1, option (2)).
-    - **Generic tools.** MAUI's `GetVisualTreeDescendants`, Visual Studio's live visual tree, Hot Reload's tree,
-      and drivers that walk `IVisualTreeElement` all show a bridge where a direct view occupies a slot in a
+12. **What managed tools see** (review K1, L2). The trade isn't monotonic:
+    - **Where it gains:** every node's visual parent is its enumerator, and the upward hop of §2.1.10 is gone.
+    - **Where it loses:** a direct view in a Controls slot, including a `DirectViewHost`'s direct root that the
+      override shows today (rule 3), appears as its bridge.
+
+    In detail:
+    - **Generic managed tools.** MAUI's `GetVisualTreeDescendants`, Visual Studio's live visual tree, Hot Reload's
+      tree, and drivers that walk `IVisualTreeElement` all show a bridge where a direct view occupies a slot in a
       Controls layout, or where a direct layout has Controls descendants:
-      - it is a `ReactorBridge` (a handler-less `Layout` with no frame) carrying the direct view's `AutomationId`,
-        mirrored once at creation;
+      - it is a `ReactorBridge` (a handler-less `Layout` with no frame) carrying the direct view's
+        `AutomationId`, mirrored once at creation;
       - its children are the direct view's children; a leaf has none;
       - every other node is the real view.
-    - **Hit-test helpers.** `GetVisualTreeElements` skips the bridge, which has no frame. So the chain at a
-      point omits a represented direct layout while still finding the Controls views inside it (§2.1.12:
-      `B, H, …`).
-    - **Native-to-managed mapping.** MAUI's `IVisualTreeElementProvidable` on the platform view returns the direct
-      view itself. A represented direct view therefore has two managed identities: its bridge going down, itself
-      coming up from native.
-    - **Normalization.** A new public helper, `ReactorVisualTree.Resolve(IVisualTreeElement)`, returns the
-      direct view a bridge represents, or the node itself. With it a tool or test maps both identities to the
-      same view and gets the projected shape (§2.1.12: normalized equals (1)'s traversal). The device runner
-      (`Runner.cs` 111–122) and Reactor's E2E use it.
+    - **Hit-test helpers.** `GetVisualTreeElements` skips the bridge, which has no frame. So the chain at a point
+      omits a represented direct layout while still finding the Controls views inside it (§2.1.12: `B, H, …`).
+    - **Native automation is unaffected.** Appium, UI Automation and XCUITest read the native trees, which are
+      unchanged: bridges have no native view and no accessibility peer.
+    - **Two managed identities.** MAUI's `IVisualTreeElementProvidable` on a platform view returns the direct view
+      itself. A represented direct view is therefore its bridge going down and itself coming up from native.
+    - **Normalization is opt-in.** `ReactorVisualTree.Resolve` (rule 13) maps both identities to the view. Generic
+      tools are unchanged unless they call it. The device runner (`Runner.cs` 111–122) and Reactor's E2E call it.
+13. **`ReactorVisualTree.Resolve`'s contract** (review L3; declared in §2.4):
+    - `Resolve(null)` is `null`.
+    - **Ordinary nodes pass through:** any node that isn't a bridge, direct views and Controls views alike,
+      returns the same reference.
+    - **A live bridge** returns the direct view it represents, as `IVisualTreeElement` (direct views implement
+      it).
+    - **A retired bridge** that a tool retained returns `null`. It represents nothing live, and rule 7's detach
+      cleared its presented-view reference, so it can never return a stale view. `IsBridge` stays true for it.
+    - **Idempotent:** `Resolve(Resolve(x))` equals `Resolve(x)` for every node, because a represented view is
+      never a bridge.
+    - **Identity only.** It doesn't rewrite a node's parent or children: a tool normalizes every node it reads,
+      parents included. For example, B's visual parent is `bridge(D)`, and resolving it gives D.
+    - **What it can't do:**
+      - change tools that don't call it;
+      - put back the direct layout that MAUI's hit-test chain omits (the bridge isn't in the chain, so there is
+        nothing to resolve).
+    - **Threading:** it runs on the UI thread, like the tree it reads.
 
 #### 2.11.2 Input transparency (review J3)
 
@@ -1551,9 +1649,11 @@ observations made after the action (a frame index or sequence number taken at th
 | Exact stock types (K1, J4) | each layout element on both registries mounts the exact stock type; the direct registry's layouts take a custom stock-type handler registered by the app (positive control: a Controls-registry layout takes it too) | a projected type |
 | First direct child (J2) | a stock layout with only Controls children gains a direct child later: one view insertion and one bridge placement, the layout's identity, native view and siblings unchanged (native child-operation counter: 1 add, 0 removes; no `ParentChanged` on any sibling) | replace the layout; re-add siblings |
 | Style shields (J1, J3, K2, K4) | a counting behavior and a counted attached-property setter in a derived `Layout` style in `Application.Resources`, and derived `Layout` and `Grid` styles in scopes: neither ever reaches a `ReactorBridge` or a `DirectViewHost` (0 setter changes, 0 attaches, from construction through parenting, a theme switch and a move; positive controls: a bare bridge and a stock `Grid` take them); the app-level shield is re-ensured after the app replaces `Application.Resources`; each node owns its dictionary (distinct instances), sharing one `Style` object; the shielded bridge's Controls children still take the app's styles | a per-node shield only (2 setter changes, 1 attach); a shared dictionary; a shield keyed by a base type |
+| Shield ownership (L1) | with live nodes and a node constructed next: the application shield's `BasedOn` set in place, a setter and a behavior added in place, the root `Application.Resources` replaced, a merged dictionary holding a bridge-type style, an app style written under the reserved key: live nodes 0 behavior attaches and 0 setter changes in every case; the next node 0 from construction on; one report per key and cause (modified owned shield; non-owned entry), none for a missing key; the replaced app object unmodified; node shields distinct objects, none reference-equal to the application shield; positive control: a node with only the application shield takes the in-place mutations | one shared object for both layers; a key-exists check; report without replacing |
 | Input transparency (J3) | §2.1.11's c1–c7 over a Controls layout → direct layout → Controls and direct children, headless (coerced `InputTransparent` of the Controls child; the written `InputTransparent` of the direct views), equal to the same tree in plain MAUI; also a pure direct tree (a direct layout cascading to direct children) and a nested direct layout with its own bridge | a `VisualElement` bridge (cascade broken); no `CascadeInputTransparent` watch (c7 stale); direct views written from their own value only |
 | Input re-propagation (J3) | H's `InputTransparent` and `CascadeInputTransparent` toggled outside Reactor: one input pass, the direct views rewritten (counted), no ordinary update; Reactor's write to the bridge doesn't read back as an outside change (positive: an outside change does) | ignore outside changes; react to own writes |
 | Inertness (K4) | a bridge whose `Handler` is set throws and counts; its layout manager throws on `Measure` and `ArrangeChildren`; across every headless and device fixture both counters stay 0 (positive control: forcing a handler onto a test bridge counts 1) | a bridge that silently accepts a handler |
+| `ReactorVisualTree.Resolve` (L3) | live: a bridge resolves to its view, a direct view and a Controls view to themselves (same reference), a full traversal is idempotent under `Resolve`; retired: a bridge retained after its detach resolves to `null` and `IsBridge` is true; `null` resolves to `null`; parents aren't rewritten (B's parent is still the bridge; resolving it gives D) | return the stale view or the bridge for a retired one; throw on `null`; rewrite parents |
 | Insertion under Element-count semantics (K1, M1) | the injectable Element-count strategy: after `Layout.Insert`, only the new `Element` is re-placed (one remove and one insert on it, none on siblings), the logical order and hence the enumeration stay in slot order (positive control: without the re-placement the enumeration is out of order) | rely on MAUI's index; move bridges |
 | Inventory | every element property classified | — |
 
@@ -1597,6 +1697,7 @@ observations made after the action (a frame index or sequence number taken at th
 | `Layouts_FirstDirectChild [direct]` | a stock layout with a focused `Entry` after the insertion point gains its first direct child through Reactor: the layout's identity and native view unchanged, the entry keeps focus, selection, the keyboard and first-responder status, no `Unfocused`/`Unloaded`/`ParentChanged`, (Android) not detached and 0 children removed; positive control: the replacement path loses all of them |
 | `Input_Transparency [controls|direct]` | §2.1.11's c1–c7, through Reactor on both registries, hit-tested natively (UIKit's window hit test; Android touches dispatched to the decor view): every case equals plain MAUI's on the same platform; positive control: c1 hits B and E |
 | `Bridges_StyleShield [direct]` | app-level and scoped derived `Layout` and `Grid` styles with a counting behavior and a counted setter: Reactor's bridges and `DirectViewHost` take none from construction on; Controls views below them take the app's |
+| `Bridges_ShieldOwnership [direct]` | §2.1.13's five mutations through Reactor, with live bridges and `DirectViewHost`s and one constructed next: no counting-behavior attach or probe-setter change on any of them; the reports as in the headless test; positive control: an application-shield-only node takes S1, S2, S4, S5 |
 | `Bridges_LeafPrimitives [direct]` | §2.1.12's stack with every direct primitive through Reactor: traversal unique (raw and normalized), native taps reach the direct button and B, removal, re-insertion and insertion keep it so, MAUI's tree and hit-test helpers run without materializing a bridge (both counters 0) |
 | `Layout_MixedInsert [direct]` | a Controls layout with a direct child before a Controls child mounts, and survives insertions and moves (it threw before); a focused `Entry` after the insertion point keeps focus, selection, the keyboard and first-responder status, gets no `Unloaded`/`ParentChanged`, and (Android) is never detached; native and handler identity unchanged |
 | `Enabling_CoincidentWrite [controls|direct]` | §2.1.9's (A) sequence through Reactor on both registries, Controls → Controls and through the adapter: the app's local `false` survives the parent's re-enable, as in plain MAUI |
@@ -1656,7 +1757,8 @@ Hard premises, characterized first in the implementation; if one fails on a devi
      propagation, or uncollected.
 9. **Plain MAUI's semantics (J1–J3, K1, K2).** Through Reactor's real factories, on all four devices:
    - **The style matrix.** Both registries equal plain MAUI in all 22 cases for all five kinds.
-   - **Shields.** No app style, setter or behavior reaches a bridge or a `DirectViewHost`, from construction on.
+   - **Shields.** No app style, setter or behavior reaches a bridge or a `DirectViewHost`, from construction on,
+     including through every §2.1.13 mutation of the published shield or the reserved key.
    - **First direct child.** It disturbs no sibling.
    - **Input transparency.** Every c1–c7 case equals plain MAUI's native hit test.
 10. **Shipping (review K5).** A separate gate, run on the packed artifacts rather than project references:
@@ -1729,16 +1831,17 @@ Android defaults' limits).
         Controls children reachable twice.
 
     Upstream: [dotnet/maui#40758](https://github.com/dotnet/maui/issues/40758).
-16. **Representation, not projection** (K1, superseding round 6's visual-parent boundary). Represented direct
-    views appear to generic managed tools as their bridges. In exchange:
-    - every node's visual parent is its enumerator: Controls views inside direct layouts no longer show an
-      upward hop;
-    - a represented direct view has two managed identities: its bridge going down, itself coming up from
-      native;
-    - hit-test helpers omit it.
-
-    `ReactorVisualTree.Resolve` (new public API) normalizes both identities; the bridge mirrors the view's
-    `AutomationId`.
+16. **Representation, not projection** (K1, L2, superseding round 6's visual-parent boundary). Represented
+    direct views appear to generic managed tools as their bridges. The trade isn't monotonic:
+    - **Gains:** every node's visual parent is its enumerator, so the upward hop is gone.
+    - **Losses:**
+      - a `DirectViewHost`'s direct root, which the host's override exposes today, becomes a bridge: a regression
+        for that case;
+      - a represented direct view has two managed identities;
+      - hit-test helpers omit it.
+    - **Native automation** (Appium, UI Automation, XCUITest) is unaffected.
+    - **Normalization is opt-in:** `ReactorVisualTree.Resolve` (new public API, contract in §2.11.1 rule 13)
+      normalizes identity only. The bridge mirrors the view's `AutomationId`.
 17. **Stock layout types on both registries** (K1): every type-based style contract holds by construction (22
     of 22 cases).
     - **(c′), the shadow full name:** retired to a characterization experiment. Five matrix failures (non-derived
@@ -1755,10 +1858,12 @@ Android defaults' limits).
     views' transparency is computed (their own value, the direct parent's, or the bridge's coerced value) and
     written like enabling. This fixes today's anchoring, which never cascades into direct layouts or to direct
     views.
-20. **Style shields in two layers** for Reactor's own nodes (J1, J3, K2, K4):
-    - an `Application.Resources` entry keyed by the node's type, ensured before each creation, because MAUI
-      applies app-level styles inside the base constructor;
-    - a per-node dictionary, never shared, holding one shared empty `Style`.
+20. **Style shields in two layers, with separate owners** for Reactor's own nodes (J1, J3, K2, K4, L1):
+    - **The constructor shield.** An `Application.Resources` entry under a reserved, documented key. Reactor
+      owns it and validates it before every construction (reference and contents). Policy: replace and report.
+      It exists because MAUI applies app-level styles inside the base constructor.
+    - **The node shield.** A private empty `Style` per node, in the node's own dictionary, never published.
+      Mutating the published shield can't reach a live node.
 
     MAUI's coercion makes locals insufficient. `DirectViewHost` stops taking derived `Grid` and `Layout` styles.
 21. **Bridges are inert and fail fast** (K4): a handler or a layout-manager call throws and is counted; the gate
