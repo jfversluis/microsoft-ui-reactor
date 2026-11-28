@@ -5,9 +5,9 @@ remaining 🧪 modifiers: a theme value applied without rendering, styling for d
 fonts, animations, flow direction, `AutomationProperties`, and tests for every untested modifier. It
 stacks on 4c (spec 070), whose head is `1a8d88c6`.
 
-§1 is the outline of the whole phase. §2 is 4d-1's design: characterized on devices, revised after four
-design reviews (`bc46b5ea`: D1–D12; `f72f44ae`: E1–E10; `f63bbb5f`: F1–F6; `938621cb`: G1–G4, cited where
-they apply), not yet built.
+§1 is the outline of the whole phase. §2 is 4d-1's design: characterized on devices, revised after five
+design reviews (`bc46b5ea`: D1–D12; `f72f44ae`: E1–E10; `f63bbb5f`: F1–F6; `938621cb`: G1–G4; `da45a0d0`: H1,
+H2, M1, cited where they apply), not yet built.
 4d-2 and 4d-3 get their own sections when their characterization is done.
 
 ## 1. The phase
@@ -105,9 +105,11 @@ instrumentation in round one (§2.1.1–§2.1.4); where a Controls view's value 
 inside the change, and divergence, threads and settling in round two (§2.1.5–§2.1.7). A third round, on
 `f63bbb5f`, raised F1–F6; the repair hook's ownership and generation and MAUI's own enabling were
 characterized on Android (and the latter on Mac Catalyst) first (§2.1.8). A fourth, on `938621cb`, raised
-G1–G4; non-detaching insertion and the enabling layers were characterized on all four devices (§2.1.9).
+G1–G4; non-detaching insertion and the enabling layers were characterized on all four devices (§2.1.9). A
+fifth, on `da45a0d0`, raised H1, H2 and M1; one bridge topology was characterized on all four devices with
+the real `IVisualTreeElement` overrides (§2.1.10).
 
-### 2.1 Characterization (device, `LookCharacterization.cs`, `LookReviewCharacterization.cs`, `LookRound2Characterization.cs`, `LookRound3Characterization.cs`, `LookRound4Characterization.cs`)
+### 2.1 Characterization (device, `LookCharacterization.cs`, `LookReviewCharacterization.cs`, `LookRound2Characterization.cs`, `LookRound3Characterization.cs`, `LookRound4Characterization.cs`, `LookRound5Characterization.cs`)
 
 The baseline is plain MAUI 11.0.0 (`4e6582f`), then the same trees through Reactor on both registries.
 Devices: Mac Catalyst 26.7, the iPhone simulator (iOS 27.0), the iPad simulator (iOS 27.2) and the
@@ -460,6 +462,37 @@ So MAUI already inherits enabling between Controls views through `IsEnabledCore`
 needs to cover only direct views (which it owns) and Controls views whose MAUI chain doesn't reach the
 source, and an adapter in that chain does it without writing the child's manual layer.
 
+#### 2.1.10 One bridge topology (review round 5, H1)
+
+`Characterize_Look_Bridges [T1|T3a|T3b]`, all four devices, the same on each. **H**, a Controls stack, holds
+`[A, D, C]`; **D**, a direct layout, holds `[B, E, F]`; **F**, a nested direct layout, holds `[G, I]` (A, C, B
+and G Controls; D, E, F and I direct). Built off-window, then shown. The traversal is the device runner's
+(`Runner.cs` 111–122: down from the window through `IVisualTreeElement.GetVisualChildren`, no dedup); each
+node's `GetVisualParent` is compared with the node that enumerated it. Then: a `BindingContext` set on H after
+mount and changed; an implicit `Button` style in H's resources; a theme change (an `AppThemeBinding` on B);
+H disabled and re-enabled; D's bridge disabled (Reactor's write for D's state); `Window` and `IsLoaded` on B
+and G; H's native child count; the bridges' handlers.
+
+| | T1: round 4's separate stand-in (in H, slot-aligned) and adapters (D's under H, F's under D's), MAUI's projection | T3a: **one bridge per direct view** (`bridge(D)` slot-aligned in H; `bridge(F)` under `bridge(D)`; B and G their bridges' logical children); H a Reactor subclass whose projection lists its **views** | T3b: T3a, and each bridge **pulls** MAUI's propagated state when its logical parent's changes |
+|---|---|---|---|
+| Traversal under H | `H > A > adapter > C > adapter > B > adapter > G`: **bookkeeping enumerated (3), the direct views D, E, F, I never** (a stand-in that presented D would enumerate B twice: through D and through D's adapter) | `H > A > D > B > E > F > G > I > C`: **every real view once, in slot order, no bridge** | the same |
+| `GetVisualParent` against the enumerator | consistent, but over bookkeeping nodes | D → H, E → D, F → D, I → F, A and C → H; **B → `bridge(D)` → D and G → `bridge(F)` → F** | the same |
+| `BindingContext` set after mount, then changed | B and G follow both | the same (BindingContext follows logical children, which the projection doesn't change) | the same |
+| H's implicit style; a theme change | B and G yellow; B's background follows the theme | the same | the same |
+| `Window` on B and G | set | **null**: H's projection no longer pushes to the bridge, and the bridge took its `Window` when H had none | set |
+| H disabled | A, B and G disabled | **only A**: MAUI's propagation walks `GetVisualChildren`, which now skips the bridge | A, B and G disabled (2 pulls) |
+| D's bridge disabled (Reactor's write) | B and G disabled | the same | the same |
+| H's native child count; bridges' handlers | 3; null (no native peers) | 3; null | 3; null |
+
+So one bridge per direct view, a projected Controls layout and a pulling bridge give a unique, slot-ordered
+enumeration of real views with no bookkeeping in it, live `BindingContext`, resources, styles, themes,
+enabling and `Window`, and no native peers. **One difference remains, fixed by MAUI:** a Controls view's
+visual parent is its logical parent (`Element.cs` 616–620: `GetVisualParent() => Parent`), and its logical
+parent must be an `Element`, which a direct layout isn't. So a Controls view inside a direct layout reports its
+bridge as visual parent, and the bridge reports the direct layout: an upward walk from B reaches D through one
+bookkeeping hop, while the downward walk never shows it. Wrapping B in a Controls container doesn't help (the
+wrapper's visual parent is again its logical parent).
+
 ### 2.2 What WinUI has, and why the MAUI value isn't `ThemeRef` (review D1)
 
 WinUI Reactor's theme value is `ThemeRef(string ResourceKey)`, a reference to a WinUI theme resource:
@@ -780,20 +813,19 @@ the host tree is treated as segments, and each boundary is bridged by MAUI's own
    it didn't write).
 2. **Controls → Controls.** A Controls host below a Controls host is its logical child, so MAUI's
    `IsEnabledCore` inherits; Reactor writes nothing inherited.
-3. **Direct → Controls: the owned adapter.** Each direct layout that has Controls children owns one
-   **enabling adapter**: a logical-only `VisualElement`, never in a view list, whose logical parent is the
-   enclosing direct layout's adapter, else the direct tree's Controls anchor. The direct layout's Controls
-   children are the adapter's logical children (§2.1.9 (C)), so their `Parent` is the adapter: implicit styles,
-   resources, `AppThemeBinding`s and enabling all reach them through it. Reactor writes only the adapter's
-   `IsEnabled`: the direct layout's effective state. This replaces today's `Parent`-only anchoring, which
-   carries resources but not enabling (§2.1.9 (C')).
-4. **Controls → direct: the stand-in.** Each direct child of a Controls layout has a logical stand-in at its
-   position in that layout's logical children (§2.11). The stand-in inherits the layout's enabling from MAUI
-   (XAML styles, app writes, MAUI parents outside Reactor), and Reactor observes it: the stand-in's
-   `IsEnabled`, read and watched through `PropertyChanged`, is the direct subtree's MAUI input. No read-back
-   after clearing is needed, and Reactor's own writes can't feed back: Reactor never writes a stand-in.
+3. **Direct → Controls: the bridge** (§2.11.1). The Controls children of a direct layout D are logical
+   children of `bridge(D)`, so their `Parent` is the bridge: implicit styles, resources, `AppThemeBinding`s,
+   `BindingContext` and enabling reach them through it (§2.1.9 (C), §2.1.10). Reactor writes the bridge's
+   `IsEnabled`: D's effective state. This replaces today's `Parent`-only anchoring, which carries resources but
+   not enabling (§2.1.9 (C')).
+4. **Controls → direct: the same bridge.** When D is a child of a Controls layout H, `bridge(D)` is H's logical
+   child at D's slot. It inherits H's enabling from MAUI (XAML styles, app writes, MAUI parents outside Reactor)
+   by pulling it (§2.11.1 rule 6), and Reactor observes it: the MAUI part of the bridge's `IsEnabled` (its
+   `IsEnabledCore` from H) is the direct subtree's MAUI input. Reactor's own write to the bridge is the direct
+   side's state; the bridge's effective value is MAUI's AND of both, so the input Reactor reads is H's own
+   `IsEnabled`, never the bridge's (no feedback).
 5. **Direct → direct.** Reactor computes and writes: effective = own AND the parent's effective AND, at a
-   segment's top, the stand-in's or anchor's MAUI input. Reactor owns direct views, so it writes the effective
+   segment's top, the Controls parent's (or anchor's) MAUI input. Reactor owns direct views, so it writes the effective
    value on every mount, ordinary update, controlled restore and patch (`DirectView.ApplyModifiers` reads the
    applied modifiers' value, no longer `n.IsEnabled ?? true`).
 6. **Effective state for the Disabled variant.** A direct host's effective state is rule 5's. A Controls
@@ -910,25 +942,102 @@ cleaned up and run again, refs rebound to the new views); components above it ke
 beneath skipped components too (the pass reaches the host without rendering its owners), and the same rule
 applies when a parent's disabling activates a Controls-only variant.
 
-**A prerequisite fix: inserting into a Controls layout with direct children** (review G1, G4; §2.1.8,
-§2.1.9; [dotnet/maui#40758](https://github.com/dotnet/maui/issues/40758)). Reactor keeps a Controls
-layout's logical children aligned with its views: each direct child gets a **logical stand-in** (a
-logical-only `VisualElement`, never a view) at the same position, through MAUI's public
-`AddLogicalChild`, `InsertLogicalChild` and `RemoveLogicalChild`. `Layout.Insert` then always finds a valid,
-correct logical index. The rules:
+#### 2.11.1 The bridge topology (review G1, G3, G4, H1, H2, M1)
 
-- **No sibling is touched.** An insertion is one `Layout.Insert` (one native add); a removal is one
-  `Layout.RemoveAt` plus, for a direct child, its stand-in's removal; a keyed move is the moved child's
-  removal and insertion only. Unaffected siblings are never removed, re-added or detached (§2.1.9: S1's
-  suffix re-adding is rejected because it detaches them, dropping focus, selection and the keyboard).
-- **One operation per affected position per sync.** `SyncList`'s remove-then-insert per position already
-  touches each moved or inserted child once; the stand-in edit rides along in the same step. A batch of
-  insertions is N native adds; a reverse of N is at most N−1 moves, as for an all-Controls layout.
-- **Stand-ins serve twice.** They carry the layout's enabling to direct subtrees (§2.8 rule 4), and they
-  re-implement `IVisualTreeElement` to present their direct view, so visual-tree tools see direct children of
-  Controls layouts (spec 065 §7's open issue) in the right order.
-- **Layouts with only Controls children** have no stand-ins and behave as today.
-- When MAUI fixes #40758 the stand-ins stay: they are also §2.8's enabling bridge.
+One design replaces round 4's separate stand-ins and adapters: **one bridge per direct view that needs one**, a
+Reactor-owned logical-only `VisualElement` with no handler and no native view (§2.1.10). It fixes MAUI's
+`Layout.Insert` for mixed layouts ([dotnet/maui#40758](https://github.com/dotnet/maui/issues/40758)), carries
+enabling between the registries' segments (§2.8), and is the logical parent of Controls views inside direct
+layouts.
+
+1. **Who has a bridge.** A direct view D has `bridge(D)` when D is a child of a Controls layout (including the
+   `DirectViewHost` anchor that hosts a direct tree in a Controls slot), or when D is a direct layout with a
+   Controls descendant reachable through direct layouts. One bridge per direct view, never two.
+2. **Logical placement.** A bridge has exactly one logical parent:
+   - **slot-aligned** in the Controls layout H when D is H's child: at D's position among H's logical children,
+     through MAUI's public `InsertLogicalChild` and `RemoveLogicalChild` (rule 8 chooses the position);
+   - **reserved under its direct parent's bridge** otherwise: `bridge(F)` is a logical child of `bridge(D)` when
+     F is a child of the direct layout D. A bridge is never a logical child of a Controls layout it doesn't
+     occupy a slot in.
+
+   A bridge's logical children are D's Controls children and the bridges of D's direct-layout children, in D's
+   slot order. A Controls layout's logical children are its Controls children and its direct children's bridges.
+3. **The visual projection: real views only, once, in slot order.**
+   - A Controls layout that can hold direct children (every Controls layout the direct registry creates as a
+     fallback, and `DirectViewHost`) is a Reactor-owned subclass of the MAUI layout that re-implements
+     `IVisualTreeElement`: its children are its **views** in slot order (direct ones included), its parent its
+     `Parent`.
+   - A direct view's parent is the real view whose view list holds it (`DirectView.GetVisualParent`: its
+     Controls layout or its direct parent; `DirectView.cs` 23 changes to the slot owner, not the anchor), and a
+     direct layout's children are its views in slot order.
+   - A bridge is never enumerated downward. Its own `GetVisualParent` returns the direct view it serves.
+   - **The boundary (§2.1.10):** a Controls view inside a direct layout reports its bridge as visual parent
+     (MAUI's `GetVisualParent() => Parent`), and the bridge reports the direct layout. Downward walks see each
+     real view once; an upward walk from such a view passes one bookkeeping hop before the direct layout.
+     Reactor's own upward walks (the scroll bridge, spec 070 §2.6.1) use the slot owner table, not the visual
+     parent.
+4. **No native peers.** Bridges have no handler; a layout's native children are exactly its views (§2.1.10:
+   3 for `[A, D, C]`).
+5. **Live inheritance through the logical graph.** `BindingContext` propagates through logical children,
+   resources and implicit styles through each element's `Parent` listener, themes through both: none depends on
+   the projection, and all reach Controls views inside direct layouts, including a change after mount
+   (§2.1.10).
+6. **MAUI's propagation, pulled.** MAUI pushes `IsEnabled`, `InputTransparent`, `Window`, `FlowDirection` and
+   `Visual` through `GetVisualChildren` (`VisualElement.cs` 1966–1976), which a projected layout no longer
+   routes to a bridge. Each bridge therefore watches its logical parent's `PropertyChanged` for those
+   properties and re-runs MAUI's own pull-and-push (`OnParentSet`'s base: from the parent, then to the bridge's
+   logical children); its own `GetVisualChildren` stays its logical children, so MAUI's push from the bridge
+   down is unchanged. Without the pull, `Window` and enabling stop at the bridge (§2.1.10 T3a); with it they
+   arrive (T3b). MAUI's coercion (`IsEnabledCore` reads `Parent`) needs nothing: the bridge is the `Parent`.
+7. **Lifecycle (review H2).** Every bridge operation runs inside the tree's transaction (§2.6):
+   - **Attach.** A direct view entering a slot gets its bridge if rule 1 requires one (created on demand up the
+     chain of direct parents), placed by rule 2; a Controls view entering a direct layout D becomes a logical
+     child of `bridge(D)` (`AddLogicalChild`, which sets its `Parent`); the slot-owner table records its real
+     visual parent.
+   - **Detach.** The reverse, for every membership: `RemoveLogicalChild` from the bridge or layout (MAUI clears
+     the child's `Parent`), the slot-owner entry removed, the bridge's watch on its parent and Reactor's watch on
+     the bridge unsubscribed, its presented-view reference cleared. A bridge left with no role under rule 1 is
+     retired (removed from its own logical parent, the same cleanup), recursively up the chain.
+   - **Move.** A keyed move within one parent is a detach and an attach of the moved child only; its bridge moves
+     with it (slot-aligned bridges re-placed by rule 8). No other membership changes.
+   - **Backend replacement** (§2.11, review G2). The old host's memberships are detached as above, with its
+     subtree's; the new host is attached at the same slot. A direct → Controls replacement retires
+     `bridge(old)`; Controls → direct creates the new view's bridge.
+   - **Cell retirement.** A retired cell's tree is unmounted; its direct root's top bridge leaves the cell
+     host's logical children and every bridge below is retired.
+   - **Anchor retarget.** The anchor (the `DirectViewHost` or Controls layout that holds a direct tree's top) is
+     distinct from a Controls child's logical owner (its bridge). Moving a direct tree to another anchor moves
+     only the top bridge (removed from the old anchor's logical children, inserted at the new slot); Controls
+     views keep their bridge as `Parent`, and MAUI re-subscribes the bridge's resource listener when its own
+     parent changes. `SetControlsAnchor`/`AnchorChild` (`DirectLayouts.cs` 98–129) no longer set Controls
+     children's `Parent`, and `DirectLayout.Detach`'s clear of a child parented to the anchor (131–138) becomes
+     the bridge detach above.
+   - **After any of these**, no live element keeps a retired bridge or retired control as a logical child or
+     parent, nothing propagates to them (their watches are gone and they're out of every logical list), and
+     they are collectable.
+8. **Insertion by probe (review M1).** The slot placement doesn't assume MAUI's `Layout.Insert` algorithm. At
+   the first mixed layout, a one-time probe on a scratch layout (a non-`Element` view, then an `Element` A, then
+   an `Element` E inserted at view index 1) reads the logical order:
+   - `[A, E]`: **view-index semantics** (MAUI 11 today). Bridges are slot-aligned, so the view index is also a
+     valid, correct logical index and `Insert` neither throws nor misorders.
+   - `[E, A]`: **Element-count semantics** (#40758 fixed: the logical index is the number of `Element` views
+     before the index). Bridges then live in a **reserved tail** after every `Element` child, so MAUI's count
+     ignores them and places `Element`s exactly; padding would make MAUI insert before a bridge (with `[bridge(D),
+     A]`, at logical 0 instead of 1).
+   - Anything else (a throw, a missing logical child): reported once, and Reactor falls back to the tail
+     placement, verifying each insertion's logical result.
+
+   Logical order inside a projected layout has no visible effect (enumeration uses views; `BindingContext`,
+   resources and propagation don't depend on order), so either placement is correct; the probe only keeps
+   `Insert` from throwing and `Element`s ordered.
+9. **Operations.** An insertion is one `Layout.Insert` (one native add) and, for a direct child, one bridge
+   placement; a removal one `Layout.RemoveAt` plus the bridge detach; a keyed move the moved child's removal
+   and insertion only. Unaffected siblings are never removed, re-added or detached (§2.1.9: re-adding the
+   suffix detaches them, dropping focus, selection and the keyboard). Each affected position is touched at
+   most once per sync; a batch of N insertions is N native adds; a reverse of N is at most N−1 moves, as for an
+   all-Controls layout.
+10. **Layouts with only Controls children** keep MAUI's types and behave as today; on the Controls registry no
+    bridge exists.
 
 ### 2.12 Census and the styleable inventory (review D8, E3)
 
@@ -1021,7 +1130,7 @@ observations made after the action (a frame index or sequence number taken at th
 | MAUI's own enabling (F2) | a Controls `Button` disabled by its XAML style (stub `IsEnabled` false), `ElementStyles` normal teal / disabled gray: the gray variant; the stub turning true outside Reactor's writes: one Disabled pass, teal (positive); a `PropertyChanged(IsEnabled)` raised by Reactor's own write: no pass | effective from Reactor's declaration and style only; ignore outside changes; react to own writes |
 | The coincident app write (G3) | a Controls child under a Reactor-disabled parent (Controls → Controls, and Direct → Controls through the adapter): the app writes the child's local `false` (`.Set` run once, then no ordinary update), the parent re-enabled: the child stays disabled, as in plain MAUI (§2.1.9 (A)); Reactor's manual-layer write count on the child is 0 (positive: a declared `.IsEnabled(false)` writes once) | write the inherited state on the child's manual layer and clear it |
 | The adapter (G3) | a direct layout disabled → its Controls children disabled through the adapter (MAUI's `IsEnabledCore`), with zero writes to the children; re-enabled → enabled; their implicit styles and `AppThemeBinding`s still resolve through the adapter; nested direct layouts chain adapters | anchor by `Parent` only (no inheritance); write the children |
-| The stand-in as input (F2, G3) | a Controls layout disabled by its XAML style (stub) over direct descendants: they are written disabled, including after a Reactor parent disable → re-enable and an unrelated child render; the stand-in changing outside Reactor re-propagates both ways (positive: a stand-in left enabled leaves them enabled) | direct descendants from Reactor state only; poll instead of watching |
+| The bridge as input (F2, G3) | a Controls layout disabled by its XAML style (stub) over direct descendants: they are written disabled, including after a Reactor parent disable → re-enable and an unrelated child render; the layout's `IsEnabled` changing outside Reactor re-propagates both ways through the bridge's pull (positive: an enabled layout leaves them enabled); Reactor's write to the bridge never reads back as the input (the input is the layout's own `IsEnabled`) | direct descendants from Reactor state only; read the bridge's own value as input |
 | Own vs effective enabled (direct) | a direct child's state update while its parent stays disabled: written disabled; a controlled restore under a disabled parent: written disabled; an own-disabled value cleared under a disabled parent, then the parent re-enabled: enabled; an explicit child `IsEnabled(true)` stays disabled under the parent | write own; `n.IsEnabled ?? true` on direct views |
 | A XAML-disabled anchored child | a Controls child whose XAML style sets `IsEnabled = false`, under a direct layout disabled then re-enabled: Reactor writes nothing to the child, which stays disabled (positive: a child without the style is enabled) | write or clear the child's value |
 | `IsEnabled` in a variant | ignored, one report | apply it |
@@ -1033,9 +1142,11 @@ observations made after the action (a frame index or sequence number taken at th
 | Late capability, routed | a style replacement adding a gradient to a mounted direct button, beneath a skipped component; a parent disabling activating a Controls-only variant that arrived after mount: the host is replaced through `CanUpdate` (new native identity, the host's subtree remounted: child state reset, cleanup ran, ref rebound), owners above keep state, zero renders of the skipped owner (positive: a patchable change keeps identity) | patch silently; re-render the owner |
 | Routing in place (F4) | the same declared instance across renders: a later style entry needing Controls replaces the direct host (new native identity, the subtree remounted, the slot unchanged among its siblings, `Live` the same declared instance); removing the entry replaces it back with a direct view; then ordinary renders keep identity, theme toggles and Disabled toggles keep identity and write patches only | route through ordinary `Update` (returns early on the equal declaration); pass the projected element as `Live`; lose the slot |
 | Fresh mount lifetime (G2) | keep the old node's handler context and native control; replace the backend direct → Controls and back: an event raised on the old control reaches no callback, a report queued by the old context before the replacement is dropped when drained, and the old node stays `Unmounted`; positive: the new node's event reaches the current callback once | re-mark the old node mounted; reuse its context |
-| Mixed insert (G1) | a Controls layout's children in every order of direct and Controls views, inserted, removed and moved by key: the native order and the logical order (stand-ins included) match, nothing throws, and **no unaffected sibling is removed or re-added** (native child-operation counter) | `Layout.Insert` at the view index; re-add the suffix |
+| Mixed insert (G1, M1) | a Controls layout's children in every order of direct and Controls views, inserted, removed and moved by key, **under both insertion algorithms** (an injectable insertion strategy simulating MAUI's view-index semantics and the Element-count semantics of a fixed #40758, each driving a view list and a logical list): nothing throws, the views' order matches, `Element`s keep their relative logical order, bridges are slot-aligned under view-index and in the reserved tail under Element-count, and **no unaffected sibling is removed or re-added** (native child-operation counter) | `Layout.Insert` at the view index; re-add the suffix; pad under Element-count (an `Element` lands before a bridge) |
+| The probe (M1) | the one-time probe classifies the stub's view-index algorithm, its Element-count algorithm, and a throwing one (reported once, tail fallback with per-insert verification); it runs once per process (counted) | assume today's algorithm |
 | Batched operations (G4) | a direct prefix and a long Controls suffix: N insertions are N native adds; a keyed move is one remove and one add of the moved child; a reverse of N is at most N−1 moves; each affected position is touched at most once per sync (counter per position) | touch a position twice; re-add siblings |
-| Visual tree | a Controls layout's `GetVisualChildren` lists its direct children through their stand-ins, in view order | stand-ins invisible to the visual tree |
+| Projection (H1) | §2.1.10's tree headlessly: every real view enumerated once in slot order, no bridge enumerated, D's and E's visual parents their slot owners, B's its bridge whose parent is D (the documented boundary) | enumerate logical children; a direct view's parent the anchor |
+| Bridge lifecycle (H2) | with the enclosing root alive, each of: a Controls child removed from a direct layout; a direct child removed from a Controls layout; keyed moves; reparenting by anchor retarget; backend replacement both ways; a cell retired (recycled, with and without `ReuseItemTrees`): the old memberships are gone from every logical list, the retired bridge has no parent, no logical children, no presented view and no watches; toggling the old parent's `IsEnabled` and `BindingContext` reaches nothing retired (pull counter, binding-context value); the retired bridges and controls are collected (`WeakReference` after GC; positive: a live bridge's reference survives) | keep a membership; keep a watch; anchor = owner |
 | Inventory | every element property classified | — |
 
 **Headless: Android defaults (stub platform) and fonts.**
@@ -1071,7 +1182,9 @@ observations made after the action (a frame index or sequence number taken at th
 | `Spacing_Presence [controls|direct]` | a style's spacing on an unset stack (geometry), an explicit 0 kept, style removal back to 0 |
 | `Disabled_Inherited [controls|direct]` | a disabled parent: children disabled natively and showing the variant, including an anchored Controls child and an explicit-enabled child; a child state update under it stays disabled; re-enabled: back; a XAML-disabled anchored child stays disabled |
 | `Android_RepairHook [controls|direct]` (Android) | §2.1.8's cases (a), (b), (c) with the real hook: the current generation's default after release, never the retained list, nothing after unmount; corrective writes counted apart from mapper invocations |
-| `Disabled_MauiSource [controls|direct]` | a XAML-disabled Controls button shows the `ElementStyles` Disabled variant; a XAML-disabled Controls layout disables its direct descendants (native, through the stand-ins), also after a Reactor parent disable → re-enable and an unrelated child render; the source changed outside Reactor re-propagates both ways |
+| `Disabled_MauiSource [controls|direct]` | a XAML-disabled Controls button shows the `ElementStyles` Disabled variant; a XAML-disabled Controls layout disables its direct descendants (native, through the bridges), also after a Reactor parent disable → re-enable and an unrelated child render; the source changed outside Reactor re-propagates both ways |
+| `Bridges_Topology [direct]` | §2.1.10's H → D (interleaved Controls and direct children) → F (nested), through Reactor with the real overrides: the runner's traversal lists every real view once in slot order and no bridge; D's parent is H; B's upward walk reaches D through its bridge; a `BindingContext` changed after mount reaches B and G; H's implicit style and a theme change reach them; H disabled disables them (Window set, `IsLoaded` true); H's native children are exactly its views |
+| `Bridges_Lifecycle [direct]` | the H2 cases on device: after each, the runner's traversal shows no retired view, the old parent's toggles reach nothing retired, and the retired bridges and controls are collected |
 | `Layout_MixedInsert [direct]` | a Controls layout with a direct child before a Controls child mounts, and survives insertions and moves (it threw before); a focused `Entry` after the insertion point keeps focus, selection, the keyboard and first-responder status, gets no `Unloaded`/`ParentChanged`, and (Android) is never detached; native and handler identity unchanged |
 | `Enabling_CoincidentWrite [controls|direct]` | §2.1.9's (A) sequence through Reactor on both registries, Controls → Controls and through the adapter: the app's local `false` survives the parent's re-enable, as in plain MAUI |
 | `Replacement_Lifetime [direct]` | a late style forcing Controls and its removal: the old native's events reach nothing after each replacement; the new one's work |
@@ -1118,8 +1231,12 @@ Hard premises, characterized first in the implementation; if one fails on a devi
    and a 500-view Controls suffix; batch insertions (50 at scattered positions); keyed moves (50); a reverse of
    500. Against the same edits on an all-Controls layout: native child operations equal (counted), each
    affected position touched at most once per sync, no unaffected sibling removed or detached, and render,
-   layout and allocations within tolerance; mounting with stand-ins within tolerance of mounting without them
+   layout and allocations within tolerance; mounting with bridges within tolerance of mounting without them
    (§2.1.9 measured S2 ≈ bare).
+8. **The bridge topology (H1, H2).** Through Reactor's own bridges and projected layouts, on all four devices:
+   §2.1.10's T3b results (each real view once in slot order, no bridge enumerated, live `BindingContext`,
+   styles, themes, enabling and `Window`, no native peers), and every H2 lifecycle case leaving nothing retired
+   in a logical list, reachable by propagation, or uncollected.
 
 Then: full device suites on all four devices with the look fixtures; the Release build of `Reactor.Maui.slnx`
 with no warnings; the mutants above; spec 068's rows (the theme value ✅, styling direct views ✅, fonts ✅ for
@@ -1144,8 +1261,8 @@ Android defaults' limits).
    instance, with the consequences of declaring it, in both directions (F4, G2).
 8. **MAUI's Disabled precedence and inheritance** (D7); **own and effective enabled** computed apart (E4);
    **enabling bridged by MAUI's own inheritance** (F2, G3): Reactor never writes an inherited value on a
-   Controls view's manual layer; owned adapters carry a direct layout's state to its Controls children, and
-   stand-ins carry a Controls layout's state (XAML, app writes) to its direct children.
+   Controls view's manual layer; one bridge per direct view carries a direct layout's state to its Controls
+   children and a Controls layout's state (XAML, app writes) to its direct children (G3, H1).
 9. **The direct registry gets inherited `IsEnabled`**, fixing §2.1.3's defect in 4d-1.
 10. **The common-look census and the inventory in 4d-1** (D8); **spacing presence** by a private bit behind the
     existing `double` (E3): no binary or source break; an internal clear for style merging (F5).
@@ -1158,11 +1275,18 @@ Android defaults' limits).
     invocation (D11, E1, E2, F1).
 14. **Reports**, once each: XAML styles ignored by direct views, theme divergence, font evidence, traits, an
     `IsEnabled` in a Disabled variant.
-15. **Logical stand-ins** for direct children of Controls layouts (G1, G4): MAUI's `Layout.Insert` works
-    without detaching any sibling, logical and visual-tree order are right, and the stand-ins double as the
-    enabling input. Rejected: re-adding the suffix (it detaches siblings: focus, selection and keyboard lost;
-    O(n)), and Controls wrappers (60–90% slower mounts on Apple's platforms, placement moves to the wrapper).
-    Upstream: [dotnet/maui#40758](https://github.com/dotnet/maui/issues/40758).
+15. **One bridge topology** (G1, G4, H1, H2, M1): one logical-only bridge per direct view that needs one,
+    slot-aligned in a Controls parent or reserved under its direct parent's bridge; projected Controls layouts
+    that enumerate views; bridges that pull MAUI's propagation; a defined lifecycle; slot placement chosen by a
+    one-time probe of `Layout.Insert`'s semantics. MAUI's `Layout.Insert` works without detaching any sibling.
+    Rejected: re-adding the suffix (it detaches siblings: focus, selection and keyboard lost; O(n)), Controls
+    wrappers (60–90% slower mounts on Apple's platforms, placement moves to the wrapper, and the wrapper's visual
+    parent is again its logical parent), and round 4's separate stand-ins and adapters (bookkeeping in the
+    visual tree, direct views missing from it, Controls children reachable twice). Upstream:
+    [dotnet/maui#40758](https://github.com/dotnet/maui/issues/40758).
+16. **The visual-parent boundary** (§2.1.10): a Controls view inside a direct layout reports its bridge as
+    visual parent, because MAUI fixes a Controls view's visual parent to its logical parent; documented, and
+    Reactor's own upward walks use the slot-owner table.
 
 ### 2.16 Open questions
 
@@ -1175,6 +1299,8 @@ Android defaults' limits).
 - The presence bit for the excluded non-nullable properties (item spacings, `HideSingle`, …).
 - Mac Catalyst's platform-started theme change and forced-theme behavior (uncharacterized, §2.1).
 - A window on a thread other than the main thread (Windows, 4g) is designed (§2.6 rule 6) but untested here.
+- Whether MAUI would accept an extension point for an `Element`'s visual parent (removing §2.1.10's one
+  bookkeeping hop); not proposed upstream without approval.
 - Accessibility focus across an insertion isn't measured directly (no automated screen reader); S2 performs no
   native removal or detach on siblings, which is the path that clears it (§2.1.9).
 - MAUI issues (one filed; the rest are listed here only, and filing them waits for approval):
