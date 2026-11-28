@@ -859,6 +859,10 @@ public class CarouselPositionTests
         // An unrelated render is queued before the rest is found and the report posted.
         h.Tick(1);
         while (h.Port.Frames.Count > 0) h.Port.Frame();
+        // The unrelated flush runs, then display frames, before the report is delivered.
+        h.Host.Scheduler.RunOne();
+        for (var i = 0; i < 10; i++) h.Port.Frame();
+        Assert.Empty(h.Port.Scrolls);
         h.Host.Scheduler.Drain();
         h.Settle();
         Assert.Equal(["3"], h.Log);
@@ -1211,6 +1215,215 @@ public class CarouselPositionTests
         Assert.Equal(3, h.Port.Scrolls.Count);
         Assert.Single(warnings.Warnings);
         Assert.Empty(h.Log);
+    }
+
+    // ── Verification round on cac03cbd ──
+
+    [Fact]
+    public void V1_AfterGivingUp_AWorkingReplacementView_ProjectsTheDeclaration()
+    {
+        using var warnings = new WarningListener("CarouselView.Position");
+        var h = Mount();
+        h.Port.AutoLand = false;
+        h.SetPosition(3);
+        h.Settle(2000);
+        Assert.Equal(3, h.Port.Scrolls.Count); // the old view never landed: given up
+
+        var replacement = new StubCarouselPort { Shown = 0 };
+        h.View.Controller.Port = replacement;
+        h.Port = replacement;
+        h.Settle();
+        Assert.Equal([(3, false)], replacement.Scrolls);
+        Assert.Empty(h.Log);
+    }
+
+    [Fact]
+    public void V2_TheAnswer_WaitsForARefScrollWithoutMotionFlagsToRest()
+    {
+        var h = Mount(accept: true);
+        h.View.Handler = new StubViewHandler();
+        h.View.Controller.Port = h.Port;
+        h.Settle();
+        h.Port.Shown = 1;
+        h.View.Controller.OnTrigger();
+        while (h.Port.Frames.Count > 0) h.Port.Frame(); // rested on 1: the report is posted, not yet run
+
+        // A ref's animated ScrollTo starts: no motion flag, only the offset moving.
+        h.View.ScrollTo(3, position: ScrollToPosition.Center, animate: true);
+        h.Port.Aligned = false;
+        h.Port.Offset = 10;
+        h.Port.Frame();
+        h.Port.Offset = 30;
+        h.Host.Scheduler.Drain(); // the accepting answer
+        Assert.Empty(h.Port.Scrolls); // nothing projected into the ref's animation
+
+        h.Port.Shown = 3;
+        h.Port.Offset = 0;
+        h.Port.Aligned = true;
+        h.Settle();
+        Assert.Equal(["1", "3"], h.Log);
+        Assert.Empty(h.Port.Scrolls);
+    }
+
+    [Fact]
+    public void V2_InputWhileTheReportIsOut_IsKept_AcrossANewView()
+    {
+        var h = Mount(); // refuses
+        h.Port.Shown = 1;
+        h.View.Controller.OnTrigger();
+        while (h.Port.Frames.Count > 0) h.Port.Frame(); // the report of 1 is out
+
+        // A new platform view arrives (its rest unknown), then the user drags it to 2 before the answer.
+        var replacement = new StubCarouselPort { Shown = 1 };
+        h.View.Controller.Port = replacement;
+        h.Port = replacement;
+        replacement.User = true;
+        replacement.Moving = true;
+        replacement.Shown = 2;
+        replacement.Frame();
+        replacement.User = false;
+        replacement.Moving = false;
+        h.Settle();
+        Assert.Equal(["1", "2"], h.Log); // the drag is reported, not overwritten by the refusal
+    }
+
+    [Fact]
+    public void V3_GivingUp_StillAppliesADeferredTransaction()
+    {
+        var h = Mount();
+        h.Port.AutoLand = false;
+        h.SetPosition(3);
+        h.Host.Scheduler.Drain();
+        h.Port.ScrollPending = true;
+        h.Port.Moving = true;
+        h.View.Controller.OnTrigger();
+        h.Frames(2);
+        h.SetItems(["z", .. Five]); // queued while the projection runs
+        h.Host.Scheduler.Drain();
+        h.Port.ScrollPending = false;
+        h.Port.Moving = false;
+        h.Settle(2000); // three attempts that never land, then the give-up
+        Assert.False(h.View.Controller.TransactionPending);
+        Assert.Equal(1, h.View.Controller.Publications);
+        Assert.Equal("z,a,b,c,d,e", Keys(h));
+    }
+
+    [Fact]
+    public void V3_ARefusedMoveAfterGivingUp_IsRestored()
+    {
+        var h = Mount();
+        h.Port.AutoLand = false;
+        h.SetPosition(3);
+        h.Settle(2000);
+        Assert.Equal(3, h.Port.Scrolls.Count); // given up on 3
+
+        // The user swipes to 1; the app refuses: back to the declaration, once.
+        h.Port.AutoLand = true;
+        h.Port.User = true;
+        h.Port.Moving = true;
+        h.Port.Shown = 1;
+        h.View.Controller.OnTrigger();
+        h.Frames(3);
+        h.Port.User = false;
+        h.Port.Moving = false;
+        h.Settle();
+        Assert.Equal(["1"], h.Log);
+        Assert.Equal(4, h.Port.Scrolls.Count);
+        Assert.Equal((3, true), h.Port.Scrolls[^1]);
+        Assert.Equal(3, h.Port.Shown);
+    }
+
+    [Fact]
+    public void V3_ARefusedMotionlessJumpAfterGivingUp_IsRestored()
+    {
+        var h = Mount();
+        h.Port.AutoLand = false;
+        h.SetPosition(3);
+        h.Settle(2000);
+        Assert.Equal(3, h.Port.Scrolls.Count); // given up on 3
+
+        // VoiceOver's scroll-to-visible: a jump to 1 with no motion flag; the app refuses.
+        h.Port.AutoLand = true;
+        h.Port.Shown = 1;
+        h.View.Controller.OnTrigger();
+        h.Settle();
+        Assert.Equal(["1"], h.Log);
+        Assert.Equal((3, true), h.Port.Scrolls[^1]);
+        Assert.Equal(3, h.Port.Shown);
+    }
+
+    [Fact]
+    public void V3_AUserMoveOntoTheGivenUpItem_IsAligned()
+    {
+        var h = Mount();
+        h.Port.AutoLand = false;
+        h.SetPosition(3);
+        h.Settle(2000);
+        Assert.Equal(3, h.Port.Scrolls.Count); // given up on 3
+
+        // The user drags it onto 3 themselves, between pages: no report (it's the declaration), aligned.
+        h.Port.AutoLand = true;
+        h.Port.User = true;
+        h.Port.Moving = true;
+        h.Port.Shown = 3;
+        h.Port.Aligned = false;
+        h.Port.Offset = 40;
+        h.View.Controller.OnTrigger();
+        h.Frames(3);
+        h.Port.User = false;
+        h.Port.Moving = false;
+        h.Settle();
+        Assert.Empty(h.Log);
+        Assert.Equal((3, true), h.Port.Scrolls[^1]);
+        Assert.True(h.Port.Aligned);
+    }
+
+    [Fact]
+    public void V4_InputInAWindow_SurvivesASecondTransaction_AndIsReportedFirst()
+    {
+        var h = Mount(accept: true);
+        h.SetItems(["z", .. Five]);
+        h.Host.Scheduler.Drain();
+        h.Settle(); // the first window's jump rests
+        h.Port.User = true;
+        h.Port.Moving = true;
+        h.Port.Shown = 2;
+        h.View.Controller.OnTrigger();
+        h.Frames(3);
+        h.Port.User = false;
+        h.Port.Moving = false;
+        h.Settle(); // the drag rests on "b", inside window 1
+
+        h.SetItems(["y", "z", .. Five]); // a second insertion before completion 1
+        h.Host.Scheduler.Drain();
+        h.Settle();
+        for (var i = 0; i < 5 && h.Port.Barriers.Count > 0; i++)
+        {
+            h.Port.CompleteBarrier();
+            h.Settle();
+        }
+        Assert.Equal(["3"], h.Log); // "b" in the app's latest items
+        Assert.Equal("y,z,a,b,c,d,e", Keys(h));
+        Assert.Equal(3, h.Port.Shown);
+    }
+
+    [Fact]
+    public void V5_APortPendingForever_DoesNotKeepThePollGoing()
+    {
+        var h = Mount();
+        var ticks = 0L;
+        h.View.Controller.Ticks = () => ticks += global::System.Diagnostics.Stopwatch.Frequency / 10; // 100 ms per reading
+        h.Port.AutoLand = false;
+        h.Port.ScrollPending = true; // never turns false
+        h.SetPosition(3);
+        h.Host.Scheduler.Drain();
+        for (var i = 0; i < 5000 && h.Port.Frames.Count > 0; i++)
+        {
+            h.Port.Frame();
+            h.Host.Scheduler.Drain();
+        }
+        Assert.False(h.View.Controller.Polling);
+        Assert.Equal(CarouselPositionController.MaxScrolls, h.Port.Scrolls.Count);
     }
 
     [Fact]

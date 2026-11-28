@@ -96,6 +96,7 @@ internal sealed class CarouselPositionController
     private int _target;
     private bool _targetAnimate;
     private int _scrolls;
+    private long _ownSince;
     private int _reportSeq;
     private bool _reportRan;
     private bool _inOwnScroll;
@@ -157,6 +158,8 @@ internal sealed class CarouselPositionController
             _rest = Unknown;
             _input = false;
             _jumpNext = true;
+            // A give-up was the old view's: the new one is asked again.
+            _gaveUpOn = null;
             if (_motion is CarouselMotion.Watching or CarouselMotion.OwnProjecting) _motion = CarouselMotion.Resting;
             if (_port is null) return;
             _port.Watch(OnTrigger);
@@ -164,6 +167,9 @@ internal sealed class CarouselPositionController
             ArmPoll();
         }
     }
+
+    /// <summary>The clock (Stopwatch timestamps): the watchdog on the port's pending signal reads it; tests replace it.</summary>
+    internal Func<long> Ticks { get; set; } = System.Diagnostics.Stopwatch.GetTimestamp;
 
     // Witnesses for tests and fixtures.
     internal CarouselMotion Motion => _motion;
@@ -190,9 +196,11 @@ internal sealed class CarouselPositionController
         {
             case CarouselMotion.AwaitingAnswer:
                 if (!_reportRan) return;
-                // The answer: decide from here (Decide verifies first if the user moved meanwhile).
-                _motion = CarouselMotion.Resting;
-                Decide(_port?.Sample());
+                // The answer: from a frame-verified rest (a ref's animation may move it with no motion
+                // flag), keeping any input seen while the report was out.
+                _motion = CarouselMotion.Watching;
+                if (_port is null) Rested(null);
+                else ArmPoll();
                 return;
             case CarouselMotion.Resting:
                 Decide(_port?.Sample());
@@ -246,13 +254,22 @@ internal sealed class CarouselPositionController
     private void Input()
     {
         if (_motion == CarouselMotion.OwnProjecting) _motion = CarouselMotion.Watching;
-        if (_motion == CarouselMotion.Watching) _input = true;
+        if (_motion is CarouselMotion.Watching or CarouselMotion.AwaitingAnswer) _input = true;
         if (_windowOpen) _windowInput = true;
         _jumpNext = false;
+        // The user moved it: whatever Reactor gave up on is asked again once the input is answered.
+        _gaveUpOn = null;
     }
 
     private bool IsInput(CarouselSample sample, ICarouselPort port) =>
-        sample.UserDragging || sample.Moving && !(_motion == CarouselMotion.OwnProjecting && port.ScrollPending);
+        sample.UserDragging || sample.Moving && !OwnPending(port);
+
+    // The port says its own scroll is on its way, believed for at most ScrollBridge.SettleBound after the
+    // scroll started (a watchdog of the controller's own, whatever the port says).
+    private bool OwnPending(ICarouselPort port) =>
+        _motion == CarouselMotion.OwnProjecting
+        && System.Diagnostics.Stopwatch.GetElapsedTime(_ownSince, Ticks()) <= ScrollBridge.SettleBound
+        && port.ScrollPending;
 
     // ── At a verified rest ───────────────────────────────────────────────────
 
@@ -308,6 +325,8 @@ internal sealed class CarouselPositionController
                 "CarouselView.Position", $"The carousel didn't come to rest at item {_target} after {_scrolls} scrolls; it stays where it is until the declaration or the items change.");
             _gaveUpOn = _target;
             _rest = now.Shown;
+            // A deferred transaction still applies; the target isn't asked again (the give-up guards it).
+            Decide(now);
             return;
         }
         // Short of its target or off center (interrupted): asked again, as the original was.
@@ -344,6 +363,7 @@ internal sealed class CarouselPositionController
         _rest = shown;
         _motion = CarouselMotion.AwaitingAnswer;
         _reportRan = false;
+        _gaveUpOn = null;
         _report(shown, ++_reportSeq);
     }
 
@@ -358,7 +378,9 @@ internal sealed class CarouselPositionController
             ArmPoll();
             return;
         }
-        if (_deferred)
+        // Input in the open window is reported (at its completion) and answered before the next
+        // transaction publishes: publishing would move the user's item away (deviation 4).
+        if (_deferred && !(_windowOpen && _windowInput))
         {
             ApplyTransaction();
             return;
@@ -465,6 +487,7 @@ internal sealed class CarouselPositionController
         _target = target;
         _targetAnimate = animate;
         _input = false;
+        _ownSince = Ticks();
         Projections++;
         _inOwnScroll = true;
         try
@@ -511,7 +534,7 @@ internal sealed class CarouselPositionController
         var moved = now.Moving || _last is not { } last || last.Shown != now.Shown || Math.Abs(last.Offset - now.Offset) > 0.5;
         _last = now;
         // Rest: two still frames, and no scroll of the port's own on its way.
-        if (moved || _motion == CarouselMotion.OwnProjecting && port.ScrollPending || ++_still < 2)
+        if (moved || OwnPending(port) || ++_still < 2)
         {
             if (moved) _still = 0;
             port.NextFrame(() => Frame(port, id));
